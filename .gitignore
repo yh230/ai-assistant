@@ -1,0 +1,34 @@
+# Backend
+ai-assistant-backend/target/
+ai-assistant-backend/.mvn/
+ai-assistant-backend/mvnw
+ai-assistant-backend/mvnw.cmd
+*.class
+*.jar
+*.war
+
+# Frontend
+ai-assistant-frontend/node_modules/
+ai-assistant-frontend/dist/
+.vite/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+.superpowers/
+
+# 个人工作记忆与过程文档（不入库）
+.workbuddy/
+docs/superpowers/
+
+# 本地架构文档（不入库，仓库对外文档以 README 为准）
+ARCHITECTURE.md
+
+# 本机密钥配置（真实值，不入库）
+application-local.yml

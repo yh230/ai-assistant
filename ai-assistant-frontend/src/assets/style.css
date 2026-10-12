@@ -1,0 +1,179 @@
+/* ==================== CSS 变量 ==================== */
+:root {
+  --primary: #6366f1;
+  --primary-light: #818cf8;
+  --primary-dark: #4f46e5;
+  --primary-bg: #eef2ff;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
+
+  --bg-main: #f5f5f9;
+  --bg-card: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-sidebar: #1e1b2e;
+  --bg-input: #f9fafb;
+
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+  --text-inverse: #ffffff;
+
+  --border-color: #e5e7eb;
+  --border-radius: 12px;
+  --border-radius-sm: 8px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  --transition: all 0.25s ease;
+}
+
+/* ==================== Reset ==================== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-main);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  font-family: inherit;
+}
+
+input, textarea {
+  outline: none;
+  font-family: inherit;
+}
+
+ul {
+  list-style: none;
+}
+
+/* ==================== 滚动条 ==================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ==================== 通用类 ==================== */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Markdown 内容样式 */
+.markdown-body {
+  line-height: 1.7;
+}
+
+.markdown-body p {
+  margin-bottom: 8px;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.markdown-body strong {
+  font-weight: 600;
+}
+
+.markdown-body ul {
+  padding-left: 20px;
+  margin-bottom: 8px;
+}
+
+.markdown-body li {
+  margin-bottom: 4px;
+}
+
+/* ===== 管理页公共样式（原各管理页 scoped 重复上收，2026-10 整合精简） ===== */
+.manage-page { padding: 24px 32px; height: 100%; overflow-y: auto; }
+:where(.manage-page) .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+:where(.manage-page) .page-title { font-size: 22px; color: var(--text-primary); margin: 0; }
+:where(.manage-page) .page-sub { margin: 6px 0 0; font-size: 13px; color: var(--text-tertiary); }
+:where(.manage-page) .primary-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; background: var(--primary); color: white; border: none; border-radius: var(--border-radius-sm); font-size: 14px; cursor: pointer; }
+:where(.manage-page) .primary-btn:hover:not(:disabled) { background: var(--primary-dark); }
+:where(.manage-page) .primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+:where(.manage-page) .toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+:where(.manage-page) .search-input { width: 280px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px; outline: none; }
+:where(.manage-page) .search-input:focus { border-color: var(--primary); }
+:where(.manage-page) .ghost-btn { padding: 9px 18px; background: var(--bg-hover); border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: var(--border-radius-sm); cursor: pointer; font-size: 14px; }
+:where(.manage-page) .ghost-btn:hover { background: var(--bg-input); }
+:where(.manage-page) .ghost-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+:where(.manage-page) .table-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); overflow: hidden; }
+:where(.manage-page) .data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+:where(.manage-page) .data-table th { text-align: left; padding: 12px 16px; background: var(--bg-hover); color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border-color); }
+:where(.manage-page) .data-table td { padding: 12px 16px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
+:where(.manage-page) .data-table tr:last-child td { border-bottom: none; }
+:where(.manage-page) .id-cell { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--text-secondary); }
+:where(.manage-page) .time-cell { color: var(--text-tertiary); font-size: 13px; }
+:where(.manage-page) .status-tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+:where(.manage-page) .status-tag.on { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+:where(.manage-page) .status-tag.off { background: rgba(148, 163, 184, 0.18); color: var(--text-tertiary); }
+:where(.manage-page) .link-btn { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 13px; margin-right: 8px; }
+:where(.manage-page) .link-btn.danger { color: var(--danger); }
+:where(.manage-page) .empty-tip { padding: 48px; text-align: center; color: var(--text-tertiary); font-size: 14px; }
+:where(.manage-page) .pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 16px; }
+:where(.manage-page) .pager-info { font-size: 13px; color: var(--text-secondary); }
+:where(.manage-page) .modal-mask { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+:where(.manage-page) .modal { width: 520px; max-width: 92vw; max-height: 90vh; background: var(--bg-card); border-radius: var(--border-radius); display: flex; flex-direction: column; box-shadow: var(--shadow-xl); overflow: hidden; }
+:where(.manage-page) .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border-color); }
+:where(.manage-page) .modal-header h3 { margin: 0; font-size: 17px; color: var(--text-primary); }
+:where(.manage-page) .modal-close { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--text-tertiary); }
+:where(.manage-page) .modal-body { padding: 20px; overflow-y: auto; }
+:where(.manage-page) .modal-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--border-color); }
+:where(.manage-page) .form-row { margin-bottom: 16px; }
+:where(.manage-page) .form-row label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+:where(.manage-page) .req { color: var(--danger); }
+:where(.manage-page) .form-input { width: 100%; padding: 9px 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px; outline: none; font-family: inherit; }
+:where(.manage-page) .form-input:focus { border-color: var(--primary); }
