@@ -1,0 +1,17 @@
+# Nacos 共享配置（dataId: common-shared.yaml, group: DEFAULT_GROUP）
+# 使用方式：Nacos 控制台「配置管理」新建，粘贴本文件内容
+security:
+  jwt:
+    secret: aidaima-dev-jwt-secret-please-override-0123456789
+    expiration-seconds: 3600
+  internal:
+    token: aidaima-internal-token-please-override
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+logging:
+  level:
+    com.common: info
