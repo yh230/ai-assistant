@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 认证接口：登录、登出、获取当前用户信息
  * <p>
- * 变更点：登出不再需要从 HttpServletRequest 解析 token（当前令牌 jti 由认证过滤器放入 SecurityContext）
+ * 登出撤销 SecurityContext 中的当前令牌（jti 由认证过滤器放入），无需从请求解析 token
  *
  * @author yh
  * @date 2026-10-12

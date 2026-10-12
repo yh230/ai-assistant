@@ -134,7 +134,7 @@ const authStore = useAuth()
 async function ensureAuthed() {
   const token = localStorage.getItem('ai_token')
   if (!token) return false
-  // 变更点：本次会话已认证则直接返回，避免重复打 getInfo 探活
+  // 本次会话已认证则直接返回，避免重复打 getInfo 探活
   if (authStore.authed.value && authStore.userInfo.value) return true
   try {
     await getInfo()

@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 /**
  * 医院管理服务实现
  * <p>
- * 变更点（数据权限）：医院列表/下拉按 {@link DataScopeResolver} 过滤 —— 院长(hospital_director)仅可见
+ * 医院列表/下拉按 {@link DataScopeResolver} 过滤 —— 院长(hospital_director)仅可见
  * 本人所属医院；超级管理员(admin)可见全部。该接口需 hospital:manage 权限，科室主任/普通员工本身无权进入。
  *
  * @author yh

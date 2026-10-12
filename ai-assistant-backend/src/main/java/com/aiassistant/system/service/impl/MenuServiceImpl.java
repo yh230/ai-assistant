@@ -21,7 +21,7 @@ import java.util.Map;
 /**
  * 菜单权限服务实现：菜单树构建
  * <p>
- * 变更点（由 Sa-Token 迁移）：当前登录人改经 {@link SecurityUtils} 从 SecurityContext 获取
+ * 当前登录人经 {@link SecurityUtils} 从 SecurityContext 获取
  *
  * @author yh
  * @date 2026-10-12
@@ -39,7 +39,7 @@ public class MenuServiceImpl implements MenuService {
      */
     @Override
     public List<MenuTreeVO> currentUserMenuTree() {
-        // 变更点（由 Sa-Token 迁移）：未登录（无有效认证）时返回空列表
+        // 未登录（无有效认证）时返回空列表
         if (!SecurityUtils.isAuthenticated()) {
             return List.of();
         }

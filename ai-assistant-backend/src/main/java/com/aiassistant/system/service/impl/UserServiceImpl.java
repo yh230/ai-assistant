@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
 /**
  * 员工用户服务实现
  * <p>
- * 变更点（由 Sa-Token 迁移）：踢下线改经 {@link TokenRevocationService}；当前登录人改经 {@link SecurityUtils} 获取
+ * 踢下线经 {@link TokenRevocationService}；当前登录人经 {@link SecurityUtils} 获取
  *
  * @author yh
  * @date 2026-10-12
@@ -183,7 +183,7 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
-        // 变更点（由 Sa-Token 迁移）：撤销该用户当前全部令牌（签发时间阈值），下次请求即 401 跳登录
+        // 撤销该用户当前全部令牌（签发时间阈值），下次请求即 401 跳登录
         tokenRevocationService.kickout(id);
     }
 
@@ -211,7 +211,7 @@ public class UserServiceImpl implements UserService {
      * @return 用户 ID 或 null
      */
     private Long getCurrentUserId() {
-        // 变更点（由 Sa-Token 迁移）：从 SecurityContext 取 userId，未登录时返回 null
+        // 从 SecurityContext 取 userId，未登录时返回 null
         return SecurityUtils.getCurrentUserIdOrNull();
     }
 }

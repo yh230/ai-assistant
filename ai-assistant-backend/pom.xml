@@ -83,7 +83,7 @@
         </dependency>
 
         <!-- ==================== RBAC 权限模块依赖 ==================== -->
-        <!-- 变更点（Sa-Token→Spring Security 迁移）：鉴权过滤器链 + 方法级权限（@PreAuthorize） -->
+        <!-- Spring Security：鉴权过滤器链 + 方法级权限（@PreAuthorize） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>

@@ -32,7 +32,7 @@ import java.util.stream.Collectors;
 /**
  * 科室管理服务实现
  * <p>
- * 变更点（数据权限）：列表/下拉按 {@link DataScopeResolver} 过滤 —— 院长/管理员看全部，
+ * 列表/下拉按 {@link DataScopeResolver} 过滤 —— 院长/管理员看全部，
  * 科室主任仅看本科室，普通员工不可见（返回空）。科室主任不拥有科室维护权限（无 hospital:manage）。
  *
  * @author yh

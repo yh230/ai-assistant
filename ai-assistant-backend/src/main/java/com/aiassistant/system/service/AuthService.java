@@ -9,7 +9,7 @@ import com.aiassistant.system.vo.UserInfoVO;
 /**
  * 认证服务：登录、登出、获取当前用户信息
  * <p>
- * 变更点：登出不再需要 HttpServletRequest（直接撤销 SecurityContext 中的当前令牌）
+ * 登出直接撤销 SecurityContext 中的当前令牌，无需请求参数
  *
  * @author yh
  * @date 2026-10-12

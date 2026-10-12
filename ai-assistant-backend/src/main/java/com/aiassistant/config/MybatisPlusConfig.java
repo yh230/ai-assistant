@@ -11,7 +11,6 @@ import org.springframework.context.annotation.Configuration;
  * MyBatis-Plus 配置：开启分页插件，并扫描 RBAC 模块 Mapper。
  */
 @Configuration
-// 变更点（医院模块）：新增 hospital 包 Mapper 一并扫描
 @MapperScan({"com.aiassistant.system.mapper", "com.aiassistant.hospital.mapper", "com.aiassistant.registration.mapper"})
 public class MybatisPlusConfig {
 

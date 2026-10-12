@@ -20,16 +20,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * 全局异常处理器：将所有异常统一包装为 {@link Result} 结构返回，
  * 避免向前端暴露原生异常堆栈或 HTTP 状态文本
  *
- * <p>变更说明：合并了原 {@code com.aiassistant.config.GlobalExceptionHandler}（旧 code/message/data 包装版本），
- * 统一以 {@link Result} 作为返回结构，消除同名的 @RestControllerAdvice Bean 冲突
- * （两个简单类名均为 GlobalExceptionHandler 会导致 BeanDefinitionOverrideException）。</p>
- *
- * <p>变更点（兜底文案防泄漏）：{@code RuntimeException}/{@code Exception} 兜底分支不再透出
+ * <p>{@code RuntimeException}/{@code Exception} 兜底分支不透出
  * {@code e.getMessage()}，统一返回「系统繁忙，请稍后重试」，完整堆栈仅记录到日志。</p>
- *
- * <p>变更点（Sa-Token→Spring Security 迁移）：删除三处 Sa-Token 异常映射（未登录/权限不足/角色不足），
- * 改由 Spring Security 的 {@link AuthenticationException}（401）与 {@link AccessDeniedException}（403）承担；
- * 对外应答文案与迁移前逐字一致。</p>
  *
  * @author yh
  * @date 2026-10-12
@@ -68,7 +60,7 @@ public class GlobalExceptionHandler {
         return Result.forbidden("权限不足，禁止访问");
     }
 
-    /** 非法参数（原 config.GlobalExceptionHandler 覆盖的类型） */
+    /** 非法参数 */
     @ExceptionHandler(IllegalArgumentException.class)
     public Result<Void> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("参数异常: {}", e.getMessage());

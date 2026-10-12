@@ -23,9 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 角色管理接口
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}，校验逻辑由 Spring Security 方法级鉴权承担。
  *
  * @author yh
  * @date 2026-10-12

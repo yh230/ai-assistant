@@ -29,9 +29,6 @@ import java.util.stream.Collectors;
  * 医院员工管理接口（底层维护 sys_user，绑定医院/科室/岗位角色）
  * <p>
  * 列表按数据权限过滤（院长/管理员全部，科室主任仅本科室）；写操作需 hospital:employee:edit 且受范围校验
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}，校验逻辑由 Spring Security 方法级鉴权承担。
  *
  * @author yh
  * @date 2026-10-12

@@ -26,8 +26,8 @@ public interface SysMenuMapper extends BaseMapper<SysMenu> {
     /**
      * 查询用户拥有的权限标识集合（多角色取并集，菜单节点 type=1 与按钮 type=2 均参与）。
      * <p>
-     * 变更点：去掉 {@code m.type = 2} 限制 —— {@code :list} 权限（如 system:role:list）
-     * 挂在 type=1 菜单节点上，原限定只取按钮会导致这些权限缺失，使分页接口 hasAuthority 失败。
+     * 不可加 {@code m.type = 2} 限制：{@code :list} 权限（如 system:role:list）
+     * 挂在 type=1 菜单节点上，只取按钮会导致这些权限缺失，使分页接口 hasAuthority 失败。
      */
     @Select("SELECT DISTINCT m.perms FROM sys_menu m "
             + "LEFT JOIN sys_role_menu rm ON m.id = rm.menu_id "

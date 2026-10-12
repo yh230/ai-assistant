@@ -8,7 +8,7 @@ import lombok.Getter;
 /**
  * 数据权限范围
  * <p>
- * 变更点：由 hospital/security 上移至 common/security，供医院与挂号模块共用；新增归属判定与查询条件收敛方法
+ * 供医院与挂号模块共用的数据权限，提供归属判定与查询条件收敛方法
  * <ul>
  *     <li>ALL：超级管理员，全部数据（系统级最高权限）</li>
  *     <li>HOSPITAL：院长/门诊管理角色，仅本人所属医院数据</li>

@@ -30,10 +30,6 @@ import java.util.Map;
  *     <li>公开接口（患者免登录）：线上预约、查询本人、确认支付、取消预约。</li>
  *     <li>员工接口（按角色 + 数据权限）：挂号记录、现场挂号、取号、退号、标记就诊、统计。</li>
  * </ul>
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}；公开接口移除 {@code @SaIgnore} 注解，
- * 放行改由 SecurityConfig 的 permitAll 承担。
  *
  * @author yh
  * @date 2026-10-12

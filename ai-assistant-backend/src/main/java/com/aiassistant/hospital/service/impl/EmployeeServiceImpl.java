@@ -40,7 +40,7 @@ import java.util.stream.Collectors;
 /**
  * 医院员工服务实现
  * <p>
- * 变更点（数据权限）：
+ * 数据权限：
  * <ul>
  *     <li>列表按 DataScope 过滤 sys_user（院长/管理员全部，科室主任仅本科室）</li>
  *     <li>新增/编辑/删除/改状态/重置密码 均做范围校验：科室主任不可跨科室操作员工</li>

@@ -20,10 +20,6 @@ import java.util.List;
 
 /**
  * 菜单权限接口
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}，校验逻辑由 Spring Security 方法级鉴权承担；
- * /tree 仍只需登录（由 SecurityConfig 过滤器链的 authenticated 规则承担）。
  *
  * @author yh
  * @date 2026-10-12

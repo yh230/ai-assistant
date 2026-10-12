@@ -50,7 +50,7 @@ public class SystemDataSeeder implements CommandLineRunner {
     private static final String ADMIN_PASSWORD = "admin123";
     private static final String ADMIN_ROLE_CODE = RoleConstants.ADMIN;
 
-    // 变更点（新增）：医院模块固定岗位角色（角色自带数据权限规则，由 DataScopeResolver 解释）
+    // 医院模块固定岗位角色（角色自带数据权限规则，由 DataScopeResolver 解释）
     private static final String[] HOSPITAL_ROLE_CODES = {
             RoleConstants.HOSPITAL_DIRECTOR, RoleConstants.DEPT_DIRECTOR, RoleConstants.DOCTOR,
             RoleConstants.NURSE, RoleConstants.CAREGIVER};
@@ -67,20 +67,17 @@ public class SystemDataSeeder implements CommandLineRunner {
             seedMenus();
             log.info("RBAC 初始菜单已写入");
         }
-        // 变更点：每次启动都幂等补齐 admin 角色与全部菜单的关联，
-        // 不再仅在首次播种时分配，避免「菜单已存在但未关联 admin」导致超级管理员权限缺失。
+        // 每次启动都幂等补齐 admin 角色与全部菜单的关联，
+        // 避免「菜单已存在但未关联 admin」导致超级管理员权限缺失。
         ensureAdminRoleAllMenus(adminRoleId);
-        // 变更点（新增）：医院科室人员 & 出勤模块的固定岗位角色与菜单播种
+        // 医院科室人员 & 出勤模块的固定岗位角色与菜单播种
         ensureHospitalModule();
-        // 变更点（新增）：门诊挂号取号模块的固定角色与菜单播种
+        // 门诊挂号取号模块的固定角色与菜单播种
         ensureRegistrationModule();
     }
 
     /**
-     * 变更点（新增）：确保超级管理员（admin 角色）关联全部菜单，幂等补齐缺失关联。
-     * <p>
-     * 修复历史问题：原逻辑只在 menuCount==0 时播种并分配，一旦菜单已存在就跳过分配，
-     * 导致 admin 角色可能缺失菜单权限（hasAuthority 失败 → Access Denied）。
+     * 确保超级管理员（admin 角色）关联全部菜单，幂等补齐缺失关联。
      */
     private void ensureAdminRoleAllMenus(Long adminRoleId) {
         List<SysMenu> allMenus = menuMapper.selectList(new LambdaQueryWrapper<>());
@@ -167,7 +164,6 @@ public class SystemDataSeeder implements CommandLineRunner {
         SysMenu menuMenu = menu(system.getId(), "菜单管理", "menu", "system/menu/index", "system:menu:list", 1, 3);
         menuMapper.insert(menuMenu);
         ids.add(menuMenu.getId());
-        // 变更点：补齐菜单管理的 add/edit/delete 按钮（原缺失，导致菜单编辑/删除接口 hasAuthority 失败）
         ids.add(button(menuMenu.getId(), "新增", "system:menu:add", 1));
         ids.add(button(menuMenu.getId(), "编辑", "system:menu:edit", 2));
         ids.add(button(menuMenu.getId(), "删除", "system:menu:delete", 3));
@@ -196,7 +192,7 @@ public class SystemDataSeeder implements CommandLineRunner {
         return m.getId();
     }
 
-    // ===================== 变更点（新增）：医院模块角色与菜单播种 =====================
+    // ===================== 医院模块角色与菜单播种 =====================
 
     /**
      * 播种医院模块的固定岗位角色与菜单，并分配数据权限对应的功能权限。
@@ -249,7 +245,7 @@ public class SystemDataSeeder implements CommandLineRunner {
         log.info("医院模块角色与菜单已播种");
     }
 
-    // ===================== 变更点（新增）：门诊挂号取号模块角色与菜单播种 =====================
+    // ===================== 门诊挂号取号模块角色与菜单播种 =====================
 
     /**
      * 播种门诊挂号模块的固定角色与菜单，并分配对应功能权限。

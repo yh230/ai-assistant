@@ -22,9 +22,6 @@ import java.util.List;
 
 /**
  * 科室管理接口（组织基础数据，仅院长/管理员可维护；列表按数据权限过滤）
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}，校验逻辑由 Spring Security 方法级鉴权承担。
  *
  * @author yh
  * @date 2026-10-12

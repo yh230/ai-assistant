@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
 /**
  * 出勤服务实现（核心数据权限）
  * <p>
- * 变更点（数据权限，满足「所有列表/统计/查询接口全部自动权限过滤」）：
+ * 数据权限：所有列表/统计/查询接口自动按登录人过滤实现全覆盖：
  * <ul>
  *     <li>读：按 DataScope 对 attendance 表加 {@code department_id}（科室主任）或 {@code user_id}（本人）条件</li>
  *     <li>写：create/update/delete 前对目标员工做范围校验，越权直接拒绝（防绕过前端多写其他科室/他人）</li>

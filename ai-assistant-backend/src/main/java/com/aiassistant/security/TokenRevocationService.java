@@ -9,7 +9,6 @@ import java.time.Duration;
 /**
  * 令牌撤销服务（Redis）：登出黑名单（按 jti）与踢下线（按 userId 的签发时间阈值）
  * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：替代 Sa-Token 会话删除/踢下线；
  * 踢下线语义 = 拒绝"签发时间不晚于踢出时刻"的所有 token（重新登录的新 token 不受影响）
  * <p>
  * 边界说明（2 条）：

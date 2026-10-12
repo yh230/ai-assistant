@@ -25,9 +25,6 @@ import java.util.Map;
  * <p>
  * 读接口权限：hospital:attendance:list 或 hospital:attendance:self（普通员工仅本人）。
  * 写接口权限：hospital:attendance:edit。所有读/写均按登录人角色+科室自动过滤与校验。
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}，校验逻辑由 Spring Security 方法级鉴权承担。
  *
  * @author yh
  * @date 2026-10-12

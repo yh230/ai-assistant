@@ -33,7 +33,7 @@
           <span>聊天人设</span>
         </router-link>
 
-        <!-- 系统管理（登录后按权限渲染，变更点：由仅判断 token 改为按 userInfo.permissions 过滤） -->
+        <!-- 系统管理（登录后按 userInfo.permissions 过滤渲染） -->
         <template v-if="token && hasAnySystemPerm">
           <div class="nav-group-title">系统管理</div>
           <router-link v-if="hasPerm(PERMS.SYSTEM_USER_LIST)" to="/system/users" class="nav-item sub" active-class="active">
@@ -157,7 +157,7 @@ import { PERMS, hasPerm as checkPerm, hasAnyPerm as checkAnyPerm } from '../util
 const router = useRouter()
 const { token, userInfo, clear } = useAuth()
 
-// 变更点：权限判断收敛到 utils/perm（与后端 @SaCheckPermission 的权限串一致）
+// 权限判断统一走 utils/perm（与后端权限串一致）
 const hasPerm = (perm) => checkPerm(userInfo.value?.permissions, perm)
 const hasAnyPerm = (permList) => checkAnyPerm(userInfo.value?.permissions, permList)
 
@@ -188,7 +188,7 @@ const hasAnyRegistrationPerm = computed(() =>
 )
 
 async function handleLogout() {
-  // 变更点：退出前弹确认框，选「确定」才真正退出
+  // 退出前弹确认框，选「确定」才真正退出
   const ok = await showConfirm('确定要退出登录吗？', { okText: '退出', cancelText: '取消' })
   if (!ok) return
   try {

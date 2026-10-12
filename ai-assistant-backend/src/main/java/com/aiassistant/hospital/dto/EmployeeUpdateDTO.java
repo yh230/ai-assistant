@@ -7,8 +7,8 @@ import lombok.EqualsAndHashCode;
 /**
  * 医院员工编辑请求（不含密码，改密走独立接口）
  * <p>
- * 变更点（DTO 合并与继承）：改为继承 {@link UserUpdateDTO}，姓名/电话/邮箱/状态/角色字段
- * 统一由父类提供，本类仅保留医院扩展字段
+ * 继承 {@link UserUpdateDTO}，姓名/电话/邮箱/状态/角色字段
+ * 由父类提供，本类仅保留医院扩展字段
  *
  * @author yh
  * @date 2026-10-10

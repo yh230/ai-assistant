@@ -17,7 +17,7 @@ function parseUser() {
 // 模块级单例状态（项目未引入 Pinia，使用 vue 的 ref 作为轻量全局 store）
 const token = ref(localStorage.getItem(TOKEN_KEY) || '')
 const userInfo = ref(parseUser())
-// 变更点：本次会话是否已通过认证（避免每次路由切换都重复拉 /api/getInfo 探活）
+// 本次会话是否已通过认证（避免每次路由切换都重复拉 /api/getInfo 探活）
 const authed = ref(false)
 
 function setToken(t) {

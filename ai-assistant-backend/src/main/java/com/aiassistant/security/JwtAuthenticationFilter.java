@@ -18,7 +18,7 @@ import java.io.IOException;
 /**
  * JWT 认证过滤器
  * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：替代原 SaInterceptor 的登录校验——解析 Bearer 令牌，
+ * 解析 Bearer 令牌，
  * 依次校验签名/过期、登出黑名单、踢下线阈值，再从 DB 实时加载角色+权限写入 SecurityContext；
  * 校验不通过时不设置认证（由 EntryPoint 统一输出 401），不在此抛异常
  *

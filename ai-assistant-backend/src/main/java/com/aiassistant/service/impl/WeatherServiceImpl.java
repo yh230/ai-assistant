@@ -17,7 +17,7 @@ import java.util.List;
 /**
  * 天气服务实现 - 使用高德开放平台 API（Web服务 Key）
  * <p>
- * 变更点（替换 Open-Meteo，因网络出口上网行为管理设备拦截 open-meteo.com）：
+ * 使用高德开放平台；open-meteo.com 被网络出口拦截，不可用。
  * <ul>
  *     <li>两步调用：地理编码（城市名→adcode）→ 天气查询（实况 + 4天预报）</li>
  *     <li>高德所有响应 HTTP 均为 200，成败需按 JSON 的 status 字段（"1"=成功）判断</li>

@@ -34,14 +34,6 @@ import java.time.LocalDateTime;
 
 /**
  * 认证服务实现
- * <p>
- * 变更点（由 Sa-Token 迁移）：
- * <ul>
- *     <li>登录：交由 {@link AuthenticationManager} 校验账号密码，通过后由 {@link JwtTokenService} 签发 JWT</li>
- *     <li>登出：当前令牌 jti 撤入 Redis 黑名单（{@link TokenRevocationService#revokeToken}，TTL=剩余有效期），即时失效</li>
- *     <li>getInfo/updateProfile/changePassword：当前登录人改经 {@link SecurityUtils} 从 SecurityContext 获取</li>
- *     <li>密码校验：仍用 BCryptPasswordEncoder（登录经 DaoAuthenticationProvider、改密本地校验）</li>
- * </ul>
  *
  * @author yh
  * @date 2026-10-12
@@ -73,7 +65,7 @@ public class AuthServiceImpl implements AuthService {
             authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword()));
         } catch (DisabledException e) {
-            // 账号禁用：文案与迁移前一致
+            // 账号禁用，直接拒绝登录
             throw new BusinessException("账号已被禁用，请联系管理员");
         } catch (AuthenticationException e) {
             // 账号不存在/密码错误（DaoAuthenticationProvider 已统一为 BadCredentialsException）

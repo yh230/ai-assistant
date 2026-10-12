@@ -15,9 +15,6 @@ import java.util.List;
 
 /**
  * 号源池查询接口（号源余量、号位明细，本院数据）
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}，校验逻辑由 Spring Security 方法级鉴权承担。
  *
  * @author yh
  * @date 2026-10-12

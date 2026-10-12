@@ -30,7 +30,6 @@ import java.io.IOException;
 /**
  * Spring Security 配置（无状态 JWT）
  * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：替代原 {@code SaTokenConfig}——
  * 过滤器链承担路由鉴权（放行清单：login/health/error、OPTIONS 预检、挂号公开端点），
  * 细粒度权限由 {@code @PreAuthorize}（@EnableMethodSecurity）承担；
  * 401/403 由 EntryPoint/DeniedHandler 输出与 {@code Result} 一致的 JSON
@@ -69,7 +68,7 @@ public class SecurityConfig {
                 // CORS 预检直接放行（跨域响应头由既有 CorsConfig 的 CorsFilter 承担）
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/api/login", "/api/health", "/error").permitAll()
-                // 变更点：挂号公开端点（原 @SaIgnore，修复匿名访问实际被 401 拦截的不一致）
+                // 挂号公开端点（患者免登录）
                 .requestMatchers("/api/registration/appointments",
                         "/api/registration/appointments/**").permitAll()
                 .requestMatchers("/api/registration/schedule/public/**").permitAll()

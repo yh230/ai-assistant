@@ -6,9 +6,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 /**
  * 当前登录人上下文助手
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：替代全部 {@code StpUtil} 静态调用
- * （isLogin/getLoginIdAsLong），语义与调用点原行为一一对应
  *
  * @author yh
  * @date 2026-10-12

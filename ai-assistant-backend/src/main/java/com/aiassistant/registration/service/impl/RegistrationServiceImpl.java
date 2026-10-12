@@ -348,7 +348,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             qw.eq(NumberSource::getSeqNo, seqNo);
         }
         qw.orderByAsc(NumberSource::getSeqNo);
-        // 变更点：空闲号源可能有多条（同排班 status=1 的全部），selectOne 会抛 TooManyResultsException；
+        // 空闲号源可能有多条（同排班 status=1 的全部），selectOne 会抛 TooManyResultsException；
         // 取排序后首条即最小可用序号，等价于“挑一个空闲号”。
         List<NumberSource> sources = numberSourceMapper.selectList(qw);
         if (sources.isEmpty()) {

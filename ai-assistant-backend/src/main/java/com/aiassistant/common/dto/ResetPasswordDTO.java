@@ -5,8 +5,7 @@ import lombok.Data;
 /**
  * 重置密码请求（newPassword 为空则重置为默认密码）
  * <p>
- * 变更点（DTO 合并与继承）：由 system/hospital 两份同名 DTO 合并而来，统一存放于 common/dto，
- * 供系统员工端与医院员工端共用
+ * system 与 hospital 共用的重置密码请求体
  *
  * @author yh
  * @date 2026-10-10

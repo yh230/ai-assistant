@@ -1,4 +1,4 @@
-/** 后端权限标识常量（与 @SaCheckPermission / 菜单播种保持一致） */
+/** 后端权限标识常量（与后端权限串 / 菜单播种保持一致） */
 export const PERMS = {
   SYSTEM_USER_LIST: 'system:user:list',
   SYSTEM_ROLE_LIST: 'system:role:list',

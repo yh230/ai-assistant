@@ -23,10 +23,6 @@ import java.time.LocalDate;
 
 /**
  * 医生出诊排班 / 号源配置接口（门诊管理员，本院数据）
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：权限注解由 {@code @SaCheckPermission("x")} 替换为
- * {@code @PreAuthorize("hasAuthority('x')")}；公开端点移除 {@code @SaIgnore}，放行改由
- * SecurityConfig 的 permitAll 承担。
  *
  * @author yh
  * @date 2026-10-12

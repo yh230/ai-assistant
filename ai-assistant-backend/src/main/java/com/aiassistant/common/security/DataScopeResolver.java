@@ -14,9 +14,7 @@ import java.util.List;
 /**
  * 数据权限解析器（医院/挂号模块唯一解析器）
  * <p>
- * 变更点：原 hospital 与 registration 两套解析器合并上移（删 RegistrationDataScopeResolver）
- * <p>
- * 变更点（由 Sa-Token 迁移）：登录态判定与当前登录人改经 {@link SecurityUtils} 从 SecurityContext 获取
+ * 登录态判定与当前登录人经 {@link SecurityUtils} 从 SecurityContext 获取
  * 角色优先级：admin > 院长 > 科室主任 > 门诊角色 > 普通员工
  * <ul>
  *     <li>{@code admin} → ALL：跨院所有数据</li>
@@ -44,7 +42,7 @@ public class DataScopeResolver {
      * @return 数据权限范围
      */
     public DataScope resolve() {
-        // 变更点（由 Sa-Token 迁移）：未登录（启动播种/定时任务/内部调用）→ ALL
+        // 未登录（启动播种/定时任务/内部调用）→ ALL
         if (!SecurityUtils.isAuthenticated()) {
             return DataScope.all();
         }

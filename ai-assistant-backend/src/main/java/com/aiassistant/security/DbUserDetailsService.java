@@ -20,7 +20,6 @@ import java.util.List;
 /**
  * 数据库用户认证信息源
  * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：替代原 {@code StpInterfaceImpl} 的权限/角色组装职责——
  * 角色码与权限标识从 DB **实时**加载（权限回收即时生效）；角色不加 ROLE_ 前缀，
  * 配合 SecurityConfig 的 {@code GrantedAuthorityDefaults("")} 使 {@code hasRole('admin')} 命中原样角色码
  *

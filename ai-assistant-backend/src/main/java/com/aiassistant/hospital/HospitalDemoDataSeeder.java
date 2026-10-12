@@ -32,7 +32,7 @@ import java.util.Map;
 /**
  * 医院模块演示数据播种（仅用于本地验证，非生产逻辑）
  *
- * 变更点（新增）：实现 CommandLineRunner，首次启动时借助后端 BCryptPasswordEncoder 加密演示密码，
+ * 实现 CommandLineRunner，首次启动时借助后端 BCryptPasswordEncoder 加密演示密码，
  * 将医院 / 科室 / 院长 / 科室主任 / 医生 / 护士 / 护工及近 30 天出勤数据灌入数据库，供前端数据权限验证。
  * 幂等：以哨兵用户名 {@code demo_root_h1} 是否存在为标记，已存在则跳过，避免重复播种。
  * 表结构无需改动（建表与扩列见 sql/hospital_schema.sql，库内表已就绪）。

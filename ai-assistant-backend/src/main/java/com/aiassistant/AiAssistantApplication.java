@@ -17,9 +17,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * 依据 {@code application.yml} 中的 {@code ai.assistant.models} 配置手动构建，
  * 不依赖框架自动创建的 OpenAi* Bean。若不排除，框架会在缺少
  * {@code spring.ai.openai.api-key} 时因无法实例化 OpenAiAudioSpeechModel 等 Bean 而导致启动失败。
- * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：迁移回 Spring Security 后，方法级权限开关由
- * {@code config/SecurityConfig} 的 {@code @EnableMethodSecurity} 承担，本类不声明该注解。
  *
  * @author yh
  * @date 2026-10-12

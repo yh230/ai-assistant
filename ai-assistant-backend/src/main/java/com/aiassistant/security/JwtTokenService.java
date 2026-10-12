@@ -15,7 +15,6 @@ import java.util.UUID;
 /**
  * JWT 令牌服务：签发与解析（HS256 固定算法）
  * <p>
- * 变更点（Sa-Token→Spring Security 迁移）：替代原 Sa-Token 的 uuid token 生成与解析
  * token/sub 存放 userId，jti 供登出黑名单使用，iat/exp 供踢下线与过期判定
  *
  * @author yh
