@@ -132,6 +132,7 @@ async function consumeSse(response, handlers, signal) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let doneSeen = false
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -154,12 +155,15 @@ async function consumeSse(response, handlers, signal) {
       } else if (eventType === 'confirm_required') {
         try { handlers.onConfirm?.(JSON.parse(dataStr)) } catch { /* ignore */ }
       } else if (eventType === 'done') {
+        doneSeen = true
         try { handlers.onDone?.(JSON.parse(dataStr)) } catch { handlers.onDone?.({}) }
       } else if (eventType === 'error') {
         try { handlers.onError?.(JSON.parse(dataStr).message || dataStr) } catch { handlers.onError?.(dataStr) }
       }
     }
   }
+  // 流结束兜底：未收到 done 事件也收尾，避免 loading 悬挂（主对话流与 confirm 续答流共用）
+  if (!doneSeen) handlers.onDone?.({})
 }
 
 /**
