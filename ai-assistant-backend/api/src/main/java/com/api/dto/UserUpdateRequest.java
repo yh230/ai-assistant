@@ -28,4 +28,10 @@ public class UserUpdateRequest {
 
     /** 关联角色ID集合 */
     private List<Long> roleIds;
+
+    /** 所属医院 ID（医院模块绑定，可为空） */
+    private Long hospitalId;
+
+    /** 所属科室 ID（医院模块绑定，可为空） */
+    private Long departmentId;
 }
