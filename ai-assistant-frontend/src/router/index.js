@@ -122,6 +122,19 @@ const routes = [
         component: () => import('../views/RegistrationStatsView.vue'),
         meta: { title: '挂号统计', requiresAuth: true, perm: PERMS.REGISTRATION_STATS_VIEW }
       },
+      // ===== AI 助手（知识库 / 问诊记录；管理接口按医院快照鉴权，不加权限码）=====
+      {
+        path: 'admin/knowledge',
+        name: 'KnowledgeManage',
+        component: () => import('../views/knowledge/KnowledgeManageView.vue'),
+        meta: { title: '知识库管理', requiresAuth: true }
+      },
+      {
+        path: 'admin/triage-records',
+        name: 'AiTriageRecords',
+        component: () => import('../views/chat/AiTriageRecordView.vue'),
+        meta: { title: 'AI 问诊记录', requiresAuth: true }
+      },
       // 患者线上预约 / 查询（公开，免登录）
       {
         path: 'registration/patient',

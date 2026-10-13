@@ -115,6 +115,25 @@
             <span>挂号统计</span>
           </router-link>
         </template>
+
+        <!-- AI 助手（静态分组，不依赖后端菜单表；管理接口按医院快照鉴权） -->
+        <template v-if="token">
+          <div class="nav-group-title">AI 助手</div>
+          <router-link to="/admin/knowledge" class="nav-item sub" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+            <span>知识库管理</span>
+          </router-link>
+          <router-link to="/admin/triage-records" class="nav-item sub" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              <line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="12" y2="13"/>
+            </svg>
+            <span>AI 问诊记录</span>
+          </router-link>
+        </template>
       </nav>
 
       <!-- 底部用户信息 + 登出 -->
