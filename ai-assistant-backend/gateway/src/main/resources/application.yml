@@ -13,11 +13,11 @@ spring:
         - id: auth-service
           uri: lb://auth-service
           predicates:
-            - Path=/api/login,/api/logout,/api/getInfo,/api/profile,/api/profile/password
+            - Path=/api/login,/api/logout,/api/getInfo,/api/profile,/api/profile/password,/api/patient/login
         - id: system-service
           uri: lb://system-service
           predicates:
-            - Path=/api/system/**
+            - Path=/api/system/**,/api/patient/register
         - id: hospital-service
           uri: lb://hospital-service
           predicates:
@@ -38,6 +38,8 @@ spring:
 gateway:
   whitelist:
     - /api/login
+    - /api/patient/login
+    - /api/patient/register
     - /api/health
     - /error
     - /api/registration/appointments

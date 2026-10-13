@@ -1,5 +1,6 @@
 package com.gateway.filter;
 
+import com.common.constant.SecurityConstants;
 import com.common.jwt.JwtTokenService;
 import com.common.jwt.TokenRevocationService;
 import lombok.RequiredArgsConstructor;
@@ -20,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
- * 网关鉴权过滤器：验签 + 黑名单/踢下线校验 + 放行清单 + /inner 外部阻断
+ * 网关鉴权过滤器：验签 + 黑名单/踢下线校验 + 放行清单 + /inner 外部阻断 + 按身份拦截患者/员工路径
  *
  * @author yh
  * @date 2026-10-12
@@ -54,15 +55,26 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
         }
         try {
             JwtTokenService.JwtPayload payload = jwtTokenService.parse(authorization.substring(7));
-            long kickedAt = tokenRevocationService.kickoutAt(payload.userId());
+            long kickedAt = tokenRevocationService.kickoutAt(payload.identity(), payload.userId());
             boolean kicked = kickedAt != 0 && payload.issuedAtMillis() <= kickedAt;
             if (tokenRevocationService.isRevoked(payload.jti()) || kicked) {
                 return writeResult(exchange, HttpStatus.UNAUTHORIZED, UNAUTHORIZED_MSG);
+            }
+            String identity = payload.identity();
+            boolean patient = SecurityConstants.IDENTITY_PATIENT.equals(identity);
+            boolean patientPath = isPatientPath(path);
+            if (patient != patientPath) {
+                return writeResult(exchange, HttpStatus.FORBIDDEN, FORBIDDEN_MSG);
             }
         } catch (Exception e) {
             return writeResult(exchange, HttpStatus.UNAUTHORIZED, UNAUTHORIZED_MSG);
         }
         return chain.filter(exchange);
+    }
+
+    /** 患者专属路径：/api/patient/** 与 /api/chat/patient/**（login/register 已在白名单直放） */
+    private boolean isPatientPath(String path) {
+        return path.startsWith("/api/patient/") || path.startsWith("/api/chat/patient/");
     }
 
     private boolean matchesWhitelist(String path) {
