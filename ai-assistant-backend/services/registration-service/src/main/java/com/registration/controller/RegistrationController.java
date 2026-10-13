@@ -45,6 +45,8 @@ public class RegistrationController {
 
     @PostMapping("/appointments")
     public Result<RegistrationVO> createAppointment(@RequestBody AppointmentCreateDTO dto) {
+        // 匿名公开入口不接受 patientId，防止归属冒用
+        dto.setPatientId(null);
         return Result.success(registrationService.createAppointment(dto));
     }
 
