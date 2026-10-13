@@ -31,6 +31,7 @@ import java.util.List;
  * <p>
  * 解析 Bearer 令牌，
  * 依次校验签名/过期、登出黑名单、踢下线阈值，再从权限快照（缺失经 AuthClient 重建）加载角色+权限写入 SecurityContext；
+ * 按令牌 identity 区分员工/患者快照与踢出阈值，
  * 校验不通过时不设置认证（由 EntryPoint 统一输出 401），黑名单/踢下线/快照不可用则直接输出 401，不在此抛异常
  *
  * @author yh
@@ -54,16 +55,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = header.substring(SecurityConstants.TOKEN_PREFIX.length());
             try {
                 JwtTokenService.JwtPayload payload = jwtTokenService.parse(token);
-                long kickedAt = tokenRevocationService.kickoutAt(payload.userId());
+                long kickedAt = tokenRevocationService.kickoutAt(payload.identity(), payload.userId());
                 boolean usable = !tokenRevocationService.isRevoked(payload.jti())
                         && (kickedAt == 0 || payload.issuedAtMillis() > kickedAt);
                 if (!usable) {
                     writeUnauthorized(response);
                     return;
                 }
-                UserSnapshot snapshot = userSnapshotStore.get(payload.userId());
+                UserSnapshot snapshot = userSnapshotStore.get(payload.identity(), payload.userId());
                 if (snapshot == null) {
-                    snapshot = rebuildSnapshot(payload.userId());
+                    snapshot = rebuildSnapshot(payload.identity(), payload.userId());
                     if (snapshot == null) {
                         writeUnauthorized(response);
                         return;
@@ -85,19 +86,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     /**
      * 快照缺失时经 AuthClient 重建（服务端权限快照，成功则回写缓存）
      *
+     * @param identity 身份类型（staff/patient）
      * @param userId 用户 ID
      * @return 重建的快照；失败或用户不存在/禁用返回 null
      */
-    private UserSnapshot rebuildSnapshot(Long userId) {
+    private UserSnapshot rebuildSnapshot(String identity, Long userId) {
         try {
-            Result<UserSnapshot> result = authClient.snapshot(userId);
+            Result<UserSnapshot> result = authClient.snapshot(identity, userId);
             if (result != null && result.getCode() == 200 && result.getData() != null) {
                 UserSnapshot snapshot = result.getData();
                 userSnapshotStore.save(snapshot);
                 return snapshot;
             }
         } catch (Exception e) {
-            log.warn("重建用户权限快照失败: userId={}, {}", userId, e.getMessage());
+            log.warn("重建用户权限快照失败: identity={}, userId={}, {}", identity, userId, e.getMessage());
         }
         return null;
     }
