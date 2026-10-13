@@ -66,3 +66,19 @@ CREATE TABLE IF NOT EXISTS sys_role_menu (
   UNIQUE KEY uk_role_menu (role_id, menu_id),
   KEY idx_menu_id (menu_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色菜单关联表';
+
+-- ============================================================
+-- 患者账号（V1.0：与员工 sys_user 物理隔离，独立登录名/密码体系）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS patient_user (
+    id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+    phone       VARCHAR(20)  NOT NULL COMMENT '手机号（登录名）',
+    password    VARCHAR(100) NOT NULL COMMENT '密码（BCrypt 密文）',
+    name        VARCHAR(50)  NOT NULL COMMENT '患者姓名',
+    hospital_id BIGINT       NOT NULL COMMENT '绑定医院 ID',
+    status      TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：1=正常 0=禁用',
+    create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_patient_phone (phone)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '患者账号';
