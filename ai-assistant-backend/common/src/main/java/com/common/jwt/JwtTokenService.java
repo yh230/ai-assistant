@@ -1,4 +1,4 @@
-package com.aiassistant.security;
+package com.common.jwt;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;

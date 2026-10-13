@@ -1,4 +1,4 @@
-package com.aiassistant.common.exception;
+package com.common.exception;
 
 import lombok.Getter;
 

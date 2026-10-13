@@ -1,4 +1,4 @@
-package com.aiassistant.common.support;
+package com.common.support;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

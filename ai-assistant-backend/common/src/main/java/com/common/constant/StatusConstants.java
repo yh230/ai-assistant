@@ -1,4 +1,4 @@
-package com.aiassistant.common.constant;
+package com.common.constant;
 
 /**
  * 通用启用/禁用状态常量

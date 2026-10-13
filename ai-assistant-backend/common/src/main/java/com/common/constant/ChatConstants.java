@@ -1,4 +1,4 @@
-package com.aiassistant.common.constant;
+package com.common.constant;
 
 /**
  * 聊天模块通用常量集合

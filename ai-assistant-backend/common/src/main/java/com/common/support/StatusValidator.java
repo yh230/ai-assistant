@@ -1,7 +1,7 @@
-package com.aiassistant.common.support;
+package com.common.support;
 
-import com.aiassistant.common.constant.StatusConstants;
-import com.aiassistant.common.exception.BusinessException;
+import com.common.constant.StatusConstants;
+import com.common.exception.BusinessException;
 
 /**
  * 启用/禁用状态校验

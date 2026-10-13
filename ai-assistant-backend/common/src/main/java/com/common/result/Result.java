@@ -1,4 +1,4 @@
-package com.aiassistant.common.result;
+package com.common.result;
 
 import lombok.Data;
 

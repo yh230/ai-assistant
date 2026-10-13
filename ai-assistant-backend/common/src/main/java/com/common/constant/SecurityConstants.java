@@ -1,4 +1,4 @@
-package com.aiassistant.common.constant;
+package com.common.constant;
 
 /**
  * 安全相关常量

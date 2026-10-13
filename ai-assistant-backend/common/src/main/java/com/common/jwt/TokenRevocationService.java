@@ -1,4 +1,4 @@
-package com.aiassistant.security;
+package com.common.jwt;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;

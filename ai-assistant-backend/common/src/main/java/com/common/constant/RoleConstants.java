@@ -1,4 +1,4 @@
-package com.aiassistant.common.constant;
+package com.common.constant;
 
 /**
  * 角色码常量（RBAC 角色词汇表）

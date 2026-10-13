@@ -1,5 +1,6 @@
 # Backend
 ai-assistant-backend/target/
+ai-assistant-backend/*/target/
 ai-assistant-backend/.mvn/
 ai-assistant-backend/mvnw
 ai-assistant-backend/mvnw.cmd
