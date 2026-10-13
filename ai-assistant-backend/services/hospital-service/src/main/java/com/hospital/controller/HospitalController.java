@@ -1,6 +1,5 @@
 package com.hospital.controller;
 
-import com.api.dto.OrgBriefDTO;
 import com.common.result.PageResult;
 import com.common.result.Result;
 import com.hospital.dto.HospitalSaveDTO;
@@ -22,7 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 医院管理接口（组织基础数据，仅院长/管理员可维护；公开列表供患者注册选院）
+ * 医院管理接口（组织基础数据，仅院长/管理员可维护）
  *
  * @author yh
  * @date 2026-10-12
@@ -46,16 +45,6 @@ public class HospitalController {
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<List<HospitalVO>> all() {
         return Result.success(hospitalService.listAll());
-    }
-
-    /**
-     * 医院公开列表（患者注册选院用，网关白名单免登录，公开只读）
-     *
-     * @return 全部医院简要信息（id + name）
-     */
-    @GetMapping("/public/list")
-    public Result<List<OrgBriefDTO>> publicList() {
-        return Result.success(hospitalService.listBrief());
     }
 
     @GetMapping("/{id}")
