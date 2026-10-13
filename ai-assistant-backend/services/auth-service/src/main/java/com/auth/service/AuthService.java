@@ -23,6 +23,14 @@ public interface AuthService {
     LoginVO login(LoginRequest request);
 
     /**
+     * 患者登录认证（凭据校验经 Feign 下沉患者中心，通过后签发 PATIENT 身份 JWT 并写患者快照）
+     *
+     * @param request 登录入参（username=手机号）
+     * @return 登录结果（JWT 令牌）
+     */
+    LoginVO patientLogin(LoginRequest request);
+
+    /**
      * 登出：撤销当前令牌
      */
     void logout(HttpServletRequest request);

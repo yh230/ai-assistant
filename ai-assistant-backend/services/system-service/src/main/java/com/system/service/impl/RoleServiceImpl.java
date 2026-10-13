@@ -2,6 +2,7 @@ package com.system.service.impl;
 
 import com.api.client.AuthClient;
 import com.api.dto.RoleBriefDTO;
+import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.system.dto.AssignMenuDTO;
@@ -156,7 +157,7 @@ public class RoleServiceImpl implements RoleService {
         }
         for (Long userId : userIds) {
             try {
-                authClient.evict(userId);
+                authClient.evict(SecurityConstants.IDENTITY_STAFF, userId);
             } catch (Exception e) {
                 log.warn("失效用户权限快照失败: userId={}, {}", userId, e.getMessage());
             }

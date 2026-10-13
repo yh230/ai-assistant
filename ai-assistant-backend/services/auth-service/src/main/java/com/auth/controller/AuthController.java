@@ -36,6 +36,17 @@ public class AuthController {
         return Result.success(authService.login(request));
     }
 
+    /**
+     * 患者登录（手机号+密码，网关白名单免登录）
+     *
+     * @param request 登录入参（username=手机号）
+     * @return 登录结果（JWT 令牌）
+     */
+    @PostMapping("/patient/login")
+    public Result<LoginVO> patientLogin(@Valid @RequestBody LoginRequest request) {
+        return Result.success(authService.patientLogin(request));
+    }
+
     @PostMapping("/logout")
     public Result<Void> logout(HttpServletRequest request) {
         authService.logout(request);

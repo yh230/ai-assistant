@@ -1,5 +1,6 @@
 package com.auth.service.impl;
 
+import com.api.client.PatientClient;
 import com.api.client.UserClient;
 import com.api.dto.AuthInfoDTO;
 import com.api.dto.AuthRequest;
@@ -28,7 +29,8 @@ import org.springframework.util.StringUtils;
 /**
  * 认证服务实现（认证中心）
  * <p>
- * 登录凭据校验经 {@link UserClient#authenticate} 下沉用户中心，通过后签发 JWT 并写权限快照；
+ * 员工登录凭据校验经 {@link UserClient#authenticate} 下沉用户中心、患者登录经 {@link PatientClient#authenticate}
+ * 下沉患者中心，通过后签发 JWT 并写权限快照；
  * 登出按 jti 撤销当前令牌；getInfo 优先权限快照，菜单树经用户中心实时组装
  *
  * @author yh
@@ -40,6 +42,7 @@ import org.springframework.util.StringUtils;
 public class AuthServiceImpl implements AuthService {
 
     private final UserClient userClient;
+    private final PatientClient patientClient;
     private final JwtTokenService jwtTokenService;
     private final TokenRevocationService tokenRevocationService;
     private final UserSnapshotStore userSnapshotStore;
@@ -64,6 +67,30 @@ public class AuthServiceImpl implements AuthService {
         AuthInfoDTO info = result.getData();
         String token = jwtTokenService.issue(info.getUser().getId());
         snapshotManager.saveFromLogin(info.getUser().getId(), info);
+        LoginVO vo = new LoginVO();
+        vo.setToken(token);
+        return vo;
+    }
+
+    /**
+     * 患者登录认证（凭据校验经 Feign 下沉患者中心，通过后签发 PATIENT 身份 JWT 并写患者快照）
+     *
+     * @param request 登录入参（username=手机号）
+     * @return 登录结果（JWT 令牌）
+     */
+    @Override
+    public LoginVO patientLogin(LoginRequest request) {
+        // 手机号不存在/密码错误/账号禁用时由患者中心返回失败码，文案逐字透传
+        AuthRequest authRequest = new AuthRequest();
+        authRequest.setUsername(request.getUsername());
+        authRequest.setPassword(request.getPassword());
+        Result<AuthInfoDTO> result = patientClient.authenticate(authRequest);
+        if (result == null || result.getCode() != 200 || result.getData() == null) {
+            throw new BusinessException(result == null ? "登录失败" : result.getMsg());
+        }
+        AuthInfoDTO info = result.getData();
+        String token = jwtTokenService.issue(info.getUser().getId(), SecurityConstants.IDENTITY_PATIENT);
+        snapshotManager.saveFromPatientLogin(info.getUser().getId(), info);
         LoginVO vo = new LoginVO();
         vo.setToken(token);
         return vo;
@@ -103,7 +130,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public UserInfoVO getInfo() {
         Long userId = SecurityUtils.getCurrentUserId();
-        UserSnapshot snapshot = userSnapshotStore.get(userId);
+        UserSnapshot snapshot = userSnapshotStore.get(SecurityConstants.IDENTITY_STAFF, userId);
         if (snapshot == null) {
             snapshot = snapshotManager.refresh(userId);
         }

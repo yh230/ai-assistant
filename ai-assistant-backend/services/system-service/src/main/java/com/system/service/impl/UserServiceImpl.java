@@ -11,6 +11,7 @@ import com.api.dto.UserCreateRequest;
 import com.api.dto.UserPageRequest;
 import com.api.dto.UserUpdateRequest;
 import com.common.constant.RoleConstants;
+import com.common.constant.SecurityConstants;
 import com.common.constant.StatusConstants;
 import com.common.exception.BusinessException;
 import com.common.jwt.TokenRevocationService;
@@ -330,7 +331,7 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException("员工不存在");
         }
         // 撤销该用户当前全部令牌（签发时间阈值），下次请求即 401 跳登录
-        tokenRevocationService.kickout(id);
+        tokenRevocationService.kickout(SecurityConstants.IDENTITY_STAFF, id);
     }
 
     /**
@@ -418,7 +419,7 @@ public class UserServiceImpl implements UserService {
      */
     private void evictAuth(Long userId) {
         try {
-            authClient.evict(userId);
+            authClient.evict(SecurityConstants.IDENTITY_STAFF, userId);
         } catch (Exception e) {
             log.warn("失效用户权限快照失败: userId={}, {}", userId, e.getMessage());
         }
@@ -431,7 +432,7 @@ public class UserServiceImpl implements UserService {
      */
     private void kickout(Long userId) {
         try {
-            authClient.kickout(userId);
+            authClient.kickout(SecurityConstants.IDENTITY_STAFF, userId);
         } catch (Exception e) {
             log.warn("强制用户下线失败: userId={}, {}", userId, e.getMessage());
         }

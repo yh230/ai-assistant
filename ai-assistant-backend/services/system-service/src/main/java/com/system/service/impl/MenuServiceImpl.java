@@ -2,6 +2,7 @@ package com.system.service.impl;
 
 import com.api.client.AuthClient;
 import com.api.dto.MenuNodeDTO;
+import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.security.SecurityUtils;
 import com.system.dto.MenuSaveDTO;
@@ -202,7 +203,7 @@ public class MenuServiceImpl implements MenuService {
      */
     private void evictAuth(Long userId) {
         try {
-            authClient.evict(userId);
+            authClient.evict(SecurityConstants.IDENTITY_STAFF, userId);
         } catch (Exception e) {
             log.warn("失效用户权限快照失败: userId={}, {}", userId, e.getMessage());
         }
