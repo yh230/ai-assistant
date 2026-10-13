@@ -23,4 +23,10 @@ public final class SecurityConstants {
 
     /** 令牌前缀，与前端 `Authorization: Bearer <token>` 写法保持一致 */
     public static final String TOKEN_PREFIX = "Bearer ";
+
+    /** 员工身份标识（默认身份，旧令牌无此 claim 时按此处理） */
+    public static final String IDENTITY_STAFF = "staff";
+
+    /** 患者身份标识 */
+    public static final String IDENTITY_PATIENT = "patient";
 }

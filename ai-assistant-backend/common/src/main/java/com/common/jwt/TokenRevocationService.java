@@ -1,5 +1,6 @@
 package com.common.jwt;
 
+import com.common.constant.SecurityConstants;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -61,23 +62,55 @@ public class TokenRevocationService {
     }
 
     /**
+     * 踢下线：使该身份下该用户当前全部有效令牌即时失效
+     *
+     * @param identity 身份类型（staff/patient）
+     * @param userId 用户 ID
+     */
+    public void kickout(String identity, Long userId) {
+        redisTemplate.opsForValue().set(kickKey(identity, userId),
+                String.valueOf(System.currentTimeMillis()), KICK_KEY_TTL);
+    }
+
+    /**
      * 踢下线：使该用户当前全部有效令牌即时失效
+     *
+     * <p>员工默认身份快捷方法</p>
      *
      * @param userId 用户 ID
      */
     public void kickout(Long userId) {
-        redisTemplate.opsForValue().set(KICK_PREFIX + userId,
-                String.valueOf(System.currentTimeMillis()), KICK_KEY_TTL);
+        kickout(SecurityConstants.IDENTITY_STAFF, userId);
     }
 
     /**
      * 查询用户被踢时间戳
      *
+     * @param identity 身份类型（staff/patient）
+     * @param userId 用户 ID
+     * @return 被踢时刻（毫秒）；从未被踢返回 0
+     */
+    public long kickoutAt(String identity, Long userId) {
+        String value = redisTemplate.opsForValue().get(kickKey(identity, userId));
+        if (value == null && SecurityConstants.IDENTITY_STAFF.equals(identity)) {
+            value = redisTemplate.opsForValue().get(KICK_PREFIX + userId);
+        }
+        return value == null ? 0L : Long.parseLong(value);
+    }
+
+    /**
+     * 查询用户被踢时间戳
+     *
+     * <p>员工默认身份快捷方法</p>
+     *
      * @param userId 用户 ID
      * @return 被踢时刻（毫秒）；从未被踢返回 0
      */
     public long kickoutAt(Long userId) {
-        String value = redisTemplate.opsForValue().get(KICK_PREFIX + userId);
-        return value == null ? 0L : Long.parseLong(value);
+        return kickoutAt(SecurityConstants.IDENTITY_STAFF, userId);
+    }
+
+    private String kickKey(String identity, Long userId) {
+        return KICK_PREFIX + identity + ":" + userId;
     }
 }

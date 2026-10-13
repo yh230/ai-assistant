@@ -8,7 +8,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * 登录用户权限快照（Redis 缓存于 auth:user:{userId}，权限/绑定变更时失效重建）
+ * 登录用户权限快照（Redis 缓存于 auth:user:{userId} 或 auth:patient:{userId}，权限/绑定变更时失效重建）
  *
  * @author yh
  * @date 2026-10-12
@@ -39,4 +39,7 @@ public class UserSnapshot {
 
     /** 所属科室 ID（数据权限范围） */
     private Long departmentId;
+
+    /** 身份类型（staff=员工 / patient=患者，见 SecurityConstants，旧数据 null 视为 staff） */
+    private String identity;
 }
