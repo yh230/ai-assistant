@@ -1,7 +1,6 @@
 package com.api.client;
 
 import com.api.dto.*;
-import com.common.auth.UserSnapshot;
 import com.common.result.PageResult;
 import com.common.result.Result;
 import org.springframework.cloud.openfeign.FeignClient;

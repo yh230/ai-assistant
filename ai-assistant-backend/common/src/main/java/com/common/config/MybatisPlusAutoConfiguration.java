@@ -8,7 +8,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * MyBatis-Plus 公共配置：开启分页插件。
+ * MyBatis-Plus 公共配置：开启分页插件
+ *
+ * @author yh
+ * @date 2026-10-12
  */
 @Configuration
 @ConditionalOnClass(com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor.class)

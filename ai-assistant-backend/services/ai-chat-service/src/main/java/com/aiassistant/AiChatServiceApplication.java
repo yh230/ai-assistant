@@ -8,6 +8,7 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfigur
 import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.openfeign.EnableFeignClients;
 
 /**
  * AI 聊天服务启动类
@@ -17,6 +18,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * @author yh
  * @date 2026-10-12
  */
+@EnableFeignClients("com.api.client")
 @SpringBootApplication(scanBasePackages = {"com.aiassistant", "com.common", "com.api"},
         exclude = {
                 OpenAiChatAutoConfiguration.class,

@@ -72,7 +72,7 @@ public class AuthServiceImpl implements AuthService {
     /**
      * 登出：解析请求头 Bearer 令牌并撤销（jti 入 Redis 黑名单，TTL=剩余有效期）
      * <p>
-     * 解析失败静默返回，语义同旧单体
+     * 解析失败静默返回
      *
      * @param request HTTP 请求（携带 Authorization 头）
      */
@@ -87,7 +87,7 @@ public class AuthServiceImpl implements AuthService {
             JwtTokenService.JwtPayload payload = jwtTokenService.parse(token);
             tokenRevocationService.revokeToken(payload.jti(), payload.expiresAtMillis());
         } catch (JwtException | IllegalArgumentException e) {
-            // 无效/过期/被篡改令牌：静默返回，语义同旧单体
+            // 无效/过期/被篡改令牌：静默返回
             log.debug("登出令牌解析失败: {}", e.getMessage());
         }
     }

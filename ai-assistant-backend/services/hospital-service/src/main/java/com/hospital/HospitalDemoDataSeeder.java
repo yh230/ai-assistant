@@ -65,59 +65,64 @@ public class HospitalDemoDataSeeder implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        if (userExists(SENTINEL)) {
-            log.info("[HospitalDemo] 演示数据已存在，跳过播种");
+        try {
+            if (userExists(SENTINEL)) {
+                log.info("[HospitalDemo] 演示数据已存在，跳过播种");
+                return;
+            }
+            loadRoleIds();
+
+            // 1. 医院
+            Long h1 = insertHospital("市第一人民医院", "北京市朝阳区健康路1号", "010-11110000");
+            Long h2 = insertHospital("市第二人民医院", "北京市海淀区和平路88号", "010-22220000");
+
+            // 2. 科室（director_user_id 先置空，建完主任后回填）
+            Map<String, Long> dept = new HashMap<>(8);
+            dept.put("骨科", insertDepartment(h1, "骨科"));
+            dept.put("风湿科", insertDepartment(h1, "风湿科"));
+            dept.put("内科", insertDepartment(h1, "内科"));
+            dept.put("外科", insertDepartment(h1, "外科"));
+            dept.put("儿科", insertDepartment(h2, "儿科"));
+            dept.put("妇产科", insertDepartment(h2, "妇产科"));
+
+            // 3. 院长（hospital_director，全院视角）
+            createUser("demo_root_h1", "院长-(市第一)", RoleConstants.HOSPITAL_DIRECTOR, h1, null);
+            createUser("demo_root_h2", "院长-(市第二)", RoleConstants.HOSPITAL_DIRECTOR, h2, null);
+
+            // 4. 科室主任（dept_director，本科室视角），并回填科室主任
+            bindDirector(dept.get("骨科"), createUser("demo_ortho_dir", "骨科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("骨科")));
+            bindDirector(dept.get("风湿科"), createUser("demo_rheu_dir", "风湿科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("风湿科")));
+            bindDirector(dept.get("内科"), createUser("demo_internal_dir", "内科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("内科")));
+            bindDirector(dept.get("外科"), createUser("demo_surgery_dir", "外科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("外科")));
+            bindDirector(dept.get("儿科"), createUser("demo_peds_dir", "儿科主任", RoleConstants.DEPT_DIRECTOR, h2, dept.get("儿科")));
+            bindDirector(dept.get("妇产科"), createUser("demo_obgyn_dir", "妇产科主任", RoleConstants.DEPT_DIRECTOR, h2, dept.get("妇产科")));
+
+            // 5. 医生 / 护士 / 护工
+            List<Emp> staff = new ArrayList<>();
+            staff.add(new Emp("demo_ortho_doc1", "骨科医生-甲", RoleConstants.DOCTOR, h1, dept.get("骨科")));
+            staff.add(new Emp("demo_ortho_doc2", "骨科医生-乙", RoleConstants.DOCTOR, h1, dept.get("骨科")));
+            staff.add(new Emp("demo_rheu_doc1", "风湿科医生-甲", RoleConstants.DOCTOR, h1, dept.get("风湿科")));
+            staff.add(new Emp("demo_internal_doc1", "内科医生-甲", RoleConstants.DOCTOR, h1, dept.get("内科")));
+            staff.add(new Emp("demo_surgery_doc1", "外科医生-甲", RoleConstants.DOCTOR, h1, dept.get("外科")));
+            staff.add(new Emp("demo_peds_doc1", "儿科医生-甲", RoleConstants.DOCTOR, h2, dept.get("儿科")));
+            staff.add(new Emp("demo_obgyn_doc1", "妇产科医生-甲", RoleConstants.DOCTOR, h2, dept.get("妇产科")));
+            staff.add(new Emp("demo_ortho_nurse1", "骨科护士-甲", RoleConstants.NURSE, h1, dept.get("骨科")));
+            staff.add(new Emp("demo_rheu_nurse1", "风湿科护士-甲", RoleConstants.NURSE, h1, dept.get("风湿科")));
+            staff.add(new Emp("demo_internal_nurse1", "内科护士-甲", RoleConstants.NURSE, h1, dept.get("内科")));
+            staff.add(new Emp("demo_surgery_nurse1", "外科护士-甲", RoleConstants.NURSE, h1, dept.get("外科")));
+            staff.add(new Emp("demo_peds_nurse1", "儿科护士-甲", RoleConstants.NURSE, h2, dept.get("儿科")));
+            staff.add(new Emp("demo_obgyn_nurse1", "妇产科护士-甲", RoleConstants.NURSE, h2, dept.get("妇产科")));
+            staff.add(new Emp("demo_ortho_care1", "骨科护工-甲", RoleConstants.CAREGIVER, h1, dept.get("骨科")));
+            staff.forEach(e -> createUser(e.username(), e.name(), e.roleCode(), e.hospitalId(), e.deptId()));
+
+            // 6. 出勤：为全部已建用户生成近 30 天记录
+            generateAttendance();
+
+            log.info("[HospitalDemo] 演示数据播种完成：2 家医院 / 6 科室 / {} 名用户", userIds.size());
+        } catch (Exception e) {
+            log.warn("[HospitalDemo] 演示数据播种失败（用户中心暂不可用？），跳过本次播种", e);
             return;
         }
-        loadRoleIds();
-
-        // 1. 医院
-        Long h1 = insertHospital("市第一人民医院", "北京市朝阳区健康路1号", "010-11110000");
-        Long h2 = insertHospital("市第二人民医院", "北京市海淀区和平路88号", "010-22220000");
-
-        // 2. 科室（director_user_id 先置空，建完主任后回填）
-        Map<String, Long> dept = new HashMap<>(8);
-        dept.put("骨科", insertDepartment(h1, "骨科"));
-        dept.put("风湿科", insertDepartment(h1, "风湿科"));
-        dept.put("内科", insertDepartment(h1, "内科"));
-        dept.put("外科", insertDepartment(h1, "外科"));
-        dept.put("儿科", insertDepartment(h2, "儿科"));
-        dept.put("妇产科", insertDepartment(h2, "妇产科"));
-
-        // 3. 院长（hospital_director，全院视角）
-        createUser("demo_root_h1", "院长-(市第一)", RoleConstants.HOSPITAL_DIRECTOR, h1, null);
-        createUser("demo_root_h2", "院长-(市第二)", RoleConstants.HOSPITAL_DIRECTOR, h2, null);
-
-        // 4. 科室主任（dept_director，本科室视角），并回填科室主任
-        bindDirector(dept.get("骨科"), createUser("demo_ortho_dir", "骨科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("骨科")));
-        bindDirector(dept.get("风湿科"), createUser("demo_rheu_dir", "风湿科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("风湿科")));
-        bindDirector(dept.get("内科"), createUser("demo_internal_dir", "内科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("内科")));
-        bindDirector(dept.get("外科"), createUser("demo_surgery_dir", "外科主任", RoleConstants.DEPT_DIRECTOR, h1, dept.get("外科")));
-        bindDirector(dept.get("儿科"), createUser("demo_peds_dir", "儿科主任", RoleConstants.DEPT_DIRECTOR, h2, dept.get("儿科")));
-        bindDirector(dept.get("妇产科"), createUser("demo_obgyn_dir", "妇产科主任", RoleConstants.DEPT_DIRECTOR, h2, dept.get("妇产科")));
-
-        // 5. 医生 / 护士 / 护工
-        List<Emp> staff = new ArrayList<>();
-        staff.add(new Emp("demo_ortho_doc1", "骨科医生-甲", RoleConstants.DOCTOR, h1, dept.get("骨科")));
-        staff.add(new Emp("demo_ortho_doc2", "骨科医生-乙", RoleConstants.DOCTOR, h1, dept.get("骨科")));
-        staff.add(new Emp("demo_rheu_doc1", "风湿科医生-甲", RoleConstants.DOCTOR, h1, dept.get("风湿科")));
-        staff.add(new Emp("demo_internal_doc1", "内科医生-甲", RoleConstants.DOCTOR, h1, dept.get("内科")));
-        staff.add(new Emp("demo_surgery_doc1", "外科医生-甲", RoleConstants.DOCTOR, h1, dept.get("外科")));
-        staff.add(new Emp("demo_peds_doc1", "儿科医生-甲", RoleConstants.DOCTOR, h2, dept.get("儿科")));
-        staff.add(new Emp("demo_obgyn_doc1", "妇产科医生-甲", RoleConstants.DOCTOR, h2, dept.get("妇产科")));
-        staff.add(new Emp("demo_ortho_nurse1", "骨科护士-甲", RoleConstants.NURSE, h1, dept.get("骨科")));
-        staff.add(new Emp("demo_rheu_nurse1", "风湿科护士-甲", RoleConstants.NURSE, h1, dept.get("风湿科")));
-        staff.add(new Emp("demo_internal_nurse1", "内科护士-甲", RoleConstants.NURSE, h1, dept.get("内科")));
-        staff.add(new Emp("demo_surgery_nurse1", "外科护士-甲", RoleConstants.NURSE, h1, dept.get("外科")));
-        staff.add(new Emp("demo_peds_nurse1", "儿科护士-甲", RoleConstants.NURSE, h2, dept.get("儿科")));
-        staff.add(new Emp("demo_obgyn_nurse1", "妇产科护士-甲", RoleConstants.NURSE, h2, dept.get("妇产科")));
-        staff.add(new Emp("demo_ortho_care1", "骨科护工-甲", RoleConstants.CAREGIVER, h1, dept.get("骨科")));
-        staff.forEach(e -> createUser(e.username(), e.name(), e.roleCode(), e.hospitalId(), e.deptId()));
-
-        // 6. 出勤：为全部已建用户生成近 30 天记录
-        generateAttendance();
-
-        log.info("[HospitalDemo] 演示数据播种完成：2 家医院 / 6 科室 / {} 名用户", userIds.size());
     }
 
     // ===== 内部成员 =====
