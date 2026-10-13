@@ -4,15 +4,18 @@ import com.aiassistant.tool.WeatherTools;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
- * ChatClient 工厂：根据模型ID构建携带天气工具的 {@link ChatClient}。
+ * ChatClient 工厂：根据模型ID构建携带工具的 {@link ChatClient}。
  * <p>
  * 每次请求独立构建 ChatClient，天然支持多模型运行时切换，且避免持有长生命周期的有状态客户端。
- * 天气查询通过 Tool Calling 注入，AI 在对话中遇到天气问题会自动调用真实数据。
+ * 天气查询通过 Tool Calling 注入，AI 在对话中遇到天气问题会自动调用真实数据；
+ * 患者侧业务工具（科室/号源）经 {@link #getChatClientWithTools} 按回调列表注入。
  *
  * @author AI Assistant
  */
@@ -40,6 +43,22 @@ public class ChatClientFactory {
                 .orElseThrow(() -> new IllegalStateException("未找到可用的模型: " + modelId));
         return ChatClient.builder(model)
                 .defaultTools(weatherTools)
+                .build();
+    }
+
+    /**
+     * 构建仅含指定工具回调的 ChatClient（患者侧专用，不含天气工具）
+     *
+     * @param modelId 模型ID
+     * @param toolCallbacks 工具回调列表
+     * @return 构建好的 ChatClient
+     * @throws IllegalStateException 当模型不存在或未启用时抛出
+     */
+    public ChatClient getChatClientWithTools(String modelId, List<ToolCallback> toolCallbacks) {
+        ChatModel model = modelRegistry.getModel(modelId)
+                .orElseThrow(() -> new IllegalStateException("未找到可用的模型: " + modelId));
+        return ChatClient.builder(model)
+                .defaultToolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
                 .build();
     }
 
