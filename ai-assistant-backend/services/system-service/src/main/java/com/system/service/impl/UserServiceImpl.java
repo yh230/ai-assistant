@@ -156,9 +156,9 @@ public class UserServiceImpl implements UserService {
         Page<SysUser> page = new Page<>(req.getPageNum(), req.getPageSize());
         LambdaQueryWrapper<SysUser> qw = new LambdaQueryWrapper<>();
         if (StringUtils.hasText(req.getKeyword())) {
-            qw.like(SysUser::getUsername, req.getKeyword())
+            qw.and(w -> w.like(SysUser::getUsername, req.getKeyword())
                     .or().like(SysUser::getName, req.getKeyword())
-                    .or().like(SysUser::getPhone, req.getKeyword());
+                    .or().like(SysUser::getPhone, req.getKeyword()));
         }
         if (req.getHospitalId() != null) {
             qw.eq(SysUser::getHospitalId, req.getHospitalId());
