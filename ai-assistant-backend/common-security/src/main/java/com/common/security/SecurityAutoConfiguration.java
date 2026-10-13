@@ -77,6 +77,8 @@ public class SecurityAutoConfiguration {
                 .requestMatchers("/api/login", "/api/health", "/error").permitAll()
                 // 患者公开端点（注册/登录免登录）
                 .requestMatchers("/api/patient/login", "/api/patient/register").permitAll()
+                // 医院公开列表（患者注册选院）
+                .requestMatchers("/api/hospital/public/**").permitAll()
                 // 挂号公开端点（患者免登录）
                 .requestMatchers("/api/registration/appointments",
                         "/api/registration/appointments/**").permitAll()
