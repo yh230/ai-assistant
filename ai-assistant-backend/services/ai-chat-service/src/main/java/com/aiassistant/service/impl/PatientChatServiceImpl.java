@@ -11,6 +11,7 @@ import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
+import com.aiassistant.safety.OutputSafetyFilter;
 import com.aiassistant.service.PatientChatService;
 import com.aiassistant.tool.PatientTools;
 import com.common.auth.UserSnapshot;
@@ -57,6 +58,7 @@ import java.util.stream.Collectors;
  *     <li><b>会话类型</b>：CHAT=闲聊 / TRIAGE=导诊（装配患者工具）/ RAG=知识库（使用知识库人设提示词），
  *         系统提示词取自 {@link AiProperties}。</li>
  *     <li><b>免责与降级</b>：AI 回答末尾强制追加免责声明；模型不可用或流异常时降级本地回复引擎，对话不中断。</li>
+ *     <li><b>输入输出风控</b>：命中敏感词规则的输入直接拦截，输出侧兜底丢弃生成内容并持久化标准文案。</li>
  * </ul>
  *
  * @author yh
@@ -87,6 +89,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final AssistantProperties assistantProperties;
     private final ChatModelRegistry chatModelRegistry;
     private final ChatClientFactory chatClientFactory;
+    private final OutputSafetyFilter safetyFilter;
     private final PatientTools patientTools;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
@@ -120,6 +123,14 @@ public class PatientChatServiceImpl implements PatientChatService {
         ChatSession session = ensureSession(request, user);
         saveMessage(session.getSessionId(), "user", request.getMessage());
 
+        // 输入侧风控：命中敏感词不调用大模型，落库标准文案后以 error 事件输出
+        if (safetyFilter.blockedInput(request.getMessage())) {
+            String blockedMessage = safetyFilter.blockedMessage();
+            saveMessage(session.getSessionId(), "assistant", blockedMessage);
+            log.info("输入侧命中风控敏感词，拦截本次请求 sessionId={}", session.getSessionId());
+            throw new BusinessException(blockedMessage);
+        }
+
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getSessionId());
         List<Message> contextMessages = history.stream()
                 .skip(Math.max(0, history.size() - CONTEXT_WINDOW))
@@ -134,7 +145,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 结束事件
+     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 输出侧风控兜底 + 结束事件
      *
      * @param ctx 患者聊天上下文
      * @return SSE 事件流
@@ -147,38 +158,36 @@ public class PatientChatServiceImpl implements PatientChatService {
 
         boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
-        Flux<ServerSentEvent<String>> contentFlux;
-        if (aiEnabled) {
-            contentFlux = buildAiContentFlux(ctx, fallback);
-        } else {
-            StringBuilder fullLocal = new StringBuilder();
-            contentFlux = buildLocalChunkFlux(ctx, fullLocal)
-                    .doOnComplete(() -> persistReplyAsync(ctx.session().getSessionId(), fullLocal.toString()));
-        }
+        StringBuilder full = new StringBuilder();
+        Flux<ServerSentEvent<String>> contentFlux = aiEnabled
+                ? buildAiContentFlux(ctx, full, fallback)
+                : buildLocalChunkFlux(ctx, full);
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
                 ServerSentEvent.builder(toJson(Map.of("localFallback", fallback.get())))
                         .event(ChatConstants.EVENT_DONE)
                         .build());
 
-        return Flux.concat(Mono.just(sessionEvent), contentFlux, doneEvent);
+        return Flux.concat(Mono.just(sessionEvent), contentFlux,
+                outputSafetyGuard(ctx.session().getSessionId(), full, aiEnabled), doneEvent);
     }
 
     /**
-     * 构建 AI 模型流式内容：按会话类型装配工具（TRIAGE 全量患者工具，CHAT/RAG 无工具）+ 免责追加 + 落库
+     * 构建 AI 模型流式内容：按会话类型装配工具（TRIAGE 全量患者工具，CHAT/RAG 无工具）+ 免责追加
      *
      * @param ctx      患者聊天上下文
+     * @param full     回复内容累积器（供输出侧风控兜底与持久化使用）
      * @param fallback 降级标记（AI 流异常置为 true，供结束事件上报）
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, AtomicBoolean fallback) {
+    private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuilder full,
+                                                             AtomicBoolean fallback) {
         List<ToolCallback> tools = TYPE_TRIAGE.equals(ctx.session().getSessionType())
                 ? List.of(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
                 : List.of();
         ChatClient client = chatClientFactory.getChatClientWithTools(
                 assistantProperties.resolveModelId(null), tools);
 
-        StringBuilder full = new StringBuilder();
         Flux<ServerSentEvent<String>> tokens = client.prompt()
                 .system(ctx.systemPrompt())
                 .messages(ctx.messages())
@@ -198,10 +207,8 @@ public class PatientChatServiceImpl implements PatientChatService {
 
         // 免责强制追加：token 流结束后补一个 token 事件
         String disclaimer = aiProperties.getDisclaimer();
-        Flux<ServerSentEvent<String>> withDisclaimer = Flux.concat(tokens,
+        return Flux.concat(tokens,
                 Flux.just(ServerSentEvent.builder("\n\n" + disclaimer).event(ChatConstants.EVENT_TOKEN).build()));
-        return withDisclaimer.doOnComplete(() ->
-                persistReplyAsync(ctx.session().getSessionId(), full + "\n\n" + disclaimer));
     }
 
     /**
@@ -220,6 +227,31 @@ public class PatientChatServiceImpl implements PatientChatService {
                     full.append(chunk);
                     return ServerSentEvent.builder(chunk).event(ChatConstants.EVENT_TOKEN).build();
                 });
+    }
+
+    /**
+     * 输出侧风控兜底：内容流结束后对累计文本做敏感词校验，命中则丢弃生成内容改持久化标准文案并追加 error 事件
+     * <p>
+     * token 已流出的场景前端以 error 文案为准；未命中则按原文持久化
+     *
+     * @param sessionId 会话ID
+     * @param full      回复内容累积器
+     * @param aiEnabled 是否为 AI 分支（决定持久化文本是否包含免责声明）
+     * @return 命中时输出 error 事件流，未命中则为空流
+     */
+    private Mono<ServerSentEvent<String>> outputSafetyGuard(String sessionId, StringBuilder full, boolean aiEnabled) {
+        return Mono.defer(() -> {
+            String reply = aiEnabled ? full + "\n\n" + aiProperties.getDisclaimer() : full.toString();
+            if (safetyFilter.blockedInput(reply)) {
+                persistReplyAsync(sessionId, safetyFilter.blockedMessage());
+                log.warn("输出侧命中风控敏感词，已拦截并改持久化标准文案 sessionId={}", sessionId);
+                return Mono.just(ServerSentEvent.builder(toJson(Map.of("message", safetyFilter.blockedMessage())))
+                        .event(ChatConstants.EVENT_ERROR)
+                        .build());
+            }
+            persistReplyAsync(sessionId, reply);
+            return Mono.empty();
+        });
     }
 
     /**
