@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS registration (
   patient_name    VARCHAR(50)   NOT NULL                COMMENT '患者姓名',
   patient_phone   VARCHAR(20)   NOT NULL                COMMENT '患者手机号',
   patient_id_card VARCHAR(18)   DEFAULT NULL            COMMENT '患者身份证号（取号/查询用）',
+  patient_id      BIGINT        NULL                    COMMENT '患者账号ID（AI挂号；匿名预约为空）',
   source_type     TINYINT       NOT NULL                COMMENT '来源 1=线上预约 2=现场窗口 3=自助机',
   pay_status      TINYINT       NOT NULL DEFAULT 0      COMMENT '0=未支付 1=已支付 2=超时作废',
   pay_amount      DECIMAL(10,2) DEFAULT 0.00           COMMENT '收费金额',
@@ -83,3 +84,5 @@ CREATE TABLE IF NOT EXISTS registration (
   KEY idx_phone (patient_phone),
   KEY idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='挂号/预约/取号记录（状态机核心）';
+
+-- 已建库升级（新库无需执行）：ALTER TABLE registration ADD COLUMN patient_id BIGINT NULL COMMENT '患者账号ID';

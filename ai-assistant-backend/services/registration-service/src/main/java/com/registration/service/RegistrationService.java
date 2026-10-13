@@ -29,6 +29,12 @@ public interface RegistrationService {
     /** 患者取消本人未取号预约：释放号源 */
     RegistrationVO patientCancel(Long id, String idCard, String reason);
 
+    /** 患者本人预约列表（AI「我的预约」工具，按患者账号 ID） */
+    List<RegistrationVO> listByPatientId(Long patientId);
+
+    /** AI 取消预约退号（按患者账号 ID 校验归属，规则与 patientCancel 一致） */
+    RegistrationVO cancelByPatient(Long id, Long patientId, String reason);
+
     // ===== 员工（鉴权 + 数据权限） =====
 
     /** 挂号记录分页（按数据范围自动过滤） */

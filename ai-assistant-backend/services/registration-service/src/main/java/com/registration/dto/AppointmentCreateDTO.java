@@ -17,4 +17,6 @@ public class AppointmentCreateDTO {
     private String patientName;
     private String patientPhone;
     private String patientIdCard;
+    /** 患者账号 ID（AI 挂号传入；匿名预约为空） */
+    private Long patientId;
 }

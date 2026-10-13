@@ -37,6 +37,8 @@ public class Registration {
     private String patientName;
     private String patientPhone;
     private String patientIdCard;
+    /** 患者账号 ID（AI 挂号来源；匿名预约/窗口为 null） */
+    private Long patientId;
 
     /** 来源 1=线上预约 2=现场窗口 3=自助机（见 SourceType） */
     private Integer sourceType;

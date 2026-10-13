@@ -82,6 +82,17 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Transactional(rollbackFor = Exception.class)
     public RegistrationVO createAppointment(AppointmentCreateDTO dto) {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
+        // AI 挂号（带患者账号）：同一患者同一天已有进行中的预约则拦截
+        if (dto.getPatientId() != null) {
+            Long dupCount = registrationMapper.selectCount(new LambdaQueryWrapper<Registration>()
+                    .eq(Registration::getPatientId, dto.getPatientId())
+                    .eq(Registration::getScheduleDate, dto.getScheduleDate())
+                    .in(Registration::getStatus,
+                            RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
+            if (dupCount > 0) {
+                throw new BusinessException("您在该时段已有预约，请勿重复预约");
+            }
+        }
         NumberSource source = pickFreeSource(schedule.getId(), dto.getSeqNo());
         Registration reg = new Registration();
         reg.setRegistrationNo(genRegistrationNo(schedule.getId(), source.getSeqNo()));
@@ -96,6 +107,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         reg.setPatientName(dto.getPatientName());
         reg.setPatientPhone(dto.getPatientPhone());
         reg.setPatientIdCard(dto.getPatientIdCard());
+        reg.setPatientId(dto.getPatientId());
         reg.setSourceType(SourceType.ONLINE.getCode());
         reg.setPayStatus(PayStatus.UNPAID.getCode());
         reg.setPayAmount(DEFAULT_FEE);
@@ -153,15 +165,26 @@ public class RegistrationServiceImpl implements RegistrationService {
     public RegistrationVO patientCancel(Long id, String idCard, String reason) {
         Registration reg = loadRegistration(id);
         verifyPatient(reg, idCard);
-        RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
-        cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
-        // 释放号源
-        releaseSource(reg.getNumberSourceId());
-        incrRegisteredCount(reg.getScheduleId(), -1);
-        reg.setStatus(RegistrationStatus.CANCELLED.getCode());
-        reg.setRemark(appendReason(reg.getRemark(), "患者取消：" + (reason == null ? "" : reason)));
-        reg.setUpdateTime(LocalDateTime.now());
-        registrationMapper.updateById(reg);
+        doPatientCancel(reg, reason);
+        return enrich(List.of(reg)).get(0);
+    }
+
+    @Override
+    public List<RegistrationVO> listByPatientId(Long patientId) {
+        LambdaQueryWrapper<Registration> qw = new LambdaQueryWrapper<>();
+        qw.eq(Registration::getPatientId, patientId);
+        qw.orderByDesc(Registration::getCreateTime);
+        return enrich(registrationMapper.selectList(qw));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public RegistrationVO cancelByPatient(Long id, Long patientId, String reason) {
+        Registration reg = loadRegistration(id);
+        if (!patientId.equals(reg.getPatientId())) {
+            throw new BusinessException("无权操作该预约");
+        }
+        doPatientCancel(reg, reason);
         return enrich(List.of(reg)).get(0);
     }
 
@@ -375,6 +398,24 @@ public class RegistrationServiceImpl implements RegistrationService {
         int cur = s.getRegisteredCount() == null ? 0 : s.getRegisteredCount();
         s.setRegisteredCount(Math.max(0, cur + delta));
         scheduleMapper.updateById(s);
+    }
+
+    /**
+     * 执行患者取消预约（状态机校验 → 释放号源 → 占用回退 → 落库）
+     *
+     * @param reg 挂号记录（调用方已完成身份/归属校验）
+     * @param reason 取消原因（可空）
+     */
+    private void doPatientCancel(Registration reg, String reason) {
+        RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
+        cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
+        // 释放号源
+        releaseSource(reg.getNumberSourceId());
+        incrRegisteredCount(reg.getScheduleId(), -1);
+        reg.setStatus(RegistrationStatus.CANCELLED.getCode());
+        reg.setRemark(appendReason(reg.getRemark(), "患者取消：" + (reason == null ? "" : reason)));
+        reg.setUpdateTime(LocalDateTime.now());
+        registrationMapper.updateById(reg);
     }
 
     /**
