@@ -1,4 +1,4 @@
-package com.system.vo;
+package com.auth.vo;
 
 import com.api.dto.MenuNodeDTO;
 import lombok.Data;

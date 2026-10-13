@@ -1,12 +1,13 @@
-package com.system.controller;
+package com.auth.controller;
 
 import com.api.dto.ChangePasswordDTO;
 import com.api.dto.ProfileUpdateDTO;
+import com.auth.dto.LoginRequest;
+import com.auth.service.AuthService;
+import com.auth.vo.LoginVO;
+import com.auth.vo.UserInfoVO;
 import com.common.result.Result;
-import com.system.dto.LoginRequest;
-import com.system.service.AuthService;
-import com.system.vo.LoginVO;
-import com.system.vo.UserInfoVO;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 认证接口：登录、登出、获取当前用户信息
  * <p>
- * 登出撤销当前令牌，无需请求参数；令牌撤销逻辑随 auth 服务割接落地
+ * 登出撤销当前令牌，无需请求参数
  *
  * @author yh
  * @date 2026-10-12
@@ -36,8 +37,8 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public Result<Void> logout() {
-        authService.logout();
+    public Result<Void> logout(HttpServletRequest request) {
+        authService.logout(request);
         return Result.success();
     }
 

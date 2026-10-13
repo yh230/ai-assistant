@@ -1,15 +1,16 @@
-package com.system.service;
+package com.auth.service;
 
 import com.api.dto.ChangePasswordDTO;
 import com.api.dto.ProfileUpdateDTO;
-import com.system.dto.LoginRequest;
-import com.system.vo.LoginVO;
-import com.system.vo.UserInfoVO;
+import com.auth.dto.LoginRequest;
+import com.auth.vo.LoginVO;
+import com.auth.vo.UserInfoVO;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * 认证服务：登录、登出、获取当前用户信息
  * <p>
- * 登出撤销当前令牌，无需请求参数；令牌撤销逻辑随 auth 服务割接落地
+ * 登录凭据校验/资料与密码更新经 Feign 调用用户中心；登出撤销当前令牌
  *
  * @author yh
  * @date 2026-10-12
@@ -24,7 +25,7 @@ public interface AuthService {
     /**
      * 登出：撤销当前令牌
      */
-    void logout();
+    void logout(HttpServletRequest request);
 
     /**
      * 获取当前登录用户的信息、角色、按钮权限、菜单树。

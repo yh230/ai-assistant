@@ -1,4 +1,4 @@
-package com.system.vo;
+package com.auth.vo;
 
 import lombok.Data;
 
