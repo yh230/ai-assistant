@@ -1,6 +1,6 @@
-package com.aiassistant.common.security;
+package com.common.security;
 
-import com.aiassistant.common.exception.BusinessException;
+import com.common.exception.BusinessException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import lombok.Getter;

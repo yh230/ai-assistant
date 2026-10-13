@@ -1,21 +1,20 @@
-package com.aiassistant.config;
+package com.common.security;
 
-import com.aiassistant.common.result.Result;
-import com.aiassistant.security.DbUserDetailsService;
-import com.aiassistant.security.JwtAuthenticationFilter;
-import com.aiassistant.security.JwtTokenService;
-import com.aiassistant.security.TokenRevocationService;
+import com.api.client.AuthClient;
+import com.common.auth.UserSnapshotStore;
+import com.common.jwt.JwtTokenService;
+import com.common.jwt.TokenRevocationService;
+import com.common.result.Result;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.core.GrantedAuthorityDefaults;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -28,28 +27,34 @@ import org.springframework.security.web.savedrequest.NullRequestCache;
 import java.io.IOException;
 
 /**
- * Spring Security 配置（无状态 JWT）
+ * Spring Security 自动配置（无状态 JWT + 内部令牌）
  * <p>
- * 过滤器链承担路由鉴权（放行清单：login/health/error、OPTIONS 预检、挂号公开端点），
+ * 过滤器链承担路由鉴权（放行清单：login/health/error、OPTIONS 预检、挂号公开端点、内部接口），
  * 细粒度权限由 {@code @PreAuthorize}（@EnableMethodSecurity）承担；
- * 401/403 由 EntryPoint/DeniedHandler 输出与 {@code Result} 一致的 JSON
+ * 401/403 由 EntryPoint/DeniedHandler 输出与 {@code Result} 一致的 JSON；
+ * 登录校验已下沉 system-service，本模块不注册 AuthenticationManager
  *
  * @author yh
  * @date 2026-10-12
  */
-@Configuration
-@EnableWebSecurity
+@AutoConfiguration
 @EnableMethodSecurity
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @RequiredArgsConstructor
-public class SecurityConfig {
+public class SecurityAutoConfiguration {
 
     private final ObjectMapper objectMapper;
     private final JwtTokenService jwtTokenService;
     private final TokenRevocationService tokenRevocationService;
-    private final DbUserDetailsService dbUserDetailsService;
+    private final UserSnapshotStore userSnapshotStore;
+    private final AuthClient authClient;
+
+    /** 服务间内部调用令牌（与 api 模块 InternalTokenInterceptor 附加的请求头对应） */
+    @Value("${security.internal.token:}")
+    private String internalToken;
 
     /**
-     * 安全过滤器链：无状态、放行公开端点、其余 /api/** 需认证
+     * 安全过滤器链：无状态、放行公开端点与内部接口、其余 /api/** 需认证
      *
      * @param http HttpSecurity 构建器
      * @return 过滤器链
@@ -58,8 +63,10 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         // 手工构造（非 Bean），避免 Servlet 容器对 Filter Bean 的二次注册导致过滤两次
+        InternalAuthFilter internalAuthFilter = new InternalAuthFilter(internalToken, objectMapper);
         JwtAuthenticationFilter jwtAuthenticationFilter =
-                new JwtAuthenticationFilter(jwtTokenService, tokenRevocationService, dbUserDetailsService);
+                new JwtAuthenticationFilter(jwtTokenService, tokenRevocationService,
+                        userSnapshotStore, authClient, objectMapper);
         http
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -72,6 +79,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/registration/appointments",
                         "/api/registration/appointments/**").permitAll()
                 .requestMatchers("/api/registration/schedule/public/**").permitAll()
+                // 内部接口（安全由 InternalAuthFilter 校验内部令牌承担）
+                .requestMatchers("/inner/**").permitAll()
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().permitAll())
             .exceptionHandling(ex -> ex
@@ -81,6 +90,7 @@ public class SecurityConfig {
                 .accessDeniedHandler((request, response, accessDeniedException) ->
                         writeJson(response, HttpServletResponse.SC_FORBIDDEN,
                                 Result.forbidden("权限不足，禁止访问"))))
+            .addFilterBefore(internalAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
@@ -96,25 +106,23 @@ public class SecurityConfig {
     }
 
     /**
-     * 认证管理器（登录走 DaoAuthenticationProvider + {@link DbUserDetailsService}）
-     *
-     * @param configuration 认证配置
-     * @return 认证管理器
-     * @throws Exception 构建异常
-     */
-    @Bean
-    public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
-        return configuration.getAuthenticationManager();
-    }
-
-    /**
-     * 关闭 hasRole 默认的 ROLE_ 前缀：使 hasRole('admin') 命中 DB 原样角色码
+     * 关闭 hasRole 默认的 ROLE_ 前缀：使 hasRole('admin') 命中快照原样角色码
      *
      * @return 权限前缀默认值
      */
     @Bean
     public static GrantedAuthorityDefaults grantedAuthorityDefaults() {
         return new GrantedAuthorityDefaults("");
+    }
+
+    /**
+     * 全局异常处理器（原 com.common.exception 迁入，作为 bean 注册生效）
+     *
+     * @return 全局异常处理器
+     */
+    @Bean
+    public GlobalExceptionHandler globalExceptionHandler() {
+        return new GlobalExceptionHandler();
     }
 
     /**

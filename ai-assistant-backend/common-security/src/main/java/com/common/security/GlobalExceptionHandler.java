@@ -1,6 +1,7 @@
-package com.aiassistant.common.exception;
+package com.common.security;
 
-import com.aiassistant.common.result.Result;
+import com.common.exception.BusinessException;
+import com.common.result.Result;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;

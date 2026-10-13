@@ -1,12 +1,7 @@
-package com.aiassistant.common.security;
+package com.common.security;
 
-import com.aiassistant.common.constant.RoleConstants;
-import com.aiassistant.security.SecurityUtils;
-import com.aiassistant.system.entity.SysUser;
-import com.aiassistant.system.mapper.SysRoleMapper;
-import com.aiassistant.system.mapper.SysUserMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import com.common.auth.UserSnapshot;
+import com.common.constant.RoleConstants;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -28,13 +23,8 @@ import java.util.List;
  * @author yh
  * @date 2026-10-12
  */
-@Slf4j
 @Component
-@RequiredArgsConstructor
 public class DataScopeResolver {
-
-    private final SysUserMapper userMapper;
-    private final SysRoleMapper roleMapper;
 
     /**
      * 解析当前登录人的数据权限范围
@@ -43,20 +33,19 @@ public class DataScopeResolver {
      */
     public DataScope resolve() {
         // 未登录（启动播种/定时任务/内部调用）→ ALL
-        if (!SecurityUtils.isAuthenticated()) {
+        UserSnapshot snapshot = SecurityUtils.currentSnapshot();
+        if (snapshot == null) {
             return DataScope.all();
         }
-        Long userId = SecurityUtils.getCurrentUserId();
-        List<String> roles = roleMapper.selectRoleCodesByUserId(userId);
+        List<String> roles = snapshot.getRoles();
         if (roles == null) {
             roles = List.of();
         }
         if (roles.contains(RoleConstants.ADMIN)) {
             return DataScope.all();
         }
-        SysUser user = userMapper.selectById(userId);
-        Long hospitalId = user == null ? null : user.getHospitalId();
-        Long deptId = user == null ? null : user.getDepartmentId();
+        Long hospitalId = snapshot.getHospitalId();
+        Long deptId = snapshot.getDepartmentId();
 
         if (roles.contains(RoleConstants.HOSPITAL_DIRECTOR)) {
             return DataScope.hospital(hospitalId);
@@ -68,6 +57,6 @@ public class DataScopeResolver {
                 || roles.contains(RoleConstants.SELF_SERVICE_KIOSK)) {
             return DataScope.hospital(hospitalId);
         }
-        return DataScope.self(userId);
+        return DataScope.self(snapshot.getUserId());
     }
 }

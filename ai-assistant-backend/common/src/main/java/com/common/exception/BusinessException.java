@@ -3,7 +3,7 @@ package com.common.exception;
 import lombok.Getter;
 
 /**
- * 业务异常：由业务规则主动抛出，由 {@link GlobalExceptionHandler} 统一包装为 {@link Result}。
+ * 业务异常：由业务规则主动抛出，由 GlobalExceptionHandler 统一包装为 {@link Result}。
  */
 @Getter
 public class BusinessException extends RuntimeException {
