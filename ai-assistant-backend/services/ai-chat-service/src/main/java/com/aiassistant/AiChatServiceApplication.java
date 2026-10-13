@@ -1,5 +1,6 @@
 package com.aiassistant;
 
+import com.aiassistant.config.AiProperties;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration;
@@ -8,6 +9,7 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfigur
 import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.openfeign.EnableFeignClients;
 
 /**
@@ -18,6 +20,7 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
  * @author yh
  * @date 2026-10-12
  */
+@EnableConfigurationProperties(AiProperties.class)
 @EnableFeignClients("com.api.client")
 @SpringBootApplication(scanBasePackages = {"com.aiassistant", "com.common", "com.api"},
         exclude = {
