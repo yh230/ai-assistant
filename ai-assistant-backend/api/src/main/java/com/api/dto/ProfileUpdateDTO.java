@@ -1,9 +1,12 @@
-package com.aiassistant.system.dto;
+package com.api.dto;
 
 import lombok.Data;
 
 /**
- * 个人信息修改（手机号 / 邮箱），均可选填、非必填。
+ * 个人信息修改（手机号 / 邮箱），均可选填、非必填
+ *
+ * @author yh
+ * @date 2026-10-12
  */
 @Data
 public class ProfileUpdateDTO {

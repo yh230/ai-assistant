@@ -1,4 +1,4 @@
-package com.aiassistant.system.dto;
+package com.api.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -7,10 +7,13 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * 编辑员工请求。
+ * 编辑员工请求
+ *
+ * @author yh
+ * @date 2026-10-12
  */
 @Data
-public class UserUpdateDTO {
+public class UserUpdateRequest {
 
     @NotBlank(message = "姓名不能为空")
     private String name;

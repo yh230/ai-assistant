@@ -1,4 +1,4 @@
-package com.aiassistant.common.dto;
+package com.api.dto;
 
 import lombok.Data;
 
@@ -8,7 +8,7 @@ import lombok.Data;
  * system 与 hospital 共用的重置密码请求体
  *
  * @author yh
- * @date 2026-10-10
+ * @date 2026-10-12
  */
 @Data
 public class ResetPasswordDTO {
