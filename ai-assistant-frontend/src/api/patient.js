@@ -1,0 +1,203 @@
+import axios from 'axios'
+
+/**
+ * 患者侧独立 axios 实例
+ * 与 api/index.js 隔离：只注入患者 token（patient_token），401 清患者态跳患者登录，
+ * 不会误带员工 token（ai_token）或跳员工登录
+ */
+const patientApi = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json'
+  }
+})
+
+// 防止并发 401 跳登录导致多次 location.href
+let redirecting = false
+function forceToPatientLogin() {
+  if (redirecting) return
+  redirecting = true
+  localStorage.removeItem('patient_token')
+  localStorage.removeItem('patient_user')
+  if (!window.location.pathname.includes('/patient/login')) {
+    window.location.href = '/patient/login'
+  }
+  // 给后续可能仍在路上的请求留一次机会重置
+  setTimeout(() => { redirecting = false }, 500)
+}
+
+// 请求拦截器：自动携带患者 Token
+patientApi.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('patient_token')
+    if (token) {
+      config.headers.Authorization = 'Bearer ' + token
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
+// 响应拦截器：约定与员工侧一致（code===200 解包 data；401 跳患者登录）
+patientApi.interceptors.response.use(
+  (response) => {
+    const data = response.data
+    if (data && data.code === 200) {
+      return data.data
+    }
+    const msg = (data && data.msg) || ''
+    return Promise.reject(new Error(msg || '请求失败'))
+  },
+  (error) => {
+    if (error.response) {
+      const { status, data } = error.response
+      if (status === 401) {
+        forceToPatientLogin()
+      }
+      const msg = (data && data.msg) || `请求错误 (${status})`
+      return Promise.reject(new Error(msg))
+    }
+    return Promise.reject(new Error('网络异常或服务不可用'))
+  }
+)
+
+/**
+ * 患者注册（手机号+密码+姓名+医院）
+ */
+export function patientRegister(data) {
+  return patientApi.post('/patient/register', data)
+}
+
+/**
+ * 患者登录
+ */
+export function patientLogin(data) {
+  return patientApi.post('/patient/login', data)
+}
+
+/**
+ * 公开医院列表（注册选院）
+ */
+export function publicHospitals() {
+  return patientApi.get('/hospital/public/list')
+}
+
+/**
+ * 患者会话列表（仅本人）
+ */
+export function patientSessions() {
+  return patientApi.get('/chat/patient/sessions')
+}
+
+/**
+ * 患者会话历史
+ */
+export function patientHistory(sessionId) {
+  return patientApi.get(`/chat/patient/history/${sessionId}`)
+}
+
+/**
+ * 新建患者会话（type: CHAT/TRIAGE/RAG）
+ */
+export function createPatientSession(type) {
+  return patientApi.post(`/chat/patient/session?type=${type}`)
+}
+
+/**
+ * 删除患者会话
+ */
+export function deletePatientSession(sessionId) {
+  return patientApi.delete(`/chat/patient/session/${sessionId}`)
+}
+
+/**
+ * 取消待确认写操作
+ */
+export function cancelPatientAction(actionId) {
+  return patientApi.post(`/chat/patient/action/${actionId}/cancel`)
+}
+
+/**
+ * 解析 SSE 事件流（患者侧，事件：session/token/done/error/confirm_required）
+ */
+async function consumeSse(response, handlers, signal) {
+  if (response.status === 401 || response.status === 403) {
+    forceToPatientLogin()
+    throw new Error(`HTTP ${response.status}: 未登录或会话已失效`)
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    // SSE 事件以 \n\n 分隔
+    const parts = buffer.split('\n\n')
+    buffer = parts.pop() // 保留不完整的部分
+    for (const part of parts) {
+      if (!part.trim()) continue
+      let eventType = 'message'
+      let dataStr = ''
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event:')) eventType = line.slice(6).trim()
+        else if (line.startsWith('data:')) dataStr += line.slice(5).replace(/^\s/, '')
+      }
+      if (eventType === 'session') {
+        try { handlers.onSession?.(JSON.parse(dataStr)) } catch { /* ignore */ }
+      } else if (eventType === 'token') {
+        handlers.onToken?.(dataStr)
+      } else if (eventType === 'confirm_required') {
+        try { handlers.onConfirm?.(JSON.parse(dataStr)) } catch { /* ignore */ }
+      } else if (eventType === 'done') {
+        try { handlers.onDone?.(JSON.parse(dataStr)) } catch { handlers.onDone?.({}) }
+      } else if (eventType === 'error') {
+        try { handlers.onError?.(JSON.parse(dataStr).message || dataStr) } catch { handlers.onError?.(dataStr) }
+      }
+    }
+  }
+}
+
+/**
+ * 患者流式对话（SSE），返回 AbortController 供「停止生成」
+ */
+export function sendPatientStream(data, handlers) {
+  const token = localStorage.getItem('patient_token')
+  const controller = new AbortController()
+  fetch('/api/chat/patient/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {})
+    },
+    body: JSON.stringify(data),
+    signal: controller.signal
+  })
+    .then((response) => consumeSse(response, handlers))
+    .catch((err) => {
+      if (err.name !== 'AbortError') handlers.onError?.(err.message || '网络异常')
+    })
+  return controller
+}
+
+/**
+ * 确认写操作（SSE 续答），返回 AbortController 供「停止生成」
+ */
+export function confirmPatientAction(actionId, handlers) {
+  const token = localStorage.getItem('patient_token')
+  const controller = new AbortController()
+  fetch(`/api/chat/patient/action/${actionId}/confirm`, {
+    method: 'POST',
+    headers: token ? { Authorization: 'Bearer ' + token } : {},
+    signal: controller.signal
+  })
+    .then((response) => consumeSse(response, handlers))
+    .catch((err) => {
+      if (err.name !== 'AbortError') handlers.onError?.(err.message || '网络异常')
+    })
+  return controller
+}

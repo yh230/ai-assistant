@@ -180,11 +180,27 @@ public class HospitalServiceImpl implements HospitalService {
         }
         Map<Long, Hospital> map = hospitalMapper.selectBatchIds(ids).stream()
                 .collect(Collectors.toMap(Hospital::getId, h -> h));
-        return ids.stream().map(map::get).filter(Objects::nonNull).map(h -> {
-            OrgBriefDTO dto = new OrgBriefDTO();
-            dto.setId(h.getId());
-            dto.setName(h.getName());
-            return dto;
-        }).collect(Collectors.toList());
+        return ids.stream().map(map::get).filter(Objects::nonNull).map(this::toBrief)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 医院简要列表（公开端点：患者注册选院用，全量医院 id+name，不限数据范围）
+     *
+     * @return 医院简要信息列表（按名称升序）
+     */
+    @Override
+    public List<OrgBriefDTO> listBrief() {
+        LambdaQueryWrapper<Hospital> qw = new LambdaQueryWrapper<>();
+        qw.orderByAsc(Hospital::getName);
+        return hospitalMapper.selectList(qw).stream().map(this::toBrief)
+                .collect(Collectors.toList());
+    }
+
+    private OrgBriefDTO toBrief(Hospital h) {
+        OrgBriefDTO dto = new OrgBriefDTO();
+        dto.setId(h.getId());
+        dto.setName(h.getName());
+        return dto;
     }
 }

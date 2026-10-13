@@ -26,4 +26,7 @@ public interface HospitalService {
 
     /** 按 ID 批量查询医院简要信息（内部接口，供服务间 Feign 名称回填） */
     java.util.List<OrgBriefDTO> batchBrief(java.util.List<Long> ids);
+
+    /** 医院简要列表（公开端点：患者注册选院用，全量 id+name，不限数据范围） */
+    java.util.List<OrgBriefDTO> listBrief();
 }

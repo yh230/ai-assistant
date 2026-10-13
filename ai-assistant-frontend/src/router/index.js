@@ -12,6 +12,18 @@ const routes = [
     meta: { public: true, title: '登录' }
   },
   {
+    path: '/patient/login',
+    name: 'PatientLogin',
+    component: () => import('../views/patient/PatientLoginView.vue'),
+    meta: { public: true, title: '患者登录' }
+  },
+  {
+    path: '/patient/chat',
+    name: 'PatientChat',
+    component: () => import('../views/patient/PatientChatView.vue'),
+    meta: { requiresPatient: true, title: 'AI 就诊助手' }
+  },
+  {
     path: '/',
     component: MainLayout,
     // 未登录用户会被守卫改写到 /login；此处 redirect 仅对已登录生效
@@ -162,13 +174,23 @@ router.beforeEach(async (to, from, next) => {
     return
   }
 
-  // 2. 其余全部路由：未登录直接跳 /login
+  // 2. 患者页：校验患者 token，缺失跳患者登录
+  if (to.meta.requiresPatient) {
+    if (!localStorage.getItem('patient_token')) {
+      next({ path: '/patient/login' })
+      return
+    }
+    next()
+    return
+  }
+
+  // 3. 其余全部路由：未登录直接跳 /login
   if (!hasToken) {
     next({ path: '/login', query: { redirect: to.fullPath } })
     return
   }
 
-  // 3. 有 token：已认证则直接放行，不重复打 getInfo；
+  // 4. 有 token：已认证则直接放行，不重复打 getInfo；
   //    会话失效由 axios 响应拦截器(401 -> forceToLogin)兜底清 token 跳登录。
   //    （仅首次进入/刷新页面后未认证时，做一次 loadUserInfo 拉用户信息）
   if (!authStore.authed.value) {
@@ -187,7 +209,7 @@ router.beforeEach(async (to, from, next) => {
     }
   }
 
-  // 4. 权限校验（支持单权限 perm 或 多权限 perms 取「或」）
+  // 5. 权限校验（支持单权限 perm 或 多权限 perms 取「或」）
   const required = to.meta.perm || to.meta.perms
   if (required) {
     let perms = []

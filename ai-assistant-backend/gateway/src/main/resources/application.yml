@@ -45,6 +45,7 @@ gateway:
     - /api/registration/appointments
     - /api/registration/appointments/**
     - /api/registration/schedule/public/**
+    - /api/hospital/public/**
 
 security:
   jwt:
