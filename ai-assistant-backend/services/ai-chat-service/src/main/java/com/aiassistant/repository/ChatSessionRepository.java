@@ -2,6 +2,7 @@ package com.aiassistant.repository;
 
 import com.aiassistant.entity.ChatSession;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -14,7 +15,8 @@ import java.util.Optional;
  * @date 2026-10-10
  */
 @Repository
-public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> {
+public interface ChatSessionRepository extends JpaRepository<ChatSession, Long>,
+        JpaSpecificationExecutor<ChatSession> {
 
     Optional<ChatSession> findBySessionId(String sessionId);
 
