@@ -52,7 +52,9 @@ class PatientServiceImplTest {
     void registerRejectsMissingHospital() {
         when(patientUserMapper.selectCount(any())).thenReturn(0L);
         when(orgClient.hospitals(List.of(1L))).thenReturn(Result.success(List.of()));
-        assertThrows(BusinessException.class, () -> patientService.register(registerDto()));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> patientService.register(registerDto()));
+        assertEquals("所选医院不存在", ex.getMessage());
     }
 
     @Test
@@ -62,8 +64,12 @@ class PatientServiceImplTest {
         hospital.setId(1L);
         when(orgClient.hospitals(List.of(1L))).thenReturn(Result.success(List.of(hospital)));
         when(passwordEncoder.encode("123456")).thenReturn("$2a$hash");
-        when(patientUserMapper.insert(any(PatientUser.class))).thenReturn(1);
-        assertNotNull(patientService.register(registerDto()));
+        // 模拟 MyBatis-Plus 插入后回填自增主键的真实行为
+        when(patientUserMapper.insert(any(PatientUser.class))).thenAnswer(inv -> {
+            inv.getArgument(0, PatientUser.class).setId(1L);
+            return 1;
+        });
+        assertEquals(1L, patientService.register(registerDto()));
     }
 
     @Test

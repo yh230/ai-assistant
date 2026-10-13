@@ -70,8 +70,7 @@ public class PatientServiceImpl implements PatientService {
         user.setCreateTime(LocalDateTime.now());
         user.setUpdateTime(LocalDateTime.now());
         patientUserMapper.insert(user);
-        // 自增主键由 MyBatis-Plus 插入后回填，未回填时兜底返回 0
-        return user.getId() == null ? 0L : user.getId();
+        return user.getId();
     }
 
     /**
