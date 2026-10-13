@@ -9,7 +9,10 @@ import lombok.Builder;
 import java.time.LocalDateTime;
 
 /**
- * 聊天会话实体
+ * 聊天会话实体（带归属用户与身份，供按登录人隔离会话）
+ *
+ * @author yh
+ * @date 2026-10-10
  */
 @Data
 @Entity
@@ -28,6 +31,22 @@ public class ChatSession {
 
     @Column(nullable = false, length = 200)
     private String title;
+
+    /** 归属用户 ID（员工=sys_user.id，患者=patient_user.id） */
+    @Column(name = "user_id")
+    private Long userId;
+
+    /** 归属身份（staff/patient，见 SecurityConstants 语义） */
+    @Column(length = 10)
+    private String identity;
+
+    /** 会话类型：CHAT=闲聊 / TRIAGE=导诊 / RAG=知识库 */
+    @Column(name = "session_type", length = 10)
+    private String sessionType;
+
+    /** 归属医院 ID（快照冗余，供管理员数据权限过滤） */
+    @Column(name = "hospital_id")
+    private Long hospitalId;
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

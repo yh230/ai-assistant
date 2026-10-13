@@ -1,6 +1,5 @@
 package com.aiassistant.service.impl;
 
-import com.common.constant.ChatConstants;
 import com.aiassistant.config.AssistantProperties;
 import com.aiassistant.config.ChatClientFactory;
 import com.aiassistant.config.ChatModelRegistry;
@@ -18,6 +17,11 @@ import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.WeatherService;
+import com.common.auth.UserSnapshot;
+import com.common.constant.ChatConstants;
+import com.common.constant.SecurityConstants;
+import com.common.exception.BusinessException;
+import com.common.security.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -61,6 +65,7 @@ import java.util.stream.Collectors;
  *     <li><b>多模型</b>：模型来自配置（ai.assistant.models），运行时按 modelId 选择 ChatClient；
  *         模型不可用时自动降级为本地回复引擎，对话不中断。</li>
  *     <li><b>上下文管理</b>：长对话自动摘要压缩，保留最近 N 条完整消息；用户画像从全量历史中提取。</li>
+ *     <li><b>会话隔离</b>：会话按归属用户 + 身份绑定，员工侧读写一律限定当前登录人（identity=staff）的会话。</li>
  * </ul>
  *
  * @author yh
@@ -90,6 +95,9 @@ public class ChatServiceImpl implements ChatService {
     /** 用户画像注入分隔符 */
     private static final String MEMORY_SEPARATOR = "\n\n## 你对用户的了解（来自过去的对话记录）\n";
 
+    /** 员工会话类型（员工侧统一为闲聊） */
+    private static final String SESSION_TYPE_CHAT = "CHAT";
+
     // ==================== 依赖 ====================
 
     private final AssistantProperties assistantProperties;
@@ -112,10 +120,12 @@ public class ChatServiceImpl implements ChatService {
         Assert.notNull(request, "请求参数不能为空");
         Assert.hasText(request.getMessage(), "消息内容不能为空");
 
+        // 登录快照在请求线程捕获，随上下文传入弹性线程池（SecurityContext 为 ThreadLocal）
+        UserSnapshot snapshot = currentStaffSnapshot();
         String roleId = assistantRoleService.resolveRoleId(request.getRoleId());
         String modelId = assistantProperties.resolveModelId(request.getModel());
 
-        return Mono.fromCallable(() -> prepareContext(request, roleId, modelId))
+        return Mono.fromCallable(() -> prepareContext(request, roleId, modelId, snapshot))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(this::buildReplyFlux)
                 .onErrorResume(this::buildErrorFlux);
@@ -124,13 +134,14 @@ public class ChatServiceImpl implements ChatService {
     /**
      * 准备流式回复所需的上下文（阻塞型 DB 操作，运行在弹性线程池）。
      *
-     * @param request 聊天请求
-     * @param roleId  解析后的角色ID
-     * @param modelId 解析后的模型ID
+     * @param request  聊天请求
+     * @param roleId   解析后的角色ID
+     * @param modelId  解析后的模型ID
+     * @param snapshot 当前登录人快照（请求线程捕获）
      * @return 聊天上下文
      */
-    private ChatContext prepareContext(ChatRequest request, String roleId, String modelId) {
-        String sessionId = ensureSession(request);
+    private ChatContext prepareContext(ChatRequest request, String roleId, String modelId, UserSnapshot snapshot) {
+        String sessionId = ensureSession(request, snapshot);
         String title = resolveTitle(request);
         saveUserMessage(sessionId, request.getMessage());
 
@@ -248,7 +259,7 @@ public class ChatServiceImpl implements ChatService {
         String modelId = assistantProperties.resolveModelId(request.getModel());
         String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
 
-        String sessionId = ensureSession(request);
+        String sessionId = ensureSession(request, currentStaffSnapshot());
         saveUserMessage(sessionId, request.getMessage());
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
@@ -514,6 +525,7 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional(readOnly = true)
     public ChatResponse getHistory(String sessionId) {
+        requireOwnedSession(sessionId);
         List<ChatResponse.ChatMessageDTO> messageDTOs =
                 messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
                         .map(m -> ChatResponse.ChatMessageDTO.builder()
@@ -527,25 +539,30 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional(readOnly = true)
     public List<SessionDTO> getSessionList() {
-        return sessionRepository.findAllByOrderByUpdatedAtDesc().stream()
+        UserSnapshot snapshot = currentStaffSnapshot();
+        return sessionRepository.findAllByUserIdAndIdentityOrderByUpdatedAtDesc(
+                        snapshot.getUserId(), SecurityConstants.IDENTITY_STAFF).stream()
                 .map(s -> SessionDTO.builder()
-                        .sessionId(s.getSessionId()).title(s.getTitle()).updatedAt(s.getUpdatedAt()).build())
+                        .sessionId(s.getSessionId()).title(s.getTitle())
+                        .sessionType(s.getSessionType()).updatedAt(s.getUpdatedAt()).build())
                 .collect(Collectors.toList());
     }
 
     @Override
     @Transactional
     public void deleteSession(String sessionId) {
+        ChatSession session = requireOwnedSession(sessionId);
         messageRepository.deleteBySessionId(sessionId);
-        sessionRepository.findBySessionId(sessionId).ifPresent(sessionRepository::delete);
+        sessionRepository.delete(session);
     }
 
     @Override
     @Transactional
     public ChatResponse createSession(String title) {
+        UserSnapshot snapshot = currentStaffSnapshot();
         String sessionId = UUID.randomUUID().toString().replace("-", "");
         String sessionTitle = (title == null || title.trim().isEmpty()) ? "新对话" : title;
-        createSessionEntity(sessionId, sessionTitle);
+        createSessionEntity(sessionId, sessionTitle, snapshot);
         return ChatResponse.builder()
                 .sessionId(sessionId).timestamp(LocalDateTime.now()).build();
     }
@@ -553,19 +570,57 @@ public class ChatServiceImpl implements ChatService {
     // ==================== DB 辅助 ====================
 
     /**
-     * 确保会话存在：已有 sessionId 且存在则复用，否则新建。
+     * 确保会话存在且归属当前登录员工：携带 sessionId 时校验归属，否则新建并绑定归属
+     *
+     * @param request  聊天请求
+     * @param snapshot 当前登录人快照
+     * @return 会话标识
      */
-    private String ensureSession(ChatRequest request) {
+    private String ensureSession(ChatRequest request, UserSnapshot snapshot) {
         String sessionId = request.getSessionId();
         if (sessionId != null && !sessionId.trim().isEmpty()) {
-            if (sessionRepository.findBySessionId(sessionId).isEmpty()) {
-                createSessionEntity(sessionId, resolveTitle(request));
-            }
+            requireOwnedSession(sessionId, snapshot);
             return sessionId;
         }
         String newId = UUID.randomUUID().toString().replace("-", "");
-        createSessionEntity(newId, resolveTitle(request));
+        createSessionEntity(newId, resolveTitle(request), snapshot);
         return newId;
+    }
+
+    /**
+     * 获取当前登录人快照（员工侧接口位于认证过滤器之后，快照缺失按未登录处理）
+     *
+     * @return 当前登录人快照
+     */
+    private UserSnapshot currentStaffSnapshot() {
+        UserSnapshot snapshot = SecurityUtils.currentSnapshot();
+        if (snapshot == null) {
+            throw new BusinessException("未登录");
+        }
+        return snapshot;
+    }
+
+    /**
+     * 校验会话归属并返回实体（异步线程池内使用请求线程捕获的快照）
+     *
+     * @param sessionId 会话标识
+     * @param snapshot  当前登录人快照
+     * @return 归属当前登录人的会话实体
+     */
+    private ChatSession requireOwnedSession(String sessionId, UserSnapshot snapshot) {
+        return sessionRepository.findBySessionIdAndUserIdAndIdentity(sessionId, snapshot.getUserId(),
+                        SecurityConstants.IDENTITY_STAFF)
+                .orElseThrow(() -> new BusinessException("会话不存在或无权访问"));
+    }
+
+    /**
+     * 校验会话归属当前登录员工并返回实体
+     *
+     * @param sessionId 会话标识
+     * @return 归属当前登录人的会话实体
+     */
+    private ChatSession requireOwnedSession(String sessionId) {
+        return requireOwnedSession(sessionId, currentStaffSnapshot());
     }
 
     /**
@@ -612,11 +667,21 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 创建会话实体。
+     * 创建归属当前登录员工的会话实体（员工侧会话类型固定为闲聊）
+     *
+     * @param sessionId 会话标识
+     * @param title     会话标题
+     * @param snapshot  当前登录人快照
      */
-    private void createSessionEntity(String sessionId, String title) {
+    private void createSessionEntity(String sessionId, String title, UserSnapshot snapshot) {
         sessionRepository.save(ChatSession.builder()
-                .sessionId(sessionId).title(title).build());
+                .sessionId(sessionId)
+                .title(title)
+                .userId(snapshot.getUserId())
+                .identity(SecurityConstants.IDENTITY_STAFF)
+                .sessionType(SESSION_TYPE_CHAT)
+                .hospitalId(snapshot.getHospitalId())
+                .build());
     }
 
     /**
