@@ -1,6 +1,6 @@
 package com.aiassistant.controller;
 
-import com.aiassistant.common.result.Result;
+import com.common.result.Result;
 import com.aiassistant.dto.ChatRequest;
 import com.aiassistant.dto.ChatResponse;
 import com.aiassistant.dto.ModelInfo;

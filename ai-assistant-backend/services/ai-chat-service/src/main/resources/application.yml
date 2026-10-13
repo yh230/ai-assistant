@@ -1,0 +1,61 @@
+server:
+  port: 9204
+
+spring:
+  application:
+    name: ai-chat-service
+  datasource:
+    url: jdbc:mysql://localhost:3306/chat_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 5000ms
+  ai:
+    openai:
+      enabled: false
+
+# 本地降级开关：AI 调用失败时是否使用内置回复引擎
+ai:
+  local-fallback: true
+  assistant:
+    default-model: openai
+    models:
+      openai:
+        type: openai
+        base-url: https://api.deepseek.com
+        api-key: ${DEEPSEEK_API_KEY:}
+        model: deepseek-chat
+        enabled: true
+        temperature: 0.8
+
+# 天气服务配置（高德开放平台）
+weather:
+  amap-key: ${AMAP_KEY:}
+  geocoding-url: https://restapi.amap.com/v3/geocode/geo
+  weather-url: https://restapi.amap.com/v3/weather/weatherInfo
+
+security:
+  internal:
+    token: ${INTERNAL_TOKEN:aidaima-internal-token-please-override}
+
+logging:
+  level:
+    com.aiassistant: info
+    org.springframework.ai: info
+    com.common: info

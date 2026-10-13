@@ -1,6 +1,6 @@
 package com.aiassistant.controller;
 
-import com.aiassistant.common.result.Result;
+import com.common.result.Result;
 import com.aiassistant.dto.RoleForm;
 import com.aiassistant.entity.Role;
 import com.aiassistant.service.AssistantRoleService;

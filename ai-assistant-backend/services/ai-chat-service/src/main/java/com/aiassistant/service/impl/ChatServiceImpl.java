@@ -1,6 +1,6 @@
 package com.aiassistant.service.impl;
 
-import com.aiassistant.common.constant.ChatConstants;
+import com.common.constant.ChatConstants;
 import com.aiassistant.config.AssistantProperties;
 import com.aiassistant.config.ChatClientFactory;
 import com.aiassistant.config.ChatModelRegistry;
