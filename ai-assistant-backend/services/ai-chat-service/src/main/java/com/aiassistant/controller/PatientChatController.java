@@ -52,6 +52,31 @@ public class PatientChatController {
     }
 
     /**
+     * 确认写操作（SSE 续答：执行工具 + 模型转述结果）
+     *
+     * @param actionId 确认ID
+     * @return SSE 事件流（token/done/error）
+     */
+    @PostMapping(value = "/action/{actionId}/confirm", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> confirm(@PathVariable String actionId) {
+        log.info("收到写操作确认请求: actionId={}", actionId);
+        return patientChatService.confirmAction(actionId);
+    }
+
+    /**
+     * 取消写操作（前端关闭确认弹窗）
+     *
+     * @param actionId 确认ID
+     * @return 操作结果
+     */
+    @PostMapping("/action/{actionId}/cancel")
+    public Result<Void> cancelAction(@PathVariable String actionId) {
+        log.info("收到写操作取消请求: actionId={}", actionId);
+        patientChatService.cancelAction(actionId);
+        return Result.success();
+    }
+
+    /**
      * 患者本人会话列表
      *
      * @return 会话列表（仅当前登录患者）

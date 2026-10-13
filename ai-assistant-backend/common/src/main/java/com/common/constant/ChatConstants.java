@@ -25,6 +25,9 @@ public final class ChatConstants {
     /** SSE 事件：发生错误，data 为 {"message":"xxx"} */
     public static final String EVENT_ERROR = "error";
 
+    /** SSE 事件：写操作待用户确认，data 为 {"actionId":"xxx","toolName":"xxx","summary":"xxx"} */
+    public static final String EVENT_CONFIRM_REQUIRED = "confirm_required";
+
     /** 最近 N 条消息作为完整上下文（不进行摘要压缩） */
     public static final int RECENT_CONTEXT_SIZE = 15;
 

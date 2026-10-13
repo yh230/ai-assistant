@@ -53,4 +53,19 @@ public interface PatientChatService {
      * @param sessionId 会话ID
      */
     void deleteSession(String sessionId);
+
+    /**
+     * 确认写操作并继续流式作答（SSE）
+     *
+     * @param actionId 确认ID
+     * @return SSE 事件流（token/done/error）
+     */
+    Flux<ServerSentEvent<String>> confirmAction(String actionId);
+
+    /**
+     * 取消写操作（前端关闭确认弹窗，校验归属后置 CANCELLED）
+     *
+     * @param actionId 确认ID
+     */
+    void cancelAction(String actionId);
 }

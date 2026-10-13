@@ -9,10 +9,13 @@ import com.aiassistant.dto.PatientChatRequest;
 import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
+import com.aiassistant.entity.PendingAction;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.safety.OutputSafetyFilter;
+import com.aiassistant.service.ActionExecutor;
 import com.aiassistant.service.PatientChatService;
+import com.aiassistant.service.PendingActionService;
 import com.aiassistant.tool.PatientTools;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
@@ -41,6 +44,7 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -83,6 +87,9 @@ public class PatientChatServiceImpl implements PatientChatService {
     /** 上下文窗口（最近 N 条消息作为完整上下文） */
     private static final int CONTEXT_WINDOW = 15;
 
+    /** 写工具名称（确认续答链路不装配，防止确认后再次签发待确认操作） */
+    private static final List<String> WRITE_TOOL_NAMES = List.of("bookAppointment", "cancelAppointment");
+
     // ==================== 依赖 ====================
 
     private final AiProperties aiProperties;
@@ -91,6 +98,8 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final ChatClientFactory chatClientFactory;
     private final OutputSafetyFilter safetyFilter;
     private final PatientTools patientTools;
+    private final PendingActionService pendingActionService;
+    private final ActionExecutor actionExecutor;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final PlatformTransactionManager txManager;
@@ -145,7 +154,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 输出侧风控兜底 + 结束事件
+     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 输出侧风控兜底 + 写操作确认事件 + 结束事件
      *
      * @param ctx 患者聊天上下文
      * @return SSE 事件流
@@ -160,7 +169,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
         StringBuilder full = new StringBuilder();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
-                ? buildAiContentFlux(ctx, full, fallback)
+                ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, true))
                 : buildLocalChunkFlux(ctx, full);
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
@@ -169,29 +178,67 @@ public class PatientChatServiceImpl implements PatientChatService {
                         .build());
 
         return Flux.concat(Mono.just(sessionEvent), contentFlux,
-                outputSafetyGuard(ctx.session().getSessionId(), full, aiEnabled), doneEvent);
+                outputSafetyGuard(ctx.session().getSessionId(), full, aiEnabled),
+                buildConfirmRequiredEvent(ctx.session().getSessionId()), doneEvent);
     }
 
     /**
-     * 构建 AI 模型流式内容：按会话类型装配工具（TRIAGE 全量患者工具，CHAT/RAG 无工具）+ 免责追加
+     * 构建写操作待确认事件：回复完成后查询会话内最新待确认操作，命中则推送确认事件
+     *
+     * @param sessionId 会话ID
+     * @return 确认事件流；无待确认操作时为空流
+     */
+    private Mono<ServerSentEvent<String>> buildConfirmRequiredEvent(String sessionId) {
+        return Mono.fromCallable(() -> pendingActionService.findLatestPending(sessionId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(pending -> pending
+                        .map(action -> Mono.just(ServerSentEvent.builder(toJson(Map.of(
+                                        "actionId", action.getActionId(),
+                                        "toolName", action.getToolName(),
+                                        "summary", action.getSummaryText())))
+                                .event(ChatConstants.EVENT_CONFIRM_REQUIRED)
+                                .build()))
+                        .orElse(Mono.empty()));
+    }
+
+    /**
+     * 装配患者工具回调节点：仅导诊会话装配；确认续答链路（includeWriteTools=false）排除写工具，
+     * 避免确认后续答再次签发待确认操作
+     *
+     * @param ctx               患者聊天上下文
+     * @param includeWriteTools 是否包含写工具（普通导诊链路为 true，确认续答为 false）
+     * @return 工具回调列表
+     */
+    private List<ToolCallback> resolvePatientToolCallbacks(PatientChatContext ctx, boolean includeWriteTools) {
+        if (!TYPE_TRIAGE.equals(ctx.session().getSessionType())) {
+            return List.of();
+        }
+        return Arrays.stream(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
+                .filter(callback -> includeWriteTools
+                        || !WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()))
+                .toList();
+    }
+
+    /**
+     * 构建 AI 模型流式内容：按入参装配工具 + 免责追加
      *
      * @param ctx      患者聊天上下文
      * @param full     回复内容累积器（供输出侧风控兜底与持久化使用）
      * @param fallback 降级标记（AI 流异常置为 true，供结束事件上报）
+     * @param tools    本次请求装配的工具回调列表
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuilder full,
-                                                             AtomicBoolean fallback) {
-        List<ToolCallback> tools = TYPE_TRIAGE.equals(ctx.session().getSessionType())
-                ? List.of(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
-                : List.of();
+                                                             AtomicBoolean fallback, List<ToolCallback> tools) {
         ChatClient client = chatClientFactory.getChatClientWithTools(
                 assistantProperties.resolveModelId(null), tools);
 
         Flux<ServerSentEvent<String>> tokens = client.prompt()
                 .system(ctx.systemPrompt())
                 .messages(ctx.messages())
-                .toolContext(Map.of("patientId", ctx.user().getUserId(), "hospitalId", ctx.user().getHospitalId()))
+                .toolContext(Map.of("patientId", ctx.user().getUserId(),
+                        "hospitalId", ctx.user().getHospitalId(),
+                        "sessionId", ctx.session().getSessionId()))
                 .stream()
                 .content()
                 .publishOn(Schedulers.boundedElastic())
@@ -266,6 +313,83 @@ public class PatientChatServiceImpl implements PatientChatService {
         return Flux.just(ServerSentEvent.builder(toJson(Map.of("message", msg)))
                 .event(ChatConstants.EVENT_ERROR)
                 .build());
+    }
+
+    // ==================== 写操作确认续答 ====================
+
+    @Override
+    public Flux<ServerSentEvent<String>> confirmAction(String actionId) {
+        Assert.hasText(actionId, "确认ID不能为空");
+        // 登录快照在请求线程捕获后透传：SecurityContext 为 ThreadLocal，弹性线程池内读不到
+        UserSnapshot snapshot = currentPatient();
+
+        return Mono.fromCallable(() -> prepareConfirm(actionId, snapshot))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(this::buildConfirmReplyFlux)
+                .onErrorResume(this::buildErrorFlux);
+    }
+
+    @Override
+    public void cancelAction(String actionId) {
+        Assert.hasText(actionId, "确认ID不能为空");
+        UserSnapshot user = currentPatient();
+        pendingActionService.cancel(actionId, user.getUserId(), SecurityConstants.IDENTITY_PATIENT);
+    }
+
+    /**
+     * 准备确认续答上下文：状态机确认 → 执行写工具 → 落库确认消息 → 组装历史与结果转述指令（阻塞型操作，运行在弹性线程池）
+     * <p>
+     * 不加外层事务：确认状态机自带事务边界（过期置位 EXPIRED 依赖其 noRollbackFor 语义），
+     * 外层默认事务会令置位随业务异常回滚
+     *
+     * @param actionId 确认ID
+     * @param user     当前患者快照（请求线程捕获）
+     * @return 患者聊天上下文
+     */
+    private PatientChatContext prepareConfirm(String actionId, UserSnapshot user) {
+        PendingAction action = pendingActionService.confirm(actionId, user.getUserId(),
+                SecurityConstants.IDENTITY_PATIENT);
+        String resultText = actionExecutor.execute(action, user);
+        ChatSession session = requireOwnedSession(action.getSessionId(), user);
+
+        String confirmMessage = "已确认执行：" + action.getSummaryText();
+        saveMessage(session.getSessionId(), "user", confirmMessage);
+
+        List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getSessionId());
+        List<Message> contextMessages = new ArrayList<>(history.stream()
+                .skip(Math.max(0, history.size() - CONTEXT_WINDOW))
+                .map(m -> (Message) ("user".equals(m.getRole())
+                        ? new UserMessage(m.getContent()) : new AssistantMessage(m.getContent())))
+                .toList());
+        contextMessages.add(new UserMessage("[系统] 用户已确认执行「" + action.getSummaryText()
+                + "」。操作结果：" + resultText + "。请用通俗友好的语言把结果告知用户，不要重复请求确认。"));
+
+        log.info("患者确认写操作 actionId={}, tool={}, 会话={}, 结果={}",
+                actionId, action.getToolName(), session.getSessionId(), resultText);
+        return new PatientChatContext(session, user, contextMessages,
+                resolvePrompt(session.getSessionType()), confirmMessage);
+    }
+
+    /**
+     * 构建确认续答流：AI 内容（仅只读工具，不再签发待确认操作）+ 输出侧风控兜底 + 结束事件
+     *
+     * @param ctx 患者聊天上下文
+     * @return SSE 事件流
+     */
+    private Flux<ServerSentEvent<String>> buildConfirmReplyFlux(PatientChatContext ctx) {
+        boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
+        AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
+        StringBuilder full = new StringBuilder();
+        Flux<ServerSentEvent<String>> contentFlux = aiEnabled
+                ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, false))
+                : buildLocalChunkFlux(ctx, full);
+
+        Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
+                ServerSentEvent.builder(toJson(Map.of("localFallback", fallback.get())))
+                        .event(ChatConstants.EVENT_DONE)
+                        .build());
+
+        return Flux.concat(contentFlux, outputSafetyGuard(ctx.session().getSessionId(), full, aiEnabled), doneEvent);
     }
 
     // ==================== 历史与列表 ====================
