@@ -22,7 +22,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -50,7 +49,6 @@ public class AdminChatServiceImpl implements AdminChatService {
     private final PatientClient patientClient;
 
     @Override
-    @Transactional(readOnly = true)
     public PageResult<AdminSessionDTO> pageSessions(String sessionType, long pageNum, long pageSize) {
         UserSnapshot user = SecurityUtils.currentSnapshot();
         if (user == null) {
@@ -111,7 +109,6 @@ public class AdminChatServiceImpl implements AdminChatService {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public ChatResponse getSessionHistory(String sessionId) {
         UserSnapshot user = SecurityUtils.currentSnapshot();
         ChatSession session = sessionRepository.findBySessionId(sessionId)
