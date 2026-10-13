@@ -1,9 +1,12 @@
 -- =============================================================
--- 门诊挂号取号模块表结构（需手动在 ai_assistant 库执行）
--- 依赖：rbac_schema.sql（sys_user/sys_role 等）、hospital_schema.sql（sys_user 扩 hospital_id/department_id）
+-- 挂号库（registration-service）：门诊挂号取号模块表结构
+-- 依赖：按 ID 引用 system_db.user / hospital_db.department（无外键）
 -- 设计：只读人员系统数据（医院/科室/医生绑定在 sys_user 上），本模块只存门诊业务数据。
 -- 号源与挂号记录均冗余 hospital_id/department_id/doctor_user_id，便于按数据权限范围过滤与统计，无需跨表 join。
 -- =============================================================
+
+CREATE DATABASE IF NOT EXISTS registration_db DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
+USE registration_db;
 
 -- 1. 医生出诊排班 / 号源配置（门诊管理员维护；定时任务据此生成每日号源）
 CREATE TABLE IF NOT EXISTS doctor_schedule (

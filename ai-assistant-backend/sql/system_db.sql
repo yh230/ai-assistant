@@ -1,19 +1,24 @@
 -- ============================================================
--- RBAC 标准五张表 DDL（MySQL 8.0）
--- 执行方式：在 ai_assistant 库中执行本脚本创建权限相关表
--- 注意：本脚本只建表，初始数据由后端 SystemDataSeeder 自动播种
+-- 用户中心库（system-service）：RBAC 五表（含员工医院/科室绑定列）
+-- 执行方式：mysql 直接执行本脚本即可（含建库）
+-- 初始数据由 system-service 的 SystemDataSeeder 首次启动自动播种
 -- ============================================================
 
+CREATE DATABASE IF NOT EXISTS system_db DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
+USE system_db;
+
 CREATE TABLE IF NOT EXISTS sys_user (
-  id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
-  username    VARCHAR(64)  NOT NULL COMMENT '登录账号',
-  password    VARCHAR(100) NOT NULL COMMENT 'BCrypt 加密密码',
-  name        VARCHAR(64)  DEFAULT '' COMMENT '姓名',
-  phone       VARCHAR(32)  DEFAULT '' COMMENT '手机号',
-  email       VARCHAR(128) DEFAULT '' COMMENT '邮箱（非必填）',
-  status      TINYINT      NOT NULL DEFAULT 1 COMMENT '账号状态：1-启用，0-禁用',
-  create_time DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  update_time DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  id            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  username      VARCHAR(64)  NOT NULL COMMENT '登录账号',
+  password      VARCHAR(100) NOT NULL COMMENT 'BCrypt 加密密码',
+  name          VARCHAR(64)  DEFAULT '' COMMENT '姓名',
+  phone         VARCHAR(32)  DEFAULT '' COMMENT '手机号',
+  email         VARCHAR(128) DEFAULT '' COMMENT '邮箱（非必填）',
+  status        TINYINT      NOT NULL DEFAULT 1 COMMENT '账号状态：1-启用，0-禁用',
+  hospital_id   BIGINT       DEFAULT NULL COMMENT '所属医院ID',
+  department_id BIGINT       DEFAULT NULL COMMENT '所属科室ID（一人一科室）',
+  create_time   DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  update_time   DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工用户表';

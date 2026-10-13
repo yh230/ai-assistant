@@ -1,8 +1,11 @@
 -- ============================================================
--- 医院科室人员 & 出勤数据权限模块 DDL（MySQL 8.0）
--- 执行方式：在 ai_assistant 库中执行本脚本（与 rbac_schema.sql 一起执行）
--- 说明：本脚本只建表/加列，角色与菜单由后端 SystemDataSeeder 自动播种
+-- 医院库（hospital-service）：医院科室人员 & 出勤数据权限模块 DDL（MySQL 8.0）
+-- 执行方式：mysql 直接执行本脚本即可（含建库）
+-- 说明：本脚本只建表，角色与菜单由后端 SystemDataSeeder 自动播种
 -- ============================================================
+
+CREATE DATABASE IF NOT EXISTS hospital_db DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
+USE hospital_db;
 
 CREATE TABLE IF NOT EXISTS hospital (
   id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
@@ -46,20 +49,3 @@ CREATE TABLE IF NOT EXISTS attendance (
   KEY idx_dept_date (department_id, attend_date),
   KEY idx_hospital_date (hospital_id, attend_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='出勤表';
-
--- 扩展 sys_user：绑定医院与科室（规则：一人一科室）
--- 幂等：列已存在则跳过，可重复执行
-SET @exist_h = (SELECT COUNT(*) FROM information_schema.columns
-                WHERE table_schema = 'ai_assistant' AND table_name = 'sys_user' AND column_name = 'hospital_id');
-SET @exist_d = (SELECT COUNT(*) FROM information_schema.columns
-                WHERE table_schema = 'ai_assistant' AND table_name = 'sys_user' AND column_name = 'department_id');
-SET @sql = IF(@exist_h = 0 AND @exist_d = 0,
-  'ALTER TABLE sys_user ADD COLUMN hospital_id BIGINT DEFAULT NULL COMMENT ''所属医院ID'', ADD COLUMN department_id BIGINT DEFAULT NULL COMMENT ''所属科室ID（一人一科室）''',
-  IF(@exist_h = 0,
-    'ALTER TABLE sys_user ADD COLUMN hospital_id BIGINT DEFAULT NULL COMMENT ''所属医院ID''',
-    IF(@exist_d = 0,
-      'ALTER TABLE sys_user ADD COLUMN department_id BIGINT DEFAULT NULL COMMENT ''所属科室ID（一人一科室）''',
-      'SELECT 1')));
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
