@@ -238,6 +238,10 @@ public class UserServiceImpl implements UserService {
         user.setPhone(dto.getPhone());
         user.setEmail(dto.getEmail());
         user.setStatus(dto.getStatus());
+        // 重置密码场景（hospital 经 Feign 传入）：null 不改密码，空回退默认密码
+        if (dto.getPassword() != null) {
+            user.setPassword(PasswordSupport.encodeOrDefault(dto.getPassword(), passwordEncoder));
+        }
         // 医院/科室绑定仅在有传值时覆盖（系统管理端不传绑定字段，医院端按数据权限收敛后传入）
         if (dto.getHospitalId() != null) {
             user.setHospitalId(dto.getHospitalId());
@@ -247,7 +251,10 @@ public class UserServiceImpl implements UserService {
         }
         user.setUpdateTime(LocalDateTime.now());
         userMapper.updateById(user);
-        UserRoleBinder.bind(userRoleMapper, id, dto.getRoleIds());
+        // 角色绑定仅在显式传入时重建（hospital 改状态/重置密码等部分更新不传角色，避免误清绑定）
+        if (dto.getRoleIds() != null) {
+            UserRoleBinder.bind(userRoleMapper, id, dto.getRoleIds());
+        }
         evictAuth(id);
         if (StatusConstants.DISABLED.equals(dto.getStatus())) {
             kickout(id);
@@ -393,6 +400,14 @@ public class UserServiceImpl implements UserService {
         dto.setPhone(user.getPhone());
         dto.setEmail(user.getEmail());
         dto.setStatus(user.getStatus());
+        dto.setHospitalId(user.getHospitalId());
+        dto.setDepartmentId(user.getDepartmentId());
+        List<Long> roleIds = userRoleMapper.selectRoleIdsByUserId(user.getId());
+        dto.setRoleIds(roleIds);
+        if (!roleIds.isEmpty()) {
+            List<SysRole> roles = roleMapper.selectByUserId(user.getId());
+            dto.setRoleNames(roles.stream().map(SysRole::getRoleName).collect(Collectors.joining(",")));
+        }
         return dto;
     }
 

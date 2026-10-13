@@ -1,5 +1,6 @@
 package com.system.service;
 
+import com.api.dto.RoleBriefDTO;
 import com.common.result.PageResult;
 import com.system.dto.AssignMenuDTO;
 import com.system.dto.RoleSaveDTO;
@@ -29,4 +30,7 @@ public interface RoleService {
 
     /** 查询角色已分配的菜单ID集合（前端回显勾选用） */
     List<Long> getRoleMenuIds(Long roleId);
+
+    /** 角色简要列表（hospital 员工表单角色下拉经 Feign 调用） */
+    List<RoleBriefDTO> listBriefRoles();
 }

@@ -34,4 +34,7 @@ public class UserUpdateRequest {
 
     /** 所属科室 ID（医院模块绑定，可为空） */
     private Long departmentId;
+
+    /** 新密码（仅医院端重置密码场景传入：null 不改密码，空回退默认密码） */
+    private String password;
 }

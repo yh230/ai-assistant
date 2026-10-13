@@ -4,6 +4,7 @@ import com.api.dto.*;
 import com.common.result.PageResult;
 import com.common.result.Result;
 import com.system.service.MenuService;
+import com.system.service.RoleService;
 import com.system.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,7 @@ public class InnerUserController {
 
     private final UserService userService;
     private final MenuService menuService;
+    private final RoleService roleService;
 
     /** 登录凭据校验并返回权限快照数据 */
     @PostMapping("/authenticate")
@@ -87,5 +89,11 @@ public class InnerUserController {
     public Result<Void> changePassword(@PathVariable("id") Long id, @RequestBody ChangePasswordDTO req) {
         userService.changePassword(id, req);
         return Result.success();
+    }
+
+    /** 角色下拉（hospital 员工表单，无需 system:role:list 权限） */
+    @GetMapping("/roles")
+    public Result<List<RoleBriefDTO>> roles() {
+        return Result.success(roleService.listBriefRoles());
     }
 }

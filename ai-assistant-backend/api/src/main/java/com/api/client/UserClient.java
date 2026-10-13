@@ -58,4 +58,8 @@ public interface UserClient {
     /** 修改密码（auth 服务转发，旧密码校验与 BCrypt 在 system 完成） */
     @PutMapping("/{id}/password")
     Result<Void> changePassword(@PathVariable("id") Long id, @RequestBody ChangePasswordDTO req);
+
+    /** 角色下拉（hospital 员工表单，无需 system:role:list 权限） */
+    @GetMapping("/roles")
+    Result<List<RoleBriefDTO>> roles();
 }

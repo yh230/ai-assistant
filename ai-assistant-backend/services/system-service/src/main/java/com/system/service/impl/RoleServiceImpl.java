@@ -1,6 +1,7 @@
 package com.system.service.impl;
 
 import com.api.client.AuthClient;
+import com.api.dto.RoleBriefDTO;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.system.dto.AssignMenuDTO;
@@ -128,6 +129,19 @@ public class RoleServiceImpl implements RoleService {
     public List<Long> getRoleMenuIds(Long roleId) {
         return roleMenuMapper.listByRoleId(roleId).stream()
                 .map(SysRoleMenu::getMenuId)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<RoleBriefDTO> listBriefRoles() {
+        return roleMapper.selectList(new LambdaQueryWrapper<SysRole>().orderByAsc(SysRole::getId)).stream()
+                .map(role -> {
+                    RoleBriefDTO dto = new RoleBriefDTO();
+                    dto.setId(role.getId());
+                    dto.setRoleCode(role.getRoleCode());
+                    dto.setRoleName(role.getRoleName());
+                    return dto;
+                })
                 .collect(Collectors.toList());
     }
 
