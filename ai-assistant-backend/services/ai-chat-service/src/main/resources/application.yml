@@ -4,6 +4,13 @@ server:
 spring:
   application:
     name: ai-chat-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+  config:
+    import:
+      - optional:nacos:common-shared.yaml?group=DEFAULT_GROUP
   datasource:
     url: jdbc:mysql://localhost:3306/chat_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
@@ -51,6 +58,9 @@ weather:
   weather-url: https://restapi.amap.com/v3/weather/weatherInfo
 
 security:
+  jwt:
+    secret: ${JWT_SECRET:aidaima-dev-jwt-secret-please-override-0123456789}
+    expiration-seconds: 3600
   internal:
     token: ${INTERNAL_TOKEN:aidaima-internal-token-please-override}
 

@@ -30,6 +30,9 @@ spring:
           uri: lb://ai-chat-service
           predicates:
             - Path=/api/chat/**,/api/roles/**,/api/weather/**
+  config:
+    import:
+      - optional:nacos:common-shared.yaml?group=DEFAULT_GROUP
 
 # 网关放行清单（免登录，与 SecurityConfig 放行清单对齐）
 gateway:
