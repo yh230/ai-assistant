@@ -18,6 +18,7 @@ import com.common.result.Result;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -125,7 +126,8 @@ class AuthServiceImplTest {
     void refreshShouldRejectWhenTokenMissing() {
         when(refreshTokenStore.consume("bad")).thenReturn(null);
 
-        assertThrows(BusinessException.class, () -> authService.refresh("bad"));
+        BusinessException thrown = assertThrows(BusinessException.class, () -> authService.refresh("bad"));
+        assertEquals("登录已过期，请重新登录", thrown.getMessage());
         verify(refreshTokenStore, never()).issue(any(), any());
     }
 
@@ -135,7 +137,19 @@ class AuthServiceImplTest {
                 .thenReturn(new RefreshTokenStore.RefreshTokenInfo("patient", 9L, 1000L));
         when(tokenRevocationService.kickoutAt("patient", 9L)).thenReturn(2000L);
 
-        assertThrows(BusinessException.class, () -> authService.refresh("rt"));
+        BusinessException thrown = assertThrows(BusinessException.class, () -> authService.refresh("rt"));
+        assertEquals("登录已过期，请重新登录", thrown.getMessage());
+        verify(refreshTokenStore, never()).issue(any(), any());
+    }
+
+    @Test
+    void refreshShouldRejectWhenKickedAtSameMillis() {
+        when(refreshTokenStore.consume("rt"))
+                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("staff", 1L, 2000L));
+        when(tokenRevocationService.kickoutAt("staff", 1L)).thenReturn(2000L);
+
+        BusinessException thrown = assertThrows(BusinessException.class, () -> authService.refresh("rt"));
+        assertEquals("登录已过期，请重新登录", thrown.getMessage());
         verify(refreshTokenStore, never()).issue(any(), any());
     }
 
@@ -148,7 +162,8 @@ class AuthServiceImplTest {
 
         authService.logout(request, "rt-1");
 
-        verify(tokenRevocationService).revokeToken("jti-1", 9999999999999L);
-        verify(refreshTokenStore).revoke("rt-1");
+        InOrder inOrder = inOrder(refreshTokenStore, tokenRevocationService);
+        inOrder.verify(refreshTokenStore).revoke("rt-1");
+        inOrder.verify(tokenRevocationService).revokeToken("jti-1", 9999999999999L);
     }
 }
