@@ -116,8 +116,10 @@ public class AdminChatServiceImpl implements AdminChatService {
         if (!SecurityConstants.IDENTITY_PATIENT.equals(session.getIdentity())) {
             throw new BusinessException("无权查看该会话");
         }
-        if (user == null || user.getHospitalId() == null
-                || (session.getHospitalId() != null && !session.getHospitalId().equals(user.getHospitalId()))) {
+        // 口径与列表一致：平台管理员（未绑定医院）放行；本院管理员仅可查看本院（hospitalId 非空且相等）会话
+        if (user == null
+                || (user.getHospitalId() != null
+                && (session.getHospitalId() == null || !session.getHospitalId().equals(user.getHospitalId())))) {
             throw new BusinessException("无权查看该会话");
         }
         List<ChatResponse.ChatMessageDTO> messageDTOs =

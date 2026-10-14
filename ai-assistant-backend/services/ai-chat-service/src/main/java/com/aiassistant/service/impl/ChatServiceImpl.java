@@ -589,6 +589,9 @@ public class ChatServiceImpl implements ChatService {
 
     /**
      * 获取当前登录人快照（员工侧接口位于认证过滤器之后，快照缺失按未登录处理）
+     * <p>
+     * 患者令牌直连服务端口时快照 identity=patient，非员工身份直接拒绝；
+     * identity 为空视为旧数据员工（Ruling-1 语义）。
      *
      * @return 当前登录人快照
      */
@@ -596,6 +599,9 @@ public class ChatServiceImpl implements ChatService {
         UserSnapshot snapshot = SecurityUtils.currentSnapshot();
         if (snapshot == null) {
             throw new BusinessException("未登录");
+        }
+        if (snapshot.getIdentity() != null && !SecurityConstants.IDENTITY_STAFF.equals(snapshot.getIdentity())) {
+            throw new BusinessException("无权访问");
         }
         return snapshot;
     }

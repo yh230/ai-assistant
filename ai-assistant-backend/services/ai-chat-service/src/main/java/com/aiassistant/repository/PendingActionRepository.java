@@ -2,6 +2,9 @@ package com.aiassistant.repository;
 
 import com.aiassistant.entity.PendingAction;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -34,4 +37,18 @@ public interface PendingActionRepository extends JpaRepository<PendingAction, Lo
      */
     Optional<PendingAction> findFirstBySessionIdAndStatusAndExpireTimeAfterOrderByCreateTimeDesc(
             String sessionId, String status, LocalDateTime now);
+
+    /**
+     * 条件更新状态：仅当记录仍为 PENDING 时流转（并发重复确认/取消的防重放闸门）
+     *
+     * @param actionId    确认ID
+     * @param status      目标状态（CONFIRMED/CANCELLED/EXPIRED）
+     * @param confirmTime 确认时间（确认时填充；取消/过期传 null）
+     * @return 受影响行数；0 表示已被其他请求先行流转
+     */
+    @Modifying
+    @Query("UPDATE PendingAction p SET p.status = :status, p.confirmTime = :confirmTime "
+            + "WHERE p.actionId = :actionId AND p.status = 'PENDING'")
+    int markStatus(@Param("actionId") String actionId, @Param("status") String status,
+                   @Param("confirmTime") LocalDateTime confirmTime);
 }

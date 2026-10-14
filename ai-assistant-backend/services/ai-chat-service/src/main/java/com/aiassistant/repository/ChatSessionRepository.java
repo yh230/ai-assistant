@@ -20,8 +20,6 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long>,
 
     Optional<ChatSession> findBySessionId(String sessionId);
 
-    List<ChatSession> findAllByOrderByUpdatedAtDesc();
-
     /**
      * 按会话标识 + 归属（用户 + 身份）查询
      *
