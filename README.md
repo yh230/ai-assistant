@@ -147,7 +147,7 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 ## 七、AI 助手数据目录与验收清单
 
 - **`data/vector/`**：知识库向量文件目录（Nacos `ai.rag.vector-path` 默认 `data/vector`，相对 ai-chat-service 的启动工作目录，如 `ai-assistant-backend/services/ai-chat-service/data/vector/`），按医院分文件 `hospital_{id}.json`；服务启动时全量加载、上传/删除文档即时落盘重建。该目录为**运行产物**（服务启动时自动创建），不随仓库分发，请勿手工编辑。
-- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离共 24 项。
+- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离、安全与并发补测共 28 项。
 
 ## 八、常见问题
 
