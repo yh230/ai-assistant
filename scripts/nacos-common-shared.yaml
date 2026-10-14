@@ -38,10 +38,13 @@ ai:
   safety:
     keywords: "给我开药,开点药,开处方,确诊,诊断为,吃什么药,用药建议,开什么药"
     blocked-message: "该问题涉及诊疗建议，我仅能提供导诊参考，不能提供诊断或用药建议，请以执业医师面诊为准。"
+    emergency-keywords: "胸痛,呼吸困难,喘不上气,意识不清,昏迷,抽搐,偏瘫,口齿不清,大出血,咯血,呕血,剧烈头痛,农药中毒,服毒,自杀,割腕,车祸,高处坠落"
+    emergency-message: "【紧急提示】您描述的情况可能属于急症，请立即拨打 120 或尽快前往最近医院急诊科就诊，不要等待线上回复。"
   rag:
     chunk-size: 800
     similarity-threshold: 0.5
     top-k: 4
+    max-references: 3
     vector-path: "data/vector"
     embedding-model-path: ""
   ratelimit:

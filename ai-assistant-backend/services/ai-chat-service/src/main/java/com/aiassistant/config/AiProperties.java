@@ -40,10 +40,21 @@ public class AiProperties {
 
     @Data
     public static class Safety {
-        /** 敏感词/句式列表（命中即拦截） */
-        private List<String> keywords = new ArrayList<>();
+        /** 敏感词/句式列表（命中即拦截；内置默认与 Nacos 样例一致，未装 Nacos 亦生效） */
+        private List<String> keywords = new ArrayList<>(List.of(
+                "给我开药", "开点药", "开处方", "确诊", "诊断为", "吃什么药", "用药建议", "开什么药"));
+
         /** 命中后的标准提示文案 */
         private String blockedMessage = "该问题涉及诊疗建议，我仅能提供导诊参考，不能提供诊断或用药建议，请以执业医师面诊为准。";
+
+        /** 急症红线词表（命中即短路返回紧急就医指引） */
+        private List<String> emergencyKeywords = new ArrayList<>(List.of(
+                "胸痛", "呼吸困难", "喘不上气", "意识不清", "昏迷", "抽搐", "偏瘫", "口齿不清",
+                "大出血", "咯血", "呕血", "剧烈头痛", "农药中毒", "服毒", "自杀", "割腕",
+                "车祸", "高处坠落"));
+
+        /** 急症红线标准指引文案 */
+        private String emergencyMessage = "【紧急提示】您描述的情况可能属于急症，请立即拨打 120 或尽快前往最近医院急诊科就诊，不要等待线上回复。";
     }
 
     @Data
@@ -54,6 +65,8 @@ public class AiProperties {
         private double similarityThreshold = 0.5;
         /** 检索片段数上限 */
         private int topK = 4;
+        /** 引用来源条数上限（RAG 回答附带的参考来源条数） */
+        private int maxReferences = 3;
         /** 向量文件目录（按医院分文件 hospital_{id}.json） */
         private String vectorPath = "data/vector";
         /** 本地嵌入模型文件路径（空=使用框架默认并自动下载） */
