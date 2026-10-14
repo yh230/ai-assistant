@@ -314,6 +314,8 @@ public class UserServiceImpl implements UserService {
         }
         PasswordSupport.resetPassword(user, dto.getNewPassword(), passwordEncoder);
         userMapper.updateById(user);
+        // 改密后踢下线：旧 access 与 refresh 均失效，需重新登录
+        kickout(id);
     }
 
     /**
@@ -373,6 +375,8 @@ public class UserServiceImpl implements UserService {
         user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
         user.setUpdateTime(LocalDateTime.now());
         userMapper.updateById(user);
+        // 改密后踢下线：旧 access 与 refresh 均失效，需重新登录
+        kickout(id);
     }
 
     private UserVO toVO(SysUser user) {
