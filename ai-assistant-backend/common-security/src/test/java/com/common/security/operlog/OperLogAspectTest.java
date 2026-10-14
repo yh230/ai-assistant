@@ -129,4 +129,25 @@ class OperLogAspectTest {
             RequestContextHolder.resetRequestAttributes();
         }
     }
+
+    @Test
+    void shouldFallbackWhenForwardedHeaderIsPathological() throws Throwable {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Forwarded-For", ",");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            when(operLog.module()).thenReturn("用户管理");
+            when(operLog.action()).thenReturn("删除用户");
+            when(joinPoint.proceed()).thenReturn("ok");
+            when(joinPoint.getArgs()).thenReturn(new Object[0]);
+
+            aspect.around(joinPoint, operLog);
+
+            ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
+            verify(operLogClient).report(captor.capture());
+            assertEquals("127.0.0.1", captor.getValue().getIp());
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
 }

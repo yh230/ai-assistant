@@ -9,6 +9,9 @@ spring:
       discovery:
         server-addr: 127.0.0.1:8848
     gateway:
+      server:
+        webflux:
+          trusted-proxies: ".*"   # 信任上游并透传/追加 X-Forwarded-For（审计真实 IP 依赖；本机演示全信任）
       routes:
         - id: login-ratelimited
           uri: lb://auth-service

@@ -106,8 +106,7 @@ public class OperLogAspect {
     private String clientIp(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {
-            String[] hops = forwarded.split(",");
-            String last = hops[hops.length - 1].trim();
+            String last = forwarded.substring(forwarded.lastIndexOf(',') + 1).trim();
             if (!last.isEmpty()) {
                 return OperLogSanitizer.truncate(last, 64);
             }
