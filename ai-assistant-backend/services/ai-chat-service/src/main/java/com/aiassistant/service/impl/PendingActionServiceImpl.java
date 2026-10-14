@@ -91,15 +91,17 @@ public class PendingActionServiceImpl implements PendingActionService {
     }
 
     /**
-     * 查询会话下最新的待确认操作（状态 PENDING）
+     * 查询会话下最新的未过期待确认操作（状态 PENDING 且 expireTime 未过期）
      *
      * @param sessionId 会话标识
-     * @return 最新的 PENDING 操作；无数据返回空
+     * @return 最新的未过期 PENDING 操作；无数据返回空
      */
     @Override
     @Transactional(readOnly = true)
     public Optional<PendingAction> findLatestPending(String sessionId) {
-        return pendingActionRepository.findFirstBySessionIdAndStatusOrderByCreateTimeDesc(sessionId, STATUS_PENDING);
+        // 过期仅随确认/取消惰性置位，查询侧必须自带时间边界，避免历史过期 PENDING 每轮被重推 confirm_required
+        return pendingActionRepository.findFirstBySessionIdAndStatusAndExpireTimeAfterOrderByCreateTimeDesc(
+                sessionId, STATUS_PENDING, LocalDateTime.now());
     }
 
     /**

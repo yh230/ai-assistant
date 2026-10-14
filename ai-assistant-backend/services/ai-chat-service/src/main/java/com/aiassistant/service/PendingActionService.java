@@ -64,10 +64,10 @@ public interface PendingActionService {
     void cancel(String actionId, Long userId, String identity);
 
     /**
-     * 查询会话下最新的待确认操作（状态 PENDING）
+     * 查询会话下最新的未过期待确认操作（状态 PENDING 且 expireTime 未过期）
      *
      * @param sessionId 会话标识
-     * @return 最新的 PENDING 操作；无数据返回空
+     * @return 最新的未过期 PENDING 操作；无数据返回空
      */
     Optional<PendingAction> findLatestPending(String sessionId);
 }
