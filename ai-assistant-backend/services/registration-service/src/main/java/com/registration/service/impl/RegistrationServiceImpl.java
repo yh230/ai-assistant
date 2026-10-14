@@ -62,6 +62,7 @@ import java.util.stream.Collectors;
  * 所有流转经 RegistrationStatus.assertTransit 校验，非法流转直接拒绝。
  * 并发控制：Redisson 分布式锁（全局固定获取顺序 patient → registration → schedule）
  * 覆盖事务提交；状态跃迁、号源抢占/释放、占用数增减均以条件更新兜底，全程无数据库行锁。
+ * 名称回填：读接口经 enrich（失败抛出），状态变更接口经 enrichSafe（best-effort 降级，仅告警）。
  * </pre>
  *
  * @author yh
@@ -123,7 +124,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                     () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule)));
         }
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     /**
@@ -189,7 +190,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             reg.setUpdateTime(now);
             return reg;
         }));
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     @Override
@@ -224,7 +225,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
         doPatientCancel(reg, cur, reason);
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     @Override
@@ -252,7 +253,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
         doPatientCancel(reg, cur, reason);
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     // ===================== 员工：现场挂号 / 取号 / 退号 / 就诊 =====================
@@ -268,7 +269,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
         Registration reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                 () -> txTemplate.execute(status -> doWalkIn(dto, schedule)));
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     /**
@@ -328,7 +329,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             reg.setUpdateTime(now);
             return reg;
         }));
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     /**
@@ -363,7 +364,7 @@ public class RegistrationServiceImpl implements RegistrationService {
                             reg.setUpdateTime(now);
                             return reg;
                         })));
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     /**
@@ -388,7 +389,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             reg.setUpdateTime(now);
             return reg;
         }));
-        return enrich(List.of(reg)).get(0);
+        return enrichSafe(List.of(reg)).get(0);
     }
 
     // ===================== 定时任务 =====================
@@ -542,7 +543,11 @@ public class RegistrationServiceImpl implements RegistrationService {
         try {
             return body.get();
         } finally {
-            lock.unlock();
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            } else {
+                log.warn("锁租期已过，跳过解锁: {}", key);
+            }
         }
     }
 
@@ -759,7 +764,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     }
 
     /**
-     * 批量回填医院、科室与医生名称
+     * 批量回填医院、科室与医生名称（读接口专用，回填失败抛出由调用方感知）
      *
      * @param list 挂号记录列表
      * @return 挂号视图列表
@@ -773,40 +778,70 @@ public class RegistrationServiceImpl implements RegistrationService {
         Map<Long, String> uNames = doctorNames(
                 list.stream().map(Registration::getDoctorUserId).toList());
         return list.stream().map(r -> {
-            RegistrationVO vo = new RegistrationVO();
-            vo.setId(r.getId());
-            vo.setRegistrationNo(r.getRegistrationNo());
-            vo.setHospitalId(r.getHospitalId());
+            RegistrationVO vo = toVo(r);
+            // 名称回填（跨中心 Feign 批量查询结果；缺省为 null）
             vo.setHospitalName(r.getHospitalId() == null ? null : hNames.get(r.getHospitalId()));
-            vo.setDepartmentId(r.getDepartmentId());
             vo.setDepartmentName(r.getDepartmentId() == null ? null : dNames.get(r.getDepartmentId()));
-            vo.setDoctorUserId(r.getDoctorUserId());
             vo.setDoctorName(uNames.get(r.getDoctorUserId()));
-            vo.setScheduleId(r.getScheduleId());
-            vo.setNumberSourceId(r.getNumberSourceId());
-            vo.setScheduleDate(r.getScheduleDate());
-            vo.setPeriod(r.getPeriod());
-            vo.setPeriodText(Period.of(r.getPeriod()).getDesc());
-            vo.setSeqNo(r.getSeqNo());
-            vo.setPatientName(r.getPatientName());
-            vo.setPatientPhone(r.getPatientPhone());
-            vo.setPatientIdCard(maskIdCard(r.getPatientIdCard()));
-            vo.setSourceType(r.getSourceType());
-            vo.setSourceTypeText(sourceTypeText(r.getSourceType()));
-            vo.setPayStatus(r.getPayStatus());
-            vo.setPayStatusText(payStatusText(r.getPayStatus()));
-            vo.setPayAmount(r.getPayAmount());
-            vo.setPayTime(r.getPayTime());
-            vo.setStatus(r.getStatus());
-            vo.setStatusText(RegistrationStatus.of(r.getStatus() == null ? 1 : r.getStatus()).getDesc());
-            vo.setExpireTime(r.getExpireTime());
-            vo.setTreatTime(r.getTreatTime());
-            vo.setRefundAmount(r.getRefundAmount());
-            vo.setRefundTime(r.getRefundTime());
-            vo.setRemark(r.getRemark());
-            vo.setCreateTime(r.getCreateTime());
             return vo;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 状态变更类方法专用回填（best-effort）：跨中心名称回填失败只告警，
+     * 降级返回名称缺省的基础视图，避免“变更已提交但调用方收到错误”诱发重试
+     * （尤其 walkIn 无去重守卫，重试会产生第二张挂号单）
+     *
+     * @param list 挂号记录列表
+     * @return 挂号视图列表（回填失败时 xxxName 为 null，其余字段与原 enrich 同构）
+     */
+    private List<RegistrationVO> enrichSafe(List<Registration> list) {
+        try {
+            return enrich(list);
+        } catch (Exception e) {
+            log.warn("挂号名称回填失败，降级返回名称缺省视图: ids={}, reason={}",
+                    list.stream().map(Registration::getId).toList(), e.getMessage(), e);
+            return list.stream().map(this::toVo).collect(Collectors.toList());
+        }
+    }
+
+    /**
+     * 基础映射（挂号记录 → 视图）：不含跨中心名称回填，三个 xxxName 保持缺省
+     *
+     * @param r 挂号记录
+     * @return 挂号视图（名称字段为缺省值）
+     */
+    private RegistrationVO toVo(Registration r) {
+        RegistrationVO vo = new RegistrationVO();
+        vo.setId(r.getId());
+        vo.setRegistrationNo(r.getRegistrationNo());
+        vo.setHospitalId(r.getHospitalId());
+        vo.setDepartmentId(r.getDepartmentId());
+        vo.setDoctorUserId(r.getDoctorUserId());
+        vo.setScheduleId(r.getScheduleId());
+        vo.setNumberSourceId(r.getNumberSourceId());
+        vo.setScheduleDate(r.getScheduleDate());
+        vo.setPeriod(r.getPeriod());
+        vo.setPeriodText(Period.of(r.getPeriod()).getDesc());
+        vo.setSeqNo(r.getSeqNo());
+        vo.setPatientName(r.getPatientName());
+        vo.setPatientPhone(r.getPatientPhone());
+        vo.setPatientIdCard(maskIdCard(r.getPatientIdCard()));
+        vo.setSourceType(r.getSourceType());
+        vo.setSourceTypeText(sourceTypeText(r.getSourceType()));
+        vo.setPayStatus(r.getPayStatus());
+        vo.setPayStatusText(payStatusText(r.getPayStatus()));
+        vo.setPayAmount(r.getPayAmount());
+        vo.setPayTime(r.getPayTime());
+        vo.setStatus(r.getStatus());
+        vo.setStatusText(RegistrationStatus.of(r.getStatus() == null ? 1 : r.getStatus()).getDesc());
+        vo.setExpireTime(r.getExpireTime());
+        vo.setTreatTime(r.getTreatTime());
+        vo.setRefundAmount(r.getRefundAmount());
+        vo.setRefundTime(r.getRefundTime());
+        vo.setRemark(r.getRemark());
+        vo.setCreateTime(r.getCreateTime());
+        return vo;
     }
 
     private String maskIdCard(String idCard) {
