@@ -20,7 +20,7 @@ AI 医院助手 V1.0 的 API 级 E2E 回归套件（Python + pytest + httpx）�
 scripts\run-e2e.bat
 ```
 
-流程：前置自检（缺什么列什么）→ 首次自动建 venv 并装依赖 → 执行 pytest → JUnit 报告落 `reports/`。
+流程：前置自检（缺什么列什么）→ 首次自动建 venv 并装依赖 → 执行 pytest → JUnit 报告落 `reports/` → 按配置推送结果（见「结果推送」节）。
 
 ## 常用姿势
 
@@ -32,6 +32,26 @@ scripts\run-e2e.bat
 | 单文件 / 单用例 | `scripts\run-e2e.bat tests/test_04_rag.py -v` |
 
 > 注意：命令行 `-m` 会整体覆盖默认的 `not slow`，组合标记时记得带上 `and not slow`。
+
+## 结果推送（企微 / 飞书 / 邮箱）
+
+`run-e2e.bat` 在 pytest 结束后自动按 `.env` 配置推送结果（preflight 中止不推；单通道失败仅告警，不影响测试退出码）。也可随时手动重发：
+
+```bat
+cd ai-assistant-e2e
+.venv\Scripts\python.exe notify.py reports\e2e-results.xml
+```
+
+配置项（`.env`，密钥不入库）：
+
+| 变量 | 说明 |
+|---|---|
+| `E2E_NOTIFY_CHANNELS` | 启用通道，逗号分隔：`wecom,feishu,email`；留空 = 不推送 |
+| `E2E_WECOM_WEBHOOK` | 企业微信群机器人 webhook 地址 |
+| `E2E_FEISHU_WEBHOOK` | 飞书群机器人 webhook 地址 |
+| `E2E_SMTP_HOST/PORT/USER/PASSWORD/FROM/TO` | SMTP（SSL）；FROM 留空则用 USER；TO 逗号分隔多个收件人 |
+
+推送内容：数量摘要（失败/通过/跳过/耗时）+ 失败用例清单；邮件另附 JUnit 报告文件。新增通道：实现 `helpers/notify.py` 的 `Notifier` 抽象类并在 `build_notifiers` 注册即可。
 
 ## 24 项清单映射
 
@@ -72,9 +92,10 @@ scripts\run-e2e.bat
 
 ```
 ai-assistant-e2e/
-├── preflight.py          # 跑前自检（6 项：网关/医院/登录/知识库/科室/排班）
+├── preflight.py          # 跑前自检（7 项：网关/医院/登录/知识库/科室/挂号权限/排班）
+├── notify.py             # 结果推送入口（企微/飞书/邮件，可选）
 ├── conftest.py           # 全局 fixtures（账号、医院、科室、患者工厂）
-├── helpers/              # api.py（HTTP 封装）、sse.py（SSE 解析）；tests/ 为纯单测
+├── helpers/              # api.py / sse.py / notify.py（推送抽象与三通道）；tests/ 为纯单测
 ├── assets/sample_doc.md  # RAG 上传样例（运行时注入唯一标记）
 ├── tests/                # 六个清单节的 E2E 用例
 └── reports/              # JUnit 报告（不入库）
