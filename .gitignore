@@ -5,6 +5,8 @@ ai-assistant-backend/services/*/target/
 ai-assistant-backend/.mvn/
 ai-assistant-backend/mvnw
 ai-assistant-backend/mvnw.cmd
+# 运行时向量目录（ai-chat-service 运行产物）
+ai-assistant-backend/services/ai-chat-service/data/
 *.class
 *.jar
 *.war
