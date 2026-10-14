@@ -71,6 +71,12 @@ def main() -> int:
                 raise RuntimeError(f"{h1} 无科室数据（检查 hospital_db 种子）")
             return f"{h1} 科室 {len(names)} 个"
 
+        def check_registration_perms() -> str:
+            tomorrow = (date.today() + timedelta(days=1)).isoformat()
+            rows = api.pools(client, tokens["staff1"], tomorrow)
+            api.registration_records(client, tokens["staff1"], "13900000000")
+            return f"staff1 号源池可用（{len(rows)} 条）、挂号记录可分页查询"
+
         def check_schedules() -> str:
             tomorrow = (date.today() + timedelta(days=1)).isoformat()
             rows = api.public_schedules(client, tomorrow)
@@ -84,6 +90,7 @@ def main() -> int:
         step("账号登录（admin/staff1/staff2）", check_logins)
         step("知识库访问（staff1）", check_knowledge)
         step("科室列表（staff1 需 hospital:manage）", check_departments)
+        step("挂号数据权限（staff1 需 registration:schedule:manage / registration:register:list）", check_registration_perms)
         step("明日可约号源", check_schedules)
 
     for name, ok, detail in results:

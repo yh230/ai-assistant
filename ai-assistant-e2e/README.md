@@ -9,9 +9,10 @@ AI 医院助手 V1.0 的 API 级 E2E 回归套件（Python + pytest + httpx）�
 
 1. 服务已启动：Nacos → 六进程（`scripts/start-services.bat`）；前端非必需。
 2. `.env` 已填写：复制 `.env.example` 为 `.env`，填入两家医院的员工账号与医院名。
-   - 员工账号权限要求：可访问管理端（知识库 / AI 问诊记录），并具备 `hospital:manage`（科室列表）与 `registration:schedule:manage`（号源池）权限——建议直接使用医院管理员角色账号。
+   - 员工账号权限要求：可访问管理端（知识库 / AI 问诊记录），并具备 `hospital:manage`（科室列表）、`registration:schedule:manage`（号源池/排班）与 `registration:register:list`（挂号记录）权限——建议直接使用医院管理员角色账号。
 3. `DEEPSEEK_API_KEY` 已配置（ai 组用例依赖真实大模型；未配置时用 `-m "not ai and not slow"` 只跑确定性子集）。
 4. 环境数据：两家演示医院有科室数据；明日（T+1）存在可约排班——preflight 会自动校验并给出缺失提示。
+5. **上传大小前提（#15）**：为验证「>2MB 被拒绝并提示 2MB 文案」，部署需将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml，属后端配置）；未调整时 >2MB 请求由框架层拒绝（消息为通用「系统繁忙」，不含「2MB」），#15 将如实失败——属环境前提未满足，非套件缺陷。
 
 ## 快速开始
 
@@ -27,7 +28,7 @@ scripts\run-e2e.bat
 |---|---|
 | 全量（默认跳过 5 分钟超时用例） | `scripts\run-e2e.bat` |
 | 离线快跑（不依赖 LLM） | `scripts\run-e2e.bat -m "not ai and not slow"` |
-| 含慢用例（额外约 6 分钟） | `scripts\run-e2e.bat -m "slow"` |
+| 仅跑慢用例（#13，约 6 分钟） | `scripts\run-e2e.bat -m "slow"` |
 | 单文件 / 单用例 | `scripts\run-e2e.bat tests/test_04_rag.py -v` |
 
 > 注意：命令行 `-m` 会整体覆盖默认的 `not slow`，组合标记时记得带上 `and not slow`。
