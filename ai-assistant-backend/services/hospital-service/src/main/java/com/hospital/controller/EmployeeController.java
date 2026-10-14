@@ -6,6 +6,7 @@ import com.api.dto.RoleBriefDTO;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.hospital.dto.EmployeeQueryDTO;
 import com.hospital.dto.EmployeeSaveDTO;
 import com.hospital.dto.EmployeeUpdateDTO;
@@ -63,6 +64,7 @@ public class EmployeeController {
         return Result.success(employeeService.get(id));
     }
 
+    @OperLog(module = "员工管理", action = "新增员工")
     @PostMapping
     @PreAuthorize("hasAuthority('hospital:employee:edit')")
     public Result<Void> create(@RequestBody EmployeeSaveDTO dto) {
@@ -84,6 +86,7 @@ public class EmployeeController {
         return Result.success(result.getData());
     }
 
+    @OperLog(module = "员工管理", action = "修改员工")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:employee:edit')")
     public Result<Void> update(@PathVariable Long id, @RequestBody EmployeeUpdateDTO dto) {
@@ -91,6 +94,7 @@ public class EmployeeController {
         return Result.success();
     }
 
+    @OperLog(module = "员工管理", action = "删除员工")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:employee:edit')")
     public Result<Void> delete(@PathVariable Long id) {
@@ -98,6 +102,7 @@ public class EmployeeController {
         return Result.success();
     }
 
+    @OperLog(module = "员工管理", action = "员工启用禁用")
     @PostMapping("/{id}/status")
     @PreAuthorize("hasAuthority('hospital:employee:edit')")
     public Result<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {
@@ -114,6 +119,7 @@ public class EmployeeController {
      * @param dto 重置密码请求体（可空）
      * @return 操作结果
      */
+    @OperLog(module = "员工管理", action = "重置员工密码")
     @PostMapping("/{id}/reset-password")
     @PreAuthorize("hasAuthority('hospital:employee:edit')")
     public Result<Void> resetPassword(@PathVariable Long id,

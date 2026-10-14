@@ -2,6 +2,7 @@ package com.hospital.controller;
 
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.hospital.dto.HospitalSaveDTO;
 import com.hospital.service.HospitalService;
 import com.hospital.vo.HospitalVO;
@@ -53,6 +54,7 @@ public class HospitalController {
         return Result.success(hospitalService.get(id));
     }
 
+    @OperLog(module = "医院管理", action = "新增医院")
     @PostMapping
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> create(@Valid @RequestBody HospitalSaveDTO dto) {
@@ -60,6 +62,7 @@ public class HospitalController {
         return Result.success();
     }
 
+    @OperLog(module = "医院管理", action = "修改医院")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> update(@PathVariable Long id, @Valid @RequestBody HospitalSaveDTO dto) {
@@ -67,6 +70,7 @@ public class HospitalController {
         return Result.success();
     }
 
+    @OperLog(module = "医院管理", action = "删除医院")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> delete(@PathVariable Long id) {
@@ -74,6 +78,7 @@ public class HospitalController {
         return Result.success();
     }
 
+    @OperLog(module = "医院管理", action = "医院启用禁用")
     @PostMapping("/{id}/status")
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {

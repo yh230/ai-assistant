@@ -2,6 +2,7 @@ package com.hospital.controller;
 
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.hospital.dto.DepartmentSaveDTO;
 import com.hospital.service.DepartmentService;
 import com.hospital.vo.DepartmentVO;
@@ -54,6 +55,7 @@ public class DepartmentController {
         return Result.success(departmentService.get(id));
     }
 
+    @OperLog(module = "科室管理", action = "新增科室")
     @PostMapping
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> create(@Valid @RequestBody DepartmentSaveDTO dto) {
@@ -61,6 +63,7 @@ public class DepartmentController {
         return Result.success();
     }
 
+    @OperLog(module = "科室管理", action = "修改科室")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> update(@PathVariable Long id, @Valid @RequestBody DepartmentSaveDTO dto) {
@@ -68,6 +71,7 @@ public class DepartmentController {
         return Result.success();
     }
 
+    @OperLog(module = "科室管理", action = "删除科室")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> delete(@PathVariable Long id) {
@@ -75,6 +79,7 @@ public class DepartmentController {
         return Result.success();
     }
 
+    @OperLog(module = "科室管理", action = "科室启用禁用")
     @PostMapping("/{id}/status")
     @PreAuthorize("hasAuthority('hospital:manage')")
     public Result<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {

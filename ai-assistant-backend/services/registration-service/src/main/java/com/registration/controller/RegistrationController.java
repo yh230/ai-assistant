@@ -2,6 +2,7 @@ package com.registration.controller;
 
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.registration.dto.AppointmentCreateDTO;
 import com.registration.dto.CancelDTO;
 import com.registration.dto.PayConfirmDTO;
@@ -43,6 +44,7 @@ public class RegistrationController {
 
     // ===================== 公开（患者 / 自助机查询本人） =====================
 
+    @OperLog(module = "患者预约", action = "线上预约")
     @PostMapping("/appointments")
     public Result<RegistrationVO> createAppointment(@RequestBody AppointmentCreateDTO dto) {
         // 匿名公开入口不接受 patientId，防止归属冒用
@@ -57,11 +59,13 @@ public class RegistrationController {
         return Result.success(registrationService.patientQuery(phone, idCard, registrationNo));
     }
 
+    @OperLog(module = "患者预约", action = "确认支付")
     @PostMapping("/appointments/{id}/confirm-pay")
     public Result<RegistrationVO> confirmPay(@PathVariable Long id, @RequestBody PayConfirmDTO dto) {
         return Result.success(registrationService.confirmPay(id, dto.getPatientIdCard()));
     }
 
+    @OperLog(module = "患者预约", action = "取消预约")
     @PostMapping("/appointments/{id}/cancel")
     public Result<RegistrationVO> patientCancel(@PathVariable Long id, @RequestBody CancelDTO dto) {
         return Result.success(registrationService.patientCancel(id, dto.getPatientIdCard(), dto.getReason()));
@@ -103,24 +107,28 @@ public class RegistrationController {
         return Result.success(registrationService.get(id));
     }
 
+    @OperLog(module = "挂号管理", action = "现场挂号")
     @PostMapping("/records/walk-in")
     @PreAuthorize("hasAuthority('registration:register:create')")
     public Result<RegistrationVO> walkIn(@RequestBody WalkInRegisterDTO dto) {
         return Result.success(registrationService.walkIn(dto));
     }
 
+    @OperLog(module = "挂号管理", action = "取号")
     @PostMapping("/records/{id}/take")
     @PreAuthorize("hasAuthority('registration:register:take')")
     public Result<RegistrationVO> take(@PathVariable Long id) {
         return Result.success(registrationService.take(id));
     }
 
+    @OperLog(module = "挂号管理", action = "退号")
     @PostMapping("/records/{id}/refund")
     @PreAuthorize("hasAuthority('registration:register:refund')")
     public Result<RegistrationVO> refund(@PathVariable Long id, @RequestBody RefundDTO dto) {
         return Result.success(registrationService.refund(id, dto.getReason()));
     }
 
+    @OperLog(module = "挂号管理", action = "标记就诊")
     @PostMapping("/records/{id}/treat")
     @PreAuthorize("hasAuthority('registration:register:treat')")
     public Result<RegistrationVO> treat(@PathVariable Long id) {

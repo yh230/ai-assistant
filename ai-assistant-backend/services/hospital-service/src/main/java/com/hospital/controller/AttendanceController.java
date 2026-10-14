@@ -2,6 +2,7 @@ package com.hospital.controller;
 
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.hospital.dto.AttendanceQueryDTO;
 import com.hospital.dto.AttendanceSaveDTO;
 import com.hospital.service.AttendanceService;
@@ -68,6 +69,7 @@ public class AttendanceController {
         return Result.success(attendanceService.get(id));
     }
 
+    @OperLog(module = "出勤管理", action = "新增出勤")
     @PostMapping
     @PreAuthorize("hasAuthority('hospital:attendance:edit')")
     public Result<Void> create(@RequestBody AttendanceSaveDTO dto) {
@@ -75,6 +77,7 @@ public class AttendanceController {
         return Result.success();
     }
 
+    @OperLog(module = "出勤管理", action = "修改出勤")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:attendance:edit')")
     public Result<Void> update(@PathVariable Long id, @RequestBody AttendanceSaveDTO dto) {
@@ -82,6 +85,7 @@ public class AttendanceController {
         return Result.success();
     }
 
+    @OperLog(module = "出勤管理", action = "删除出勤")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:attendance:edit')")
     public Result<Void> delete(@PathVariable Long id) {

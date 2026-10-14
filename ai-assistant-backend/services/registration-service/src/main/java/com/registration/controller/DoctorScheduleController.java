@@ -2,6 +2,7 @@ package com.registration.controller;
 
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.registration.dto.ScheduleQueryDTO;
 import com.registration.dto.ScheduleSaveDTO;
 import com.registration.service.DoctorScheduleService;
@@ -62,18 +63,21 @@ public class DoctorScheduleController {
         return Result.success(scheduleService.get(id));
     }
 
+    @OperLog(module = "排班管理", action = "新增排班")
     @PostMapping
     @PreAuthorize("hasAuthority('registration:schedule:manage')")
     public Result<ScheduleVO> save(@RequestBody ScheduleSaveDTO dto) {
         return Result.success(scheduleService.save(dto));
     }
 
+    @OperLog(module = "排班管理", action = "修改排班")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('registration:schedule:manage')")
     public Result<ScheduleVO> update(@PathVariable Long id, @RequestBody ScheduleSaveDTO dto) {
         return Result.success(scheduleService.update(id, dto));
     }
 
+    @OperLog(module = "排班管理", action = "删除排班")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('registration:schedule:manage')")
     public Result<Void> remove(@PathVariable Long id) {
@@ -81,6 +85,7 @@ public class DoctorScheduleController {
         return Result.success();
     }
 
+    @OperLog(module = "排班管理", action = "生成号源")
     @PostMapping("/{id}/generate")
     @PreAuthorize("hasAuthority('registration:schedule:manage')")
     public Result<Void> generate(@PathVariable Long id) {
