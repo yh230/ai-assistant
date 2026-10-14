@@ -7,7 +7,7 @@
 - **智能聊天**：SSE 流式输出（逐 token 实时推送）、Tool Calling（对话中直接查真实天气）、多会话管理、Markdown 渲染；
 - **天气查询**：实时天气 + 未来预报（高德开放平台数据）；
 - **聊天人设管理**：人设角色存数据库，页面自由增删改（DB 驱动，首次启动自动播种默认角色）；
-- **RBAC 员工权限**：Spring Security 登录鉴权（JWT + Redis 撤销）+ 角色/菜单/按钮权限（含个人中心、踢下线）；安全加固：登录失败锁定（默认 5 次错密锁 15 分钟）、公开接口网关按 IP 限流（登录/注册/匿名预约）、操作审计（关键写操作落 `sys_oper_log`，「系统管理 → 操作日志」页可查）。
+- **RBAC 员工权限**：Spring Security 登录鉴权（JWT + Redis 撤销）+ 角色/菜单/按钮权限（含个人中心、踢下线）；安全加固：登录失败锁定（默认 5 次错密锁 15 分钟）、公开接口网关按 IP 限流（登录/注册/匿名预约）、操作审计（关键写操作落 `sys_oper_log`，「系统管理 → 操作日志」页可查）；双令牌续期：员工 / 患者登录签发 access（1 小时）+ refresh（7 天，Redis 白名单），access 过期前端 401 静默续期（刷新即轮换），登出、踢下线对 refresh 同样生效（刷新令牌消费用 Redis GETDEL，需 Redis ≥ 6.2）。
 
 **另有业务模块**
 
@@ -147,7 +147,7 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 ## 七、AI 助手数据目录与验收清单
 
 - **`data/vector/`**：知识库向量文件目录（Nacos `ai.rag.vector-path` 默认 `data/vector`，相对 ai-chat-service 的启动工作目录，如 `ai-assistant-backend/services/ai-chat-service/data/vector/`），按医院分文件 `hospital_{id}.json`；服务启动时全量加载、上传/删除文档即时落盘重建。该目录为**运行产物**（服务启动时自动创建），不随仓库分发，请勿手工编辑。
-- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离、安全与并发补测共 28 项，另含 2026-10-14 安全加固验收 5 项（登录失败锁定 / 公开接口限流 / 操作审计）。
+- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离、安全与并发补测共 28 项，另含 2026-10-14 安全加固验收 5 项（登录失败锁定 / 公开接口限流 / 操作审计），Refresh Token 续期验收 5 项（静默续期 / 轮换 / 登出 / 踢下线联动 / 回归；需 Redis ≥ 6.2）。
 
 ## 八、常见问题
 
