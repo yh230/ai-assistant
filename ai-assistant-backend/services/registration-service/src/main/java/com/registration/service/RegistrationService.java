@@ -57,4 +57,15 @@ public interface RegistrationService {
 
     /** 挂号统计（doctor/department/status/date 维度，按数据范围过滤） */
     Map<String, Object> stats(String dimension);
+
+    // ===== 定时任务（调度器逐条调用，服务内锁 + 事务） =====
+
+    /**
+     * 单条过期预约处理：置「过期失效」并释放号源、回退占用数
+     * <p>锁被占用或状态已变返回 false 跳过，由下个周期重试。</p>
+     *
+     * @param id 挂号记录 ID
+     * @return true=已置过期失效并释放号源；false=跳过
+     */
+    boolean expireOverdueOne(Long id);
 }
