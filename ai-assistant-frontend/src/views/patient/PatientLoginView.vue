@@ -136,7 +136,7 @@ async function handleLogin() {
   loading.value = true
   try {
     const res = await patientLogin({ username: phone, password: loginForm.password })
-    setPatientAuth(res.token, { phone })
+    setPatientAuth(res.token, { phone }, res.refreshToken)
     router.replace('/patient/chat')
   } catch (e) {
     errorMsg.value = e.message || '登录失败'

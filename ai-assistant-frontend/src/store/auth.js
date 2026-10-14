@@ -3,6 +3,7 @@ import { getInfo } from '../api/auth'
 
 const TOKEN_KEY = 'ai_token'
 const USER_KEY = 'ai_user'
+const REFRESH_KEY = 'ai_refresh_token'
 
 function parseUser() {
   const raw = localStorage.getItem(USER_KEY)
@@ -16,6 +17,7 @@ function parseUser() {
 
 // 模块级单例状态（项目未引入 Pinia，使用 vue 的 ref 作为轻量全局 store）
 const token = ref(localStorage.getItem(TOKEN_KEY) || '')
+const refreshToken = ref(localStorage.getItem(REFRESH_KEY) || '')
 const userInfo = ref(parseUser())
 // 本次会话是否已通过认证（避免每次路由切换都重复拉 /api/getInfo 探活）
 const authed = ref(false)
@@ -24,6 +26,12 @@ function setToken(t) {
   token.value = t || ''
   if (t) localStorage.setItem(TOKEN_KEY, t)
   else localStorage.removeItem(TOKEN_KEY)
+}
+
+function setRefreshToken(t) {
+  refreshToken.value = t || ''
+  if (t) localStorage.setItem(REFRESH_KEY, t)
+  else localStorage.removeItem(REFRESH_KEY)
 }
 
 function setUser(u) {
@@ -38,6 +46,7 @@ function setAuthed(v) {
 
 function clear() {
   setToken('')
+  setRefreshToken('')
   setUser(null)
   setAuthed(false)
 }
@@ -59,6 +68,8 @@ export function useAuth() {
     setUser,
     setAuthed,
     clear,
-    loadUserInfo
+    loadUserInfo,
+    refreshToken,
+    setRefreshToken
   }
 }

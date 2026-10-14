@@ -2,7 +2,7 @@ import api from './index'
 
 /**
  * 认证相关接口。
- * 注意：后端 /api/login 仅返回 { token, tokenType }，登录后需再调 /api/getInfo 获取用户信息。
+ * 后端 /api/login 返回 { token, refreshToken, tokenType }，登录后需再调 /api/getInfo 获取用户信息。
  */
 
 export function login(data) {
@@ -27,4 +27,8 @@ export function updateProfile(data) {
 
 export function changePassword(data) {
   return api.post('/profile/password', data)
+}
+
+export function revokeRefresh(refreshToken) {
+  return api.post('/refresh/revoke', { refreshToken })
 }

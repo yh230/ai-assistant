@@ -50,7 +50,7 @@ import { login } from '../api/auth'
 
 const route = useRoute()
 const router = useRouter()
-const { setToken, setUser, loadUserInfo } = useAuth()
+const { setToken, setUser, loadUserInfo, setRefreshToken } = useAuth()
 
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
@@ -66,8 +66,10 @@ async function handleLogin() {
     // 切换账号前清空上一个用户的状态残影，避免新旧账号信息闪现
     setUser(null)
     setToken('')
+    setRefreshToken('')
     const res = await login({ username: form.value.username.trim(), password: form.value.password })
     setToken(res.token)
+    setRefreshToken(res.refreshToken)
     await loadUserInfo()
     const redirect = route.query.redirect || '/chat'
     router.replace(redirect)

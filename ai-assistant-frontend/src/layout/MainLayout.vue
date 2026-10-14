@@ -175,7 +175,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../store/auth'
-import { logout } from '../api/auth'
+import { logout, revokeRefresh } from '../api/auth'
 import { confirm as showConfirm } from '../utils/message'
 import { PERMS, hasPerm as checkPerm, hasAnyPerm as checkAnyPerm } from '../utils/perm'
 
@@ -217,6 +217,12 @@ async function handleLogout() {
   // 退出前弹确认框，选「确定」才真正退出
   const ok = await showConfirm('确定要退出登录吗？', { okText: '退出', cancelText: '取消' })
   if (!ok) return
+  const refreshToken = localStorage.getItem('ai_refresh_token')
+  try {
+    await revokeRefresh(refreshToken)
+  } catch (e) {
+    // 撤销失败不阻断登出，本地清除即可
+  }
   try {
     await logout()
   } catch (e) {

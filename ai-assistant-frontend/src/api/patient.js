@@ -15,16 +15,48 @@ const patientApi = axios.create({
 
 // 防止并发 401 跳登录导致多次 location.href
 let redirecting = false
+const REFRESH_KEY = 'patient_refresh_token'
 function forceToPatientLogin() {
   if (redirecting) return
   redirecting = true
   localStorage.removeItem('patient_token')
   localStorage.removeItem('patient_user')
+  localStorage.removeItem(REFRESH_KEY)
   if (!window.location.pathname.includes('/patient/login')) {
     window.location.href = '/patient/login'
   }
   // 给后续可能仍在路上的请求留一次机会重置
   setTimeout(() => { redirecting = false }, 500)
+}
+
+let refreshPromise = null
+function refreshPatientAccessToken() {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const refreshToken = localStorage.getItem(REFRESH_KEY)
+      if (!refreshToken) throw new Error('无刷新令牌')
+      const res = await fetch('/api/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data || data.code !== 200 || !data.data) {
+        throw new Error((data && data.msg) || '登录已过期')
+      }
+      localStorage.setItem('patient_token', data.data.token)
+      localStorage.setItem(REFRESH_KEY, data.data.refreshToken)
+      return data.data.token
+    })().finally(() => { refreshPromise = null })
+  }
+  return refreshPromise
+}
+
+/**
+ * 撤销患者刷新令牌（登出时调用，幂等）
+ */
+export function revokePatientRefresh(refreshToken) {
+  return patientApi.post('/refresh/revoke', { refreshToken })
 }
 
 // 请求拦截器：自动携带患者 Token
@@ -52,6 +84,17 @@ patientApi.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response
+      const cfg = error.config || {}
+      const isRefreshCall = (cfg.url || '').includes('/refresh')
+      if (status === 401 && !isRefreshCall && !cfg._retry) {
+        cfg._retry = true
+        return refreshPatientAccessToken()
+          .then(() => patientApi(cfg))
+          .catch(() => {
+            forceToPatientLogin()
+            return Promise.reject(new Error('登录已过期，请重新登录'))
+          })
+      }
       if (status === 401) {
         forceToPatientLogin()
       }
@@ -166,13 +209,22 @@ async function consumeSse(response, handlers, signal) {
   if (!doneSeen) handlers.onDone?.({})
 }
 
+async function fetchWithPatientRefresh(url, options) {
+  let response = await fetch(url, options)
+  if (response.status === 401) {
+    const token = await refreshPatientAccessToken()
+    response = await fetch(url, { ...options, headers: { ...options.headers, Authorization: 'Bearer ' + token } })
+  }
+  return response
+}
+
 /**
  * 患者流式对话（SSE），返回 AbortController 供「停止生成」
  */
 export function sendPatientStream(data, handlers) {
   const token = localStorage.getItem('patient_token')
   const controller = new AbortController()
-  fetch('/api/chat/patient/stream', {
+  fetchWithPatientRefresh('/api/chat/patient/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -194,7 +246,7 @@ export function sendPatientStream(data, handlers) {
 export function confirmPatientAction(actionId, handlers) {
   const token = localStorage.getItem('patient_token')
   const controller = new AbortController()
-  fetch(`/api/chat/patient/action/${actionId}/confirm`, {
+  fetchWithPatientRefresh(`/api/chat/patient/action/${actionId}/confirm`, {
     method: 'POST',
     headers: token ? { Authorization: 'Bearer ' + token } : {},
     signal: controller.signal

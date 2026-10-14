@@ -159,7 +159,8 @@ import {
   deletePatientSession,
   sendPatientStream,
   confirmPatientAction,
-  cancelPatientAction
+  cancelPatientAction,
+  revokePatientRefresh
 } from '../../api/patient'
 import { confirm as showConfirm, msg } from '../../utils/message'
 import { renderMarkdownSafe } from '../../utils/safeMarkdown'
@@ -453,7 +454,13 @@ async function cancelConfirm() {
 }
 
 // 退出登录
-function handleLogout() {
+async function handleLogout() {
+  const refreshToken = localStorage.getItem('patient_refresh_token')
+  try {
+    await revokePatientRefresh(refreshToken)
+  } catch (e) {
+    // 撤销失败不阻断登出，本地清除即可
+  }
   clearPatientAuth()
   router.replace('/patient/login')
 }
