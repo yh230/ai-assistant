@@ -11,6 +11,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.Map;
 
@@ -84,5 +87,46 @@ class OperLogAspectTest {
         when(operLogClient.report(any(OperLogDTO.class))).thenThrow(new RuntimeException("服务不可达"));
 
         assertEquals("ok", aspect.around(joinPoint, operLog));
+    }
+
+    @Test
+    void shouldUseLastForwardedHopAsIp() throws Throwable {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Forwarded-For", "1.1.1.1, 2.2.2.2");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            when(operLog.module()).thenReturn("患者预约");
+            when(operLog.action()).thenReturn("确认支付");
+            when(joinPoint.proceed()).thenReturn("ok");
+            when(joinPoint.getArgs()).thenReturn(new Object[0]);
+
+            aspect.around(joinPoint, operLog);
+
+            ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
+            verify(operLogClient).report(captor.capture());
+            assertEquals("2.2.2.2", captor.getValue().getIp());
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
+    void shouldFallbackToRemoteAddrAsIp() throws Throwable {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            when(operLog.module()).thenReturn("用户管理");
+            when(operLog.action()).thenReturn("新增用户");
+            when(joinPoint.proceed()).thenReturn("ok");
+            when(joinPoint.getArgs()).thenReturn(new Object[0]);
+
+            aspect.around(joinPoint, operLog);
+
+            ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
+            verify(operLogClient).report(captor.capture());
+            assertEquals("127.0.0.1", captor.getValue().getIp());
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
     }
 }

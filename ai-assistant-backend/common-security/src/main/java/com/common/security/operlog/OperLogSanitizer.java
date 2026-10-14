@@ -20,8 +20,9 @@ public final class OperLogSanitizer {
     /** 参数留痕最大长度 */
     public static final int PARAMS_MAX_LENGTH = 1000;
 
+    /** 敏感字段名正则（匹配到的值替换为 ***） */
     private static final Pattern SENSITIVE = Pattern.compile(
-            "\"(password|oldPassword|newPassword|pwd|idCard)\"\\s*:\\s*\"[^\"]*\"");
+            "\"(password|oldPassword|newPassword|pwd|idCard|patientIdCard)\"\\s*:\\s*\"[^\"]*\"");
 
     private OperLogSanitizer() {
     }

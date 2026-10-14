@@ -54,4 +54,13 @@ class OperLogSanitizerTest {
         assertEquals("", OperLogSanitizer.argsToJson(null, objectMapper));
         assertEquals("", OperLogSanitizer.argsToJson(new Object[0], objectMapper));
     }
+
+    @Test
+    void shouldMaskPatientIdCard() {
+        Map<String, Object> dto = new LinkedHashMap<>();
+        dto.put("patientIdCard", "110101199001011234");
+        String json = OperLogSanitizer.argsToJson(new Object[]{dto}, objectMapper);
+        assertTrue(json.contains("\"patientIdCard\":\"***\""));
+        assertFalse(json.contains("110101199001011234"));
+    }
 }

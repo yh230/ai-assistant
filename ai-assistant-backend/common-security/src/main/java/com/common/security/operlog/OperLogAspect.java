@@ -90,10 +90,28 @@ public class OperLogAspect {
                 HttpServletRequest request = attrs.getRequest();
                 dto.setMethod(request.getMethod());
                 dto.setRequestUri(request.getRequestURI());
-                dto.setIp(request.getRemoteAddr());
+                dto.setIp(clientIp(request));
             }
         } catch (Exception ignored) {
             // 非 Web 上下文（如单元测试）跳过请求信息
         }
+    }
+
+    /**
+     * 取真实客户端 IP：X-Forwarded-For 末跳（网关追加、客户端无法伪造），缺失回退远端地址
+     *
+     * @param request HTTP 请求
+     * @return 客户端 IP（截断 64 字符）
+     */
+    private String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            String[] hops = forwarded.split(",");
+            String last = hops[hops.length - 1].trim();
+            if (!last.isEmpty()) {
+                return OperLogSanitizer.truncate(last, 64);
+            }
+        }
+        return OperLogSanitizer.truncate(request.getRemoteAddr(), 64);
     }
 }
