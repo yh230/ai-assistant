@@ -10,6 +10,47 @@ spring:
         server-addr: 127.0.0.1:8848
     gateway:
       routes:
+        - id: login-ratelimited
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/login,/api/patient/login
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.login.replenish-rate:10}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.login.burst-capacity:20}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: patient-register-ratelimited
+          uri: lb://system-service
+          predicates:
+            - Path=/api/patient/register
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.register.replenish-rate:5}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.register.burst-capacity:10}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: appointment-create-ratelimited
+          uri: lb://registration-service
+          predicates:
+            - Path=/api/registration/appointments
+            - Method=POST
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.appointment-create.replenish-rate:10}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.appointment-create.burst-capacity:20}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: appointment-query-ratelimited
+          uri: lb://registration-service
+          predicates:
+            - Path=/api/registration/appointments/query
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.appointment-query.replenish-rate:20}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.appointment-query.burst-capacity:40}
+                key-resolver: "#{@ipKeyResolver}"
         - id: auth-service
           uri: lb://auth-service
           predicates:
