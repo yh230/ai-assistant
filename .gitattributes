@@ -1,0 +1,2 @@
+# Windows 批处理脚本按 CRLF 检出（cmd + CP936 下 LF + 中文 + 括号块存在解析问题）
+*.bat text eol=crlf

@@ -1,8 +1,12 @@
 # Backend
 ai-assistant-backend/target/
+ai-assistant-backend/*/target/
+ai-assistant-backend/services/*/target/
 ai-assistant-backend/.mvn/
 ai-assistant-backend/mvnw
 ai-assistant-backend/mvnw.cmd
+# 运行时向量目录（ai-chat-service 运行产物）
+ai-assistant-backend/services/ai-chat-service/data/
 *.class
 *.jar
 *.war
@@ -32,3 +36,11 @@ ARCHITECTURE.md
 
 # 本机密钥配置（真实值，不入库）
 application-local.yml
+
+# E2E test project（ai-assistant-e2e）
+ai-assistant-e2e/.venv/
+ai-assistant-e2e/.env
+ai-assistant-e2e/reports/
+ai-assistant-e2e/.pytest_cache/
+__pycache__/
+*.pyc

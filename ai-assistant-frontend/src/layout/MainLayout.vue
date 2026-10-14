@@ -55,6 +55,12 @@
             </svg>
             <span>菜单管理</span>
           </router-link>
+          <router-link v-if="hasPerm(PERMS.SYSTEM_OPERLOG_LIST)" to="/system/operlog" class="nav-item sub" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/>
+            </svg>
+            <span>操作日志</span>
+          </router-link>
         </template>
 
         <!-- 医院管理（按数据权限相关功能权限渲染，自动数据过滤由后端完成） -->
@@ -115,6 +121,25 @@
             <span>挂号统计</span>
           </router-link>
         </template>
+
+        <!-- AI 助手（静态分组，不依赖后端菜单表；管理接口按医院快照鉴权） -->
+        <template v-if="token">
+          <div class="nav-group-title">AI 助手</div>
+          <router-link to="/admin/knowledge" class="nav-item sub" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+            <span>知识库管理</span>
+          </router-link>
+          <router-link to="/admin/triage-records" class="nav-item sub" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              <line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="12" y2="13"/>
+            </svg>
+            <span>AI 问诊记录</span>
+          </router-link>
+        </template>
       </nav>
 
       <!-- 底部用户信息 + 登出 -->
@@ -150,7 +175,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../store/auth'
-import { logout } from '../api/auth'
+import { logout, revokeRefresh } from '../api/auth'
 import { confirm as showConfirm } from '../utils/message'
 import { PERMS, hasPerm as checkPerm, hasAnyPerm as checkAnyPerm } from '../utils/perm'
 
@@ -165,7 +190,8 @@ const hasAnySystemPerm = computed(() =>
   hasAnyPerm([
     PERMS.SYSTEM_USER_LIST,
     PERMS.SYSTEM_ROLE_LIST,
-    PERMS.SYSTEM_MENU_LIST
+    PERMS.SYSTEM_MENU_LIST,
+    PERMS.SYSTEM_OPERLOG_LIST
   ])
 )
 
@@ -191,6 +217,12 @@ async function handleLogout() {
   // 退出前弹确认框，选「确定」才真正退出
   const ok = await showConfirm('确定要退出登录吗？', { okText: '退出', cancelText: '取消' })
   if (!ok) return
+  const refreshToken = localStorage.getItem('ai_refresh_token')
+  try {
+    await revokeRefresh(refreshToken)
+  } catch (e) {
+    // 撤销失败不阻断登出，本地清除即可
+  }
   try {
     await logout()
   } catch (e) {

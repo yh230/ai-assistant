@@ -57,7 +57,9 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { getProfile, updateProfile, changePassword } from '../api/auth'
+import { useAuth } from '../store/auth'
 import { toast } from '../utils/message'
 
 const profile = ref({})
@@ -66,6 +68,9 @@ const saving = ref(false)
 
 const pwd = ref({ oldPassword: '', newPassword: '', confirm: '' })
 const pwding = ref(false)
+
+const router = useRouter()
+const { clear } = useAuth()
 
 async function load() {
   try {
@@ -101,6 +106,9 @@ async function doChangePwd() {
     await changePassword({ oldPassword: pwd.value.oldPassword, newPassword: pwd.value.newPassword })
     toast.success('密码已修改，请使用新密码重新登录')
     pwd.value = { oldPassword: '', newPassword: '', confirm: '' }
+    // 后端已踢下线，清本地登录态并跳登录（旧令牌不可再用）
+    clear()
+    router.replace('/login')
   } catch (e) {
     toast.error('修改失败：' + e.message)
   } finally {

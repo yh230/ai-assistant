@@ -1,0 +1,113 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+    gateway:
+      server:
+        webflux:
+          trusted-proxies: ".*"   # 信任上游并透传/追加 X-Forwarded-For（审计真实 IP 依赖；本机演示全信任）
+      routes:
+        - id: login-ratelimited
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/login,/api/patient/login,/api/refresh,/api/refresh/revoke
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.login.replenish-rate:10}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.login.burst-capacity:20}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: patient-register-ratelimited
+          uri: lb://system-service
+          predicates:
+            - Path=/api/patient/register
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.register.replenish-rate:5}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.register.burst-capacity:10}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: appointment-create-ratelimited
+          uri: lb://registration-service
+          predicates:
+            - Path=/api/registration/appointments
+            - Method=POST
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.appointment-create.replenish-rate:10}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.appointment-create.burst-capacity:20}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: appointment-query-ratelimited
+          uri: lb://registration-service
+          predicates:
+            - Path=/api/registration/appointments/query
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.appointment-query.replenish-rate:20}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.appointment-query.burst-capacity:40}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: auth-service
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/login,/api/logout,/api/getInfo,/api/profile,/api/profile/password,/api/patient/login,/api/refresh,/api/refresh/revoke
+        - id: system-service
+          uri: lb://system-service
+          predicates:
+            - Path=/api/system/**,/api/patient/register
+        - id: hospital-service
+          uri: lb://hospital-service
+          predicates:
+            - Path=/api/hospital/**
+        - id: registration-service
+          uri: lb://registration-service
+          predicates:
+            - Path=/api/registration/**
+        - id: ai-chat-stream-ratelimited
+          uri: lb://ai-chat-service
+          predicates:
+            - Path=/api/chat/stream,/api/chat/patient/stream
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${ai.ratelimit.replenish-rate:10}
+                redis-rate-limiter.burstCapacity: ${ai.ratelimit.burst-capacity:20}
+                key-resolver: "#{@userKeyResolver}"
+        - id: ai-chat-service
+          uri: lb://ai-chat-service
+          predicates:
+            - Path=/api/chat/**,/api/roles/**,/api/weather/**
+  config:
+    import:
+      - optional:nacos:common-shared.yaml?group=DEFAULT_GROUP
+
+# 网关放行清单（免登录，与 SecurityConfig 放行清单对齐）
+gateway:
+  whitelist:
+    - /api/login
+    - /api/patient/login
+    - /api/patient/register
+    - /api/health
+    - /error
+    - /api/registration/appointments
+    - /api/registration/appointments/**
+    - /api/registration/schedule/public/**
+    - /api/hospital/public/**
+    - /api/refresh
+    - /api/refresh/revoke
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:aidaima-dev-jwt-secret-please-override-0123456789}
+    expiration-seconds: 3600
+
+logging:
+  level:
+    com.gateway: info

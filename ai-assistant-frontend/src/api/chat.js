@@ -1,11 +1,20 @@
 import api from './index'
-import { forceToLogin } from './index'
+import { forceToLogin, refreshAccessToken } from './index'
 
 /**
  * 发送聊天消息（非流式，兼容旧接口）
  */
 export function sendMessage(data) {
   return api.post('/chat/send', data)
+}
+
+async function fetchWithRefresh(url, options) {
+  let response = await fetch(url, options)
+  if (response.status === 401) {
+    const token = await refreshAccessToken()
+    response = await fetch(url, { ...options, headers: { ...options.headers, Authorization: 'Bearer ' + token } })
+  }
+  return response
 }
 
 /**
@@ -18,7 +27,7 @@ export function sendMessage(data) {
  */
 export function sendMessageStream(data, { onSession, onToken, onDone, onError }) {
   const token = localStorage.getItem('ai_token')
-  return fetch('/api/chat/stream', {
+  return fetchWithRefresh('/api/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

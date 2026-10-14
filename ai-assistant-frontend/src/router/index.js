@@ -12,6 +12,18 @@ const routes = [
     meta: { public: true, title: '登录' }
   },
   {
+    path: '/patient/login',
+    name: 'PatientLogin',
+    component: () => import('../views/patient/PatientLoginView.vue'),
+    meta: { public: true, title: '患者登录' }
+  },
+  {
+    path: '/patient/chat',
+    name: 'PatientChat',
+    component: () => import('../views/patient/PatientChatView.vue'),
+    meta: { requiresPatient: true, title: 'AI 就诊助手' }
+  },
+  {
     path: '/',
     component: MainLayout,
     // 未登录用户会被守卫改写到 /login；此处 redirect 仅对已登录生效
@@ -58,6 +70,12 @@ const routes = [
         name: 'MenuManage',
         component: () => import('../views/MenuManageView.vue'),
         meta: { title: '菜单管理', requiresAuth: true, perm: PERMS.SYSTEM_MENU_LIST }
+      },
+      {
+        path: 'system/operlog',
+        name: 'OperLog',
+        component: () => import('../views/OperLogView.vue'),
+        meta: { title: '操作日志', requiresAuth: true, perm: PERMS.SYSTEM_OPERLOG_LIST }
       },
       // ===== 医院科室人员 & 出勤模块（数据权限：后端按登录人自动过滤）=====
       {
@@ -109,6 +127,19 @@ const routes = [
         name: 'RegistrationStats',
         component: () => import('../views/RegistrationStatsView.vue'),
         meta: { title: '挂号统计', requiresAuth: true, perm: PERMS.REGISTRATION_STATS_VIEW }
+      },
+      // ===== AI 助手（知识库 / 问诊记录；管理接口按医院快照鉴权，不加权限码）=====
+      {
+        path: 'admin/knowledge',
+        name: 'KnowledgeManage',
+        component: () => import('../views/knowledge/KnowledgeManageView.vue'),
+        meta: { title: '知识库管理', requiresAuth: true }
+      },
+      {
+        path: 'admin/triage-records',
+        name: 'AiTriageRecords',
+        component: () => import('../views/chat/AiTriageRecordView.vue'),
+        meta: { title: 'AI 问诊记录', requiresAuth: true }
       },
       // 患者线上预约 / 查询（公开，免登录）
       {
@@ -162,13 +193,23 @@ router.beforeEach(async (to, from, next) => {
     return
   }
 
-  // 2. 其余全部路由：未登录直接跳 /login
+  // 2. 患者页：校验患者 token，缺失跳患者登录
+  if (to.meta.requiresPatient) {
+    if (!localStorage.getItem('patient_token')) {
+      next({ path: '/patient/login' })
+      return
+    }
+    next()
+    return
+  }
+
+  // 3. 其余全部路由：未登录直接跳 /login
   if (!hasToken) {
     next({ path: '/login', query: { redirect: to.fullPath } })
     return
   }
 
-  // 3. 有 token：已认证则直接放行，不重复打 getInfo；
+  // 4. 有 token：已认证则直接放行，不重复打 getInfo；
   //    会话失效由 axios 响应拦截器(401 -> forceToLogin)兜底清 token 跳登录。
   //    （仅首次进入/刷新页面后未认证时，做一次 loadUserInfo 拉用户信息）
   if (!authStore.authed.value) {
@@ -187,7 +228,7 @@ router.beforeEach(async (to, from, next) => {
     }
   }
 
-  // 4. 权限校验（支持单权限 perm 或 多权限 perms 取「或」）
+  // 5. 权限校验（支持单权限 perm 或 多权限 perms 取「或」）
   const required = to.meta.perm || to.meta.perms
   if (required) {
     let perms = []
