@@ -10,6 +10,7 @@ import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
 import com.aiassistant.entity.PendingAction;
+import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.safety.OutputSafetyFilter;
@@ -29,6 +30,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.http.codec.ServerSentEvent;
@@ -60,7 +62,7 @@ import java.util.stream.Collectors;
  *     <li><b>Flux 流式响应</b>：阻塞型 DB 操作与 AI 流经 {@code Schedulers.boundedElastic} 卸载，
  *         由 Spring MVC 自动适配为 HTTP SSE 流。</li>
  *     <li><b>会话隔离</b>：会话按 (userId, identity=patient) 绑定，读写一律限定当前登录患者，口径与员工侧一致。</li>
- *     <li><b>会话类型</b>：CHAT=闲聊 / TRIAGE=导诊（装配患者工具）/ RAG=知识库（使用知识库人设提示词），
+ *     <li><b>会话类型</b>：CHAT=闲聊 / TRIAGE=导诊（装配患者工具）/ RAG=知识库（知识库人设提示词 + 本院检索片段拼接），
  *         系统提示词取自 {@link AiProperties}。</li>
  *     <li><b>免责与降级</b>：每次流式回答（AI 或本地降级）末尾强制追加免责声明；模型不可用或流异常时降级本地回复引擎，对话不中断。</li>
  *     <li><b>输入输出风控</b>：命中敏感词规则的输入直接拦截；输出侧仅扫描生成正文，命中即丢弃生成内容并持久化标准文案。</li>
@@ -106,6 +108,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final ChatMessageRepository messageRepository;
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
+    private final KnowledgeVectorStore knowledgeVectorStore;
 
     // ==================== 流式对话（核心链路） ====================
 
@@ -149,6 +152,11 @@ public class PatientChatServiceImpl implements PatientChatService {
                         ? new UserMessage(m.getContent()) : new AssistantMessage(m.getContent())))
                 .toList();
         String systemPrompt = resolvePrompt(session.getSessionType());
+        if (TYPE_RAG.equals(session.getSessionType())) {
+            List<Document> hits = knowledgeVectorStore.search(user.getHospitalId(), request.getMessage(),
+                    aiProperties.getRag().getTopK(), aiProperties.getRag().getSimilarityThreshold());
+            systemPrompt = systemPrompt + "\n\n" + buildKnowledgeContext(hits);
+        }
 
         log.info("患者流式对话 sessionId={}, sessionType={}, 历史消息数={}",
                 session.getSessionId(), session.getSessionType(), history.size());
@@ -567,6 +575,23 @@ public class PatientChatServiceImpl implements PatientChatService {
             return aiProperties.getPrompt().getRag();
         }
         return aiProperties.getPrompt().getChat();
+    }
+
+    /**
+     * 组装知识库片段上下文（[1][2] 编号拼接；无命中时明确告知模型如实说明，不得编造）
+     *
+     * @param hits 本院知识库检索命中片段
+     * @return 拼接到知识库人设提示词之后的片段上下文
+     */
+    private String buildKnowledgeContext(List<Document> hits) {
+        if (hits.isEmpty()) {
+            return "【知识库片段】未检索到与问题相关的内容，请如实告知患者知识库未收录，不要编造。";
+        }
+        StringBuilder sb = new StringBuilder("【知识库片段】\n");
+        for (int i = 0; i < hits.size(); i++) {
+            sb.append("[").append(i + 1).append("] ").append(hits.get(i).getText()).append("\n");
+        }
+        return sb.toString();
     }
 
     /**
