@@ -7,9 +7,9 @@ from typing import Iterable
 def parse_sse(lines: Iterable[str], until: set[str] | None = None) -> list[tuple[str, object]]:
     """解析 SSE 行流为事件列表。
 
-    data 载荷以 { 或 [ 开头时尝试 JSON 解码，否则保留原文
-    （token 事件是纯文本，"123" 这类不能被误解码为数字）。
-    遇到 until 中的事件名即停止读取（用于只关心到某事件为止的场景）。
+    与前端解析约定一致：data: 后按 SSE 规范仅剥离一个前导空格（不吞内容自身空白）；
+    token 事件为纯文本不做 JSON 解码，其余事件载荷以 { 或 [ 开头时尝试 JSON 解码，
+    否则保留原文。遇到 until 中的事件名即停止读取（用于只关心到某事件为止的场景）。
     """
     events: list[tuple[str, object]] = []
     event_name = "message"
@@ -21,7 +21,7 @@ def parse_sse(lines: Iterable[str], until: set[str] | None = None) -> list[tuple
         if data_lines:
             raw = "\n".join(data_lines)
             payload: object = raw
-            if raw[:1] in "{[":
+            if event_name != "token" and raw[:1] in "{[":
                 try:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
@@ -40,7 +40,8 @@ def parse_sse(lines: Iterable[str], until: set[str] | None = None) -> list[tuple
         elif line.startswith("event:"):
             event_name = line[len("event:"):].strip()
         elif line.startswith("data:"):
-            data_lines.append(line[len("data:"):].lstrip())
+            value = line[len("data:"):]
+            data_lines.append(value[1:] if value.startswith(" ") else value)
         # id: / retry: / 注释行忽略
 
     if data_lines:  # 流以未闭合事件结尾时的兜底
