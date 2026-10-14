@@ -54,7 +54,7 @@ class RefreshTokenStoreTest {
     @Test
     void consumeShouldReturnInfoAndDeleteKey() {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("auth:refresh:t1")).thenReturn("patient:9:1700000000000");
+        when(valueOperations.getAndDelete("auth:refresh:t1")).thenReturn("patient:9:1700000000000");
 
         RefreshTokenStore.RefreshTokenInfo info = store.consume("t1");
 
@@ -62,7 +62,6 @@ class RefreshTokenStoreTest {
         assertEquals("patient", info.identity());
         assertEquals(9L, info.userId());
         assertEquals(1700000000000L, info.issuedAtMillis());
-        verify(stringRedisTemplate).delete("auth:refresh:t1");
     }
 
     @Test
@@ -70,8 +69,18 @@ class RefreshTokenStoreTest {
         assertNull(store.consume(null));
         assertNull(store.consume(" "));
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("auth:refresh:t2")).thenReturn(null);
+        when(valueOperations.getAndDelete("auth:refresh:t2")).thenReturn(null);
         assertNull(store.consume("t2"));
+    }
+
+    @Test
+    void consumeShouldReturnNullForMalformedValue() {
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.getAndDelete("auth:refresh:t4")).thenReturn("staff");
+        when(valueOperations.getAndDelete("auth:refresh:t5")).thenReturn("staff:abc:1");
+
+        assertNull(store.consume("t4"));
+        assertNull(store.consume("t5"));
     }
 
     @Test

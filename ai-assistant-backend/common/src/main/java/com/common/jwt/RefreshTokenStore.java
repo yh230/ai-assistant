@@ -64,11 +64,10 @@ public class RefreshTokenStore {
             return null;
         }
         String key = REFRESH_PREFIX + token;
-        String value = stringRedisTemplate.opsForValue().get(key);
+        String value = stringRedisTemplate.opsForValue().getAndDelete(key);
         if (value == null) {
             return null;
         }
-        stringRedisTemplate.delete(key);
         String[] parts = value.split(":");
         if (parts.length != 3) {
             return null;
