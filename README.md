@@ -212,7 +212,6 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 ## 文档
 
 - 设计文档与验收清单在 `docs/`（**本地文档，按约定不入库**）：包括 AI 医院助手 V1.0 设计、Spring Cloud 迁移设计、E2E 验收清单（本地手动执行版）
-- 接口与架构细节以代码注释与 `docs/superpowers/` 下的 spec 为准
 
 ## 贡献
 
