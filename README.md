@@ -1,86 +1,128 @@
-# AI 助手（聊天小伙伴）
+# AI 医院助手（AI Hospital Assistant）
 
-基于 **Java 17 + Spring Boot 3.5.16 + Spring Cloud（Nacos）+ Spring AI 1.0 + Vue 3 + MySQL + Redis** 的微服务智能助手。
+> 基于 **Spring Cloud 微服务 + Spring AI** 的医疗场景 AI 助手平台：聊天 / 导诊 / 智能挂号 / 知识库问答，同时内置完整的医院业务与 RBAC 权限体系。
+>
+> A microservice-based AI hospital assistant built with Spring Cloud, Spring AI and Vue 3 — chat, triage, smart registration and RAG Q&A.
 
-**四大能力**
+![Java](https://img.shields.io/badge/Java-17-orange.svg)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F.svg)
+![Spring Cloud](https://img.shields.io/badge/Spring%20Cloud-Nacos-1677FF.svg)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0-6DB33F.svg)
+![Vue](https://img.shields.io/badge/Vue-3-42B883.svg)
+![MySQL](https://img.shields.io/badge/MySQL-8-4479A1.svg)
+![E2E](https://img.shields.io/badge/E2E-pytest-0A9EDC.svg)
 
-- **智能聊天**：SSE 流式输出（逐 token 实时推送）、Tool Calling（对话中直接查真实天气）、多会话管理、Markdown 渲染；
-- **天气查询**：实时天气 + 未来预报（高德开放平台数据）；
-- **聊天人设管理**：人设角色存数据库，页面自由增删改（DB 驱动，首次启动自动播种默认角色）；
-- **RBAC 员工权限**：Spring Security 登录鉴权（JWT + Redis 撤销）+ 角色/菜单/按钮权限（含个人中心、踢下线）；安全加固：登录失败锁定（默认 5 次错密锁 15 分钟）、公开接口网关按 IP 限流（登录/注册/匿名预约）、操作审计（关键写操作落 `sys_oper_log`，「系统管理 → 操作日志」页可查）；双令牌续期：员工 / 患者登录签发 access（1 小时）+ refresh（7 天，Redis 白名单），access 过期前端 401 静默续期（刷新即轮换），登出、踢下线对 refresh 同样生效（刷新令牌消费用 Redis GETDEL，需 Redis ≥ 6.2）。
+## 目录
 
-**另有业务模块**
+- [项目简介](#项目简介)
+- [功能特性](#功能特性)
+- [系统架构](#系统架构)
+- [技术栈](#技术栈)
+- [项目结构](#项目结构)
+- [环境要求](#环境要求)
+- [快速开始](#快速开始)
+- [端口一览](#端口一览)
+- [默认账号](#默认账号)
+- [自动化测试](#自动化测试)
+- [构建](#构建)
+- [常见问题](#常见问题)
+- [文档](#文档)
+- [贡献](#贡献)
+- [许可](#许可)
 
-- **医院人员与出勤**：多医院 / 多科室，按【医院-科室-角色】三级数据隔离，出勤多维统计；
-- **门诊挂号**：排班号源、预约取号、退号就诊、多维度统计（含公开的患者预约入口）；
-- **AI 医院助手（患者端）**：患者独立账号（注册/登录，绑定医院）、AI 导诊、AI 智能挂号（工具调用 + 二次确认）、知识库问答（RAG，管理员上传 md/txt）、AI 问诊记录与知识库管理。
+## 项目简介
 
-**患者端入口**：`http://localhost:5173/patient/login`（注册/登录）→ `http://localhost:5173/patient/chat`（导诊 / 知识库问答 / 闲聊）。
+一个**学习 / 展示用途**的完整案例：把「Spring Cloud 微服务实践」与「大模型应用落地（Tool Calling / RAG / SSE 流式）」放在同一套可运行的医院业务系统中。员工端与管理端面向医院员工，患者端面向患者账号。
 
-## 一、架构概览
+> AI 输出仅辅助参考，**不提供诊断与处方**；产品层强制附带免责文案，并内置输入/输出双向风控。
 
-前端（Vue 3，`:5173`）→ 网关（gateway `:8080`，统一鉴权/路由）→ 五个业务服务（auth / system / hospital / registration / chat），配合 Nacos（注册中心 + 配置中心）、四个数据库（system_db / hospital_db / registration_db / chat_db）与 Redis（登录态 / JWT 撤销）。
+- 员工端：`http://localhost:5173` （聊天 / 人设 / 天气 / 医院业务 / 系统管理）
+- 患者端：`http://localhost:5173/patient/login` （注册登录 → AI 导诊 / 知识库问答 / 闲聊）
 
-**后端 `ai-assistant-backend/`（父工程 + 9 模块）**
+## 功能特性
 
-| 模块 | 说明 |
-|------|------|
-| `common/` | 公共模块：`Result`/`PageResult`、常量、异常、数据权限（`DataScope`/`DataScopeResolver`）、辅助工具 |
-| `common-security/` | 安全公共组件：JWT、内部调用校验、Spring Security 配置 |
-| `api/` | 服务间 OpenFeign 接口与 DTO（`AuthClient`/`UserClient`/`OrgClient`，含内部令牌拦截器） |
-| `gateway/` | 网关：统一入口、路由转发、鉴权、黑名单与内部接口阻断 |
-| `services/auth-service/` | 登录鉴权（JWT 签发、登出黑名单、踢下线） |
-| `services/system-service/` | RBAC 用户中心：用户 / 角色 / 菜单 / 按钮权限 |
-| `services/hospital-service/` | 医院 / 科室 / 员工 / 出勤（后端自动数据权限过滤） |
-| `services/registration-service/` | 门诊挂号：排班 / 号源 / 预约取号 / 统计 |
-| `services/ai-chat-service/` | 聊天 / 天气 / 人设 / 患者导诊与知识库 / 管理端（Spring AI + JPA，RAG 向量） |
+**AI 能力**
 
-| 数据库 | 归属服务 |
-|--------|----------|
-| `system_db` | system-service（RBAC 五表 + 患者账号表 `patient_user`） |
-| `hospital_db` | hospital-service |
-| `registration_db` | registration-service |
-| `chat_db` | ai-chat-service（表由 JPA 首次启动自动创建） |
+- 智能聊天：SSE 逐 token 流式输出、多会话管理、Markdown 渲染；Tool Calling 对话中直接查真实天气
+- AI 导诊：基于候诊描述的科室推荐（真实科室数据，不编造）；可衔接号源查询
+- AI 智能挂号：工具调用 + **二次确认状态机**（pending_action 表 + SSE `confirm_required` 事件），确认/取消/超时全链路
+- 轻量 RAG 知识库：管理员上传 md/txt（≤2MB）自动切片与向量化（本地 ONNX 嵌入模型），问答按医院隔离检索
+- 安全底座：输入风控（敏感词直接拦截、不调模型）、输出风控、SSE 加固、限流（网关令牌桶）
+- 双身份体系：员工（STAFF）与患者（PATIENT）JWT 身份隔离，患者账号绑定医院、数据按医院边界隔离
 
-**前端 `ai-assistant-frontend/`**
+**业务模块**
 
-| 目录 | 说明 |
-|------|------|
-| `src/api/` | axios 实例（拦截器统一处理鉴权与错误）+ 各模块接口封装 |
-| `src/router/` `src/store/` | 路由表与守卫、登录态（轻量单例，无 Pinia） |
-| `src/layout/` `src/views/` | 主布局（侧边栏按权限渲染，含「AI 助手」分组）+ 22 个业务页面（含患者端 2 页与管理端知识库/问诊记录/操作日志页） |
-| `src/components/` `src/composables/` | 通用组件（菜单树 / 轻提示）与管理页 CRUD 骨架 `useCrudPage` |
-| `src/utils/` | 时间格式化（`format.js`）、权限常量与判定（`perm.js`）、轻提示（`message.js`） |
-| `src/assets/` | 全局样式（含管理页公共样式段） |
+- 医院人员与出勤：多医院 / 多科室、按【医院-科室-角色】三级数据隔离、出勤多维统计
+- 门诊挂号：排班号源、预约取号、退号就诊、多维度统计（含公开的患者预约入口）
+- RBAC 员工权限：Spring Security + JWT（双令牌续期）+ 角色/菜单/按钮权限、个人中心、踢下线
+- 安全加固：登录失败锁定（默认 5 次锁 15 分钟）、公开接口限流、关键操作审计（`sys_oper_log`）
 
-**技术栈**
+## 系统架构
+
+```text
+┌──────────────┐        ┌───────────────────────────────┐
+│ 前端 Vue 3    │  HTTP  │ 网关 gateway :8080            │
+│ dev :5173    │ ─────▶ │ 统一鉴权 · 身份隔离 · 限流      │
+└──────────────┘        └───────────────┬───────────────┘
+                                        │ 路由转发（Nacos 服务发现）
+      ┌──────────────┬──────────────┬───┴──────────┬──────────────────┐
+      ▼              ▼              ▼              ▼                  ▼
+ auth-service  system-service  hospital-service  registration-service  ai-chat-service
+   :9200          :9201            :9202              :9203              :9204
+ 登录/令牌       用户/RBAC       医院/出勤/科室     排班/号源/挂号    聊天/AI 导诊/RAG
+      └──────────────┴──────────────┴──────────────┴──────────────────┘
+                                        │
+       ┌───────────┬────────────────────┴────────────┬──────────────┐
+       ▼           ▼                                 ▼              ▼
+   MySQL 8     Redis（≥6.2）                     Nacos 3.x      DeepSeek API
+ （四库分治）  登录态/权限快照/限流/令牌白名单    注册+配置中心   （可选，未配置自动本地降级）
+```
+
+## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 后端 | Java 17 / Spring Boot 3.5.16 / Spring Cloud（Nacos 注册与配置）/ Spring AI 1.0 |
-| 鉴权与缓存 | Spring Security 6.5.11 + JWT（jjwt）+ Redis 撤销（登出黑名单/踢下线） |
-| ORM | MyBatis-Plus（RBAC / 医院 / 挂号）+ Spring Data JPA（chat 模块） |
-| 服务间调用 | OpenFeign（api 模块） |
-| 数据库 | MySQL 8 |
+| 后端 | Java 17 · Spring Boot 3.5.16 · Spring Cloud（Nacos 注册与配置）· Spring AI 1.0 |
+| 鉴权与缓存 | Spring Security 6 + JWT（jjwt 0.12）+ Redis 撤销（登出黑名单 / 踢下线 / refresh 轮换） |
+| ORM | MyBatis-Plus 3.5（RBAC / 医院 / 挂号）· Spring Data JPA（chat 模块） |
+| 服务间调用 | OpenFeign（`api` 模块，统一内部令牌） |
+| 数据 | MySQL 8（四库分治）· Redis（≥ 6.2，刷新令牌消费用 GETDEL） |
 | 前端 | Vue 3 + Vite 5 + vue-router 4 + axios（无 UI 组件库，手写 scoped CSS） |
+| 测试 | JUnit（后端单测）· Python + pytest + httpx（API 级 E2E）|
 
-## 二、环境要求
+## 项目结构
+
+```text
+aidaima/
+├── ai-assistant-backend/     # 后端：父工程 + 9 模块
+│   ├── gateway/              # 网关：统一入口、鉴权、路由、限流
+│   ├── common/               # 公共：Result/PageResult、异常、数据权限
+│   ├── common-security/      # 安全公共组件：JWT、内部调用校验、Security 配置
+│   ├── api/                  # 服务间 Feign 接口与 DTO
+│   └── services/             # auth / system / hospital / registration / ai-chat
+├── ai-assistant-frontend/    # 前端：Vue 3 + Vite（员工端 + 患者端）
+├── ai-assistant-e2e/         # API 级 E2E 自动化测试（Python + pytest + httpx）
+├── scripts/                  # 一键脚本：Nacos / 服务 / E2E（含共享配置样例）
+└── docs/                     # 本地设计文档（按约定不入库）
+```
+
+## 环境要求
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | JDK | 17 | 本机路径 `C:\kaifa\jdk17` |
 | MySQL | 8 | 需先建好四个库（见快速开始第 1 步） |
-| Redis | - | 默认 `localhost:6379` |
+| Redis | ≥ 6.2 | 默认 `localhost:6379`（刷新令牌消费用 GETDEL） |
 | Node.js | 18+ | 前端构建与开发 |
 | Nacos | 3.x | 本机路径 `C:\kaifa\nacos`（服务端口 8848，控制台 8849） |
 
-## 三、快速开始（按顺序）
+## 快速开始
 
 ### 1. 初始化数据库
 
-执行 `ai-assistant-backend/sql/` 下的四个建库脚本，顺序：`system_db.sql` → `hospital_db.sql` → `registration_db.sql` → `chat_db.sql`（脚本含建库；chat 相关表由 JPA 首次启动自动创建，无需手工建表）。
+执行 `ai-assistant-backend/sql/` 下四个建库脚本，顺序：`system_db.sql` → `hospital_db.sql` → `registration_db.sql` → `chat_db.sql`（chat 相关表由 JPA 首次启动自动创建）。
 
-> AI 医院助手 V1.0 使用的 `system_db.patient_user`（患者账号表）已含在 `system_db.sql` 中；`registration.patient_id`（患者账号关联列）已含在 `registration_db.sql` 中。**已建库升级**：重跑 `system_db.sql` 补患者表、执行 `registration_db.sql` 末尾注释的 `ALTER TABLE registration ADD COLUMN patient_id ...` 补列（chat 库的 `pending_action`/`knowledge_document`/`chat_session` 新列由 JPA 自动补齐）。
+> 已建库升级：重跑 `system_db.sql` 补患者账号表 `patient_user`、执行 `registration_db.sql` 末尾注释的 `ALTER TABLE registration ADD COLUMN patient_id ...` 补关联列（chat 库新表/新列由 JPA 自动补齐）。
 
 ### 2. 启动 Nacos
 
@@ -88,9 +130,9 @@
 
 ### 3. 创建共享配置
 
-Nacos 控制台「配置管理 → 新建」，dataId 填 `common-shared.yaml`、group 填 `DEFAULT_GROUP`，内容粘贴 `scripts/nacos-common-shared.yaml` 文件全文（含 JWT 密钥、内部调用令牌、Redis 地址，以及 **AI 助手 V1.0 的 `ai.*` 配置段**（prompt/免责文案/风控词/rag/限流阈值）与 `spring.ai.model.embedding: none`）。
+Nacos 控制台「配置管理 → 新建」：dataId `common-shared.yaml`、group `DEFAULT_GROUP`，内容粘贴 `scripts/nacos-common-shared.yaml` 全文（含 JWT 密钥、内部调用令牌、Redis 地址，AI 配置段 `ai.*`：prompt / 免责文案 / 风控词 / RAG 参数 / 限流阈值，以及 `spring.ai.model.embedding: none`）。
 
-### 4. 配置本机密钥（环境变量，PowerShell/CMD 通用）
+### 4. 配置密钥（环境变量）
 
 ```bat
 setx DB_PASSWORD 你的MySQL密码
@@ -98,13 +140,15 @@ setx DEEPSEEK_API_KEY sk-你的大模型Key
 setx AMAP_KEY 你的高德Key
 ```
 
-设置后重开终端生效；开发机也可直接改各服务 yml 的占位符默认值，但不要提交真实密钥。
+设置后重开终端生效；开发机也可直接改各服务 yml 占位符默认值，但不要提交真实密钥。
 
 ### 5. 启动后端
 
-运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关；各窗口日志逐个出现 `Started` 后进入下一步）。
+运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关），各窗口日志出现 `Started` 后进入下一步。
 
-> **ai-chat-service 首次启动说明**：知识库问答的向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会**自动从 GitHub 下载模型并加载，可能明显变慢**（下载缓存于系统临时目录 `%TEMP%\spring-ai-onnx-generative\`，网络受限时请确保代理可用或改用下述预置方式）；未配置 `DEEPSEEK_API_KEY` 时 AI 对话自动降级本地回复引擎，不影响启动。离线/加速部署：把 `all-MiniLM-L6-v2` 的 `.onnx` 模型文件放到本机任意路径，在该服务配置（Nacos `ai.rag.embedding-model-path`）填入完整路径即可（tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」，如 `all-MiniLM-L6-v2.onnx` + `all-MiniLM-L6-v2-tokenizer.json`）。
+> **ai-chat-service 首次启动**：知识库向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会从 GitHub 下载并加载，可能明显变慢（缓存于 `%TEMP%\spring-ai-onnx-generative\`；网络受限时确保代理可用，或改用离线预置：把模型 `.onnx` 放到任意路径，在 Nacos `ai.rag.embedding-model-path` 填完整路径，tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」）。未配置 `DEEPSEEK_API_KEY` 时对话自动降级本地回复引擎，不影响启动。
+>
+> 知识库向量文件目录 `data/vector/`（Nacos `ai.rag.vector-path`，相对服务启动目录，按医院分文件 `hospital_{id}.json`）为运行产物，不随仓库分发，请勿手工编辑。
 
 ### 6. 启动前端
 
@@ -114,9 +158,9 @@ npm install
 npm run dev
 ```
 
-访问 `http://localhost:5173`（员工端，默认 admin/admin123；代理已指向网关 8080）；患者端入口 `http://localhost:5173/patient/login`。
+访问 `http://localhost:5173`（员工端，代理已指向网关 8080）；患者端入口 `http://localhost:5173/patient/login`。
 
-## 四、端口一览表
+## 端口一览
 
 | 组件 | 端口 |
 |------|------|
@@ -129,12 +173,23 @@ npm run dev
 | ai-chat-service | 9204 |
 | Nacos | 8848（控制台 8849） |
 
-## 五、默认账号
+## 默认账号
 
-- `admin / admin123`（首次启动由 system-service 播种，请尽快修改密码）；
-- 登录后可在「用户管理」创建员工并分配医院 / 科室 / 角色。
+- `admin / admin123` —— 首次启动由 system-service 播种，**请尽快修改密码**
+- 登录后可在「用户管理」创建员工并分配医院 / 科室 / 角色
 
-## 六、构建命令
+## 自动化测试
+
+`ai-assistant-e2e/` 提供 API 级 E2E 回归套件（Python + pytest + httpx，**全黑盒**只经网关调用），覆盖身份越权、AI 导诊、挂号二次确认、RAG 跨院隔离、限流/风控、会话隔离等 20+ 验收项：
+
+```bat
+scripts\run-e2e.bat                            :: 全量（前置自检 + 执行 + JUnit 报告）
+scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模型）
+```
+
+结果支持推送到**企业微信 / 飞书 / 邮箱**（`.env` 配置通道，跑完自动推送）。详见 [ai-assistant-e2e/README.md](ai-assistant-e2e/README.md)。
+
+## 构建
 
 ```bat
 cd ai-assistant-backend
@@ -142,18 +197,35 @@ set JAVA_HOME=C:\kaifa\jdk17
 C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 ```
 
-依赖走阿里云镜像（已配置在本机 Maven `conf/settings.xml`）；本机旧离线命令已作废。
+依赖走阿里云镜像（本机 Maven `conf/settings.xml` 已配置）。
 
-## 七、AI 助手数据目录与验收清单
-
-- **`data/vector/`**：知识库向量文件目录（Nacos `ai.rag.vector-path` 默认 `data/vector`，相对 ai-chat-service 的启动工作目录，如 `ai-assistant-backend/services/ai-chat-service/data/vector/`），按医院分文件 `hospital_{id}.json`；服务启动时全量加载、上传/删除文档即时落盘重建。该目录为**运行产物**（服务启动时自动创建），不随仓库分发，请勿手工编辑。
-- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离、安全与并发补测共 28 项，另含 2026-10-14 安全加固验收 5 项（登录失败锁定 / 公开接口限流 / 操作审计），Refresh Token 续期验收 5 项（静默续期 / 轮换 / 登出 / 踢下线联动 / 回归；需 Redis ≥ 6.2）。
-
-## 八、常见问题
+## 常见问题
 
 | 问题 | 处理 |
 |------|------|
-| 服务注册失败（启动日志报 Nacos 连接错误） | Nacos 未启动：先运行 `scripts/start-nacos.bat`，确认控制台 8849 可访问、共享配置已创建 |
-| 端口占用 | `netstat -ano | findstr <端口>` 查到 PID 后结束对应进程（涉及 8080 / 9200-9204 / 8848 / 8849 / 5173） |
-| GitHub 相关操作下载失败 | 本机代理走 `127.0.0.1:7897`，确认代理隧道可用 |
-| 修改权限/角色后不生效 | 检查 Redis 快照（会话与数据权限缓存）与 auth-service 日志（JWT 校验 / 撤销），必要时清缓存后重新登录 |
+| 服务注册失败（启动日志报 Nacos 连接错误） | 先 `scripts/start-nacos.bat`，确认控制台 8849 可访问、共享配置已创建 |
+| 端口占用 | `netstat -ano | findstr <端口>` 查 PID 后结束进程（8080 / 9200-9204 / 8848 / 8849 / 5173） |
+| GitHub 相关下载失败（如嵌入模型） | 本机代理走 `127.0.0.1:7897`，确认代理隧道可用 |
+| 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
+| 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |
+
+## 文档
+
+- 设计文档与验收清单在 `docs/`（**本地文档，按约定不入库**）：包括 AI 医院助手 V1.0 设计、Spring Cloud 迁移设计、E2E 验收清单（本地手动执行版）
+- 接口与架构细节以代码注释与 `docs/superpowers/` 下的 spec 为准
+
+## 贡献
+
+欢迎 issue 与 PR。开发约定：
+
+1. 后端遵循现有模块边界（域独立包根），公共能力放 `common` / `common-security` / `api`
+2. 主分支受保护思路：功能开发开分支，PR 描述关联验收方式；提交信息使用 `feat/fix/docs/chore(scope):` 前缀
+3. 涉及 AI 输出与患者数据的功能，须遵守「免责文案 + 医院边界隔离 + 风控拦截」三项底线
+
+## 许可
+
+本项目当前未附许可证文件，默认仅供学习与交流使用；如需开源分发，请先补充 `LICENSE`（例如 MIT）。
+
+---
+
+**致谢**：DeepSeek（大模型）· 高德开放平台（天气数据）· Alibaba Nacos · Spring AI（本地嵌入模型 all-MiniLM-L6-v2）
