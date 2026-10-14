@@ -9,6 +9,7 @@ import com.api.dto.ProfileUpdateDTO;
 import com.auth.dto.LoginRequest;
 import com.auth.service.AuthService;
 import com.auth.snapshot.SnapshotManager;
+import com.auth.support.LoginAttemptGuard;
 import com.auth.vo.LoginVO;
 import com.auth.vo.UserInfoVO;
 import com.common.auth.UserSnapshot;
@@ -47,6 +48,7 @@ public class AuthServiceImpl implements AuthService {
     private final TokenRevocationService tokenRevocationService;
     private final UserSnapshotStore userSnapshotStore;
     private final SnapshotManager snapshotManager;
+    private final LoginAttemptGuard loginAttemptGuard;
 
     /**
      * 登录认证（账号密码校验经 Feign 下沉用户中心，通过后签发 JWT 并写快照）
@@ -56,15 +58,18 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public LoginVO login(LoginRequest request) {
+        loginAttemptGuard.assertNotLocked(SecurityConstants.IDENTITY_STAFF, request.getUsername());
         // 账号不存在/密码错误/账号禁用时由用户中心返回失败码，文案逐字透传
         AuthRequest authRequest = new AuthRequest();
         authRequest.setUsername(request.getUsername());
         authRequest.setPassword(request.getPassword());
         Result<AuthInfoDTO> result = userClient.authenticate(authRequest);
         if (result == null || result.getCode() != 200 || result.getData() == null) {
+            loginAttemptGuard.recordFailure(SecurityConstants.IDENTITY_STAFF, request.getUsername());
             throw new BusinessException(result == null ? "登录失败" : result.getMsg());
         }
         AuthInfoDTO info = result.getData();
+        loginAttemptGuard.reset(SecurityConstants.IDENTITY_STAFF, request.getUsername());
         String token = jwtTokenService.issue(info.getUser().getId());
         snapshotManager.saveFromLogin(info.getUser().getId(), info);
         LoginVO vo = new LoginVO();
@@ -80,15 +85,18 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public LoginVO patientLogin(LoginRequest request) {
+        loginAttemptGuard.assertNotLocked(SecurityConstants.IDENTITY_PATIENT, request.getUsername());
         // 手机号不存在/密码错误/账号禁用时由患者中心返回失败码，文案逐字透传
         AuthRequest authRequest = new AuthRequest();
         authRequest.setUsername(request.getUsername());
         authRequest.setPassword(request.getPassword());
         Result<AuthInfoDTO> result = patientClient.authenticate(authRequest);
         if (result == null || result.getCode() != 200 || result.getData() == null) {
+            loginAttemptGuard.recordFailure(SecurityConstants.IDENTITY_PATIENT, request.getUsername());
             throw new BusinessException(result == null ? "登录失败" : result.getMsg());
         }
         AuthInfoDTO info = result.getData();
+        loginAttemptGuard.reset(SecurityConstants.IDENTITY_PATIENT, request.getUsername());
         String token = jwtTokenService.issue(info.getUser().getId(), SecurityConstants.IDENTITY_PATIENT);
         snapshotManager.saveFromPatientLogin(info.getUser().getId(), info);
         LoginVO vo = new LoginVO();

@@ -30,6 +30,10 @@ security:
     expiration-seconds: 3600
   internal:
     token: ${INTERNAL_TOKEN:aidaima-internal-token-please-override}
+  login:
+    max-failures: ${LOGIN_MAX_FAILURES:5}
+    window-minutes: ${LOGIN_WINDOW_MINUTES:15}
+    lock-minutes: ${LOGIN_LOCK_MINUTES:15}
 
 logging:
   level:
