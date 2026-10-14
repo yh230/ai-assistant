@@ -1,6 +1,7 @@
 package com.aiassistant.controller;
 
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.aiassistant.dto.ChatRequest;
 import com.aiassistant.dto.ChatResponse;
 import com.aiassistant.dto.ModelInfo;
@@ -131,6 +132,7 @@ public class ChatController {
      * @param sessionId 会话标识
      * @return 操作结果
      */
+    @OperLog(module = "AI 对话", action = "删除会话")
     @DeleteMapping("/session/{sessionId}")
     public Result<Void> deleteSession(@PathVariable String sessionId) {
         chatService.deleteSession(sessionId);

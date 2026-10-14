@@ -1,6 +1,7 @@
 package com.aiassistant.controller;
 
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.aiassistant.dto.RoleForm;
 import com.aiassistant.entity.Role;
 import com.aiassistant.service.AssistantRoleService;
@@ -62,6 +63,7 @@ public class AssistantRoleController {
      * @param form 角色表单
      * @return 新建的角色
      */
+    @OperLog(module = "助手角色", action = "新增助手角色")
     @PostMapping("/admin")
     public Result<Role> create(@RequestBody RoleForm form) {
         return Result.success(assistantRoleService.create(form));
@@ -75,6 +77,7 @@ public class AssistantRoleController {
      * @param form 角色表单
      * @return 更新后的角色
      */
+    @OperLog(module = "助手角色", action = "修改助手角色")
     @PutMapping("/admin/{id}")
     public Result<Role> update(@PathVariable String id, @RequestBody RoleForm form) {
         return Result.success(assistantRoleService.update(id, form));
@@ -87,6 +90,7 @@ public class AssistantRoleController {
      * @param id 角色标识
      * @return 操作结果
      */
+    @OperLog(module = "助手角色", action = "删除助手角色")
     @DeleteMapping("/admin/{id}")
     public Result<Void> delete(@PathVariable String id) {
         assistantRoleService.delete(id);

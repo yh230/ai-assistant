@@ -7,6 +7,7 @@ import com.auth.service.AuthService;
 import com.auth.vo.LoginVO;
 import com.auth.vo.UserInfoVO;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -63,12 +64,14 @@ public class AuthController {
         return Result.success(authService.getProfile());
     }
 
+    @OperLog(module = "个人中心", action = "修改资料")
     @PostMapping("/profile")
     public Result<Void> updateProfile(@RequestBody ProfileUpdateDTO dto) {
         authService.updateProfile(dto);
         return Result.success();
     }
 
+    @OperLog(module = "个人中心", action = "修改密码")
     @PostMapping("/profile/password")
     public Result<Void> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
         authService.changePassword(dto);

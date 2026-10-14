@@ -5,6 +5,7 @@ import com.aiassistant.dto.PatientChatRequest;
 import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.service.PatientChatService;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -57,6 +58,7 @@ public class PatientChatController {
      * @param actionId 确认ID
      * @return SSE 事件流（token/done/error）
      */
+    @OperLog(module = "患者对话", action = "确认执行")
     @PostMapping(value = "/action/{actionId}/confirm", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> confirm(@PathVariable String actionId) {
         log.info("收到写操作确认请求: actionId={}", actionId);
@@ -69,6 +71,7 @@ public class PatientChatController {
      * @param actionId 确认ID
      * @return 操作结果
      */
+    @OperLog(module = "患者对话", action = "取消待确认")
     @PostMapping("/action/{actionId}/cancel")
     public Result<Void> cancelAction(@PathVariable String actionId) {
         log.info("收到写操作取消请求: actionId={}", actionId);
@@ -114,6 +117,7 @@ public class PatientChatController {
      * @param sessionId 会话ID
      * @return 操作结果
      */
+    @OperLog(module = "患者对话", action = "删除会话")
     @DeleteMapping("/session/{sessionId}")
     public Result<Void> deleteSession(@PathVariable String sessionId) {
         patientChatService.deleteSession(sessionId);

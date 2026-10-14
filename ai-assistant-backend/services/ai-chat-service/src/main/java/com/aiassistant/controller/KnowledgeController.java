@@ -4,6 +4,7 @@ import com.aiassistant.dto.KnowledgeDocumentDTO;
 import com.aiassistant.service.KnowledgeService;
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -27,6 +28,7 @@ public class KnowledgeController {
      * @param file 上传文件
      * @return 新文档 ID
      */
+    @OperLog(module = "知识库", action = "上传文档")
     @PostMapping("/upload")
     public Result<Long> upload(@RequestParam("file") MultipartFile file) {
         return Result.success(knowledgeService.upload(file));
@@ -51,6 +53,7 @@ public class KnowledgeController {
      * @param id 文档 ID
      * @return 空结果
      */
+    @OperLog(module = "知识库", action = "删除文档")
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         knowledgeService.delete(id);
