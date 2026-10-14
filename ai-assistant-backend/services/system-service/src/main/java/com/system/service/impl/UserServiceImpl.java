@@ -223,7 +223,7 @@ public class UserServiceImpl implements UserService {
     }
 
     /**
-     * 更新用户并重建角色绑定；角色/绑定/状态变更后失效权限快照，禁用同时踢下线
+     * 更新用户并重建角色绑定；角色/绑定/状态/密码变更后失效权限快照，改密或禁用同时踢下线
      *
      * @param id 用户 ID
      * @param dto 用户更新入参
@@ -240,7 +240,8 @@ public class UserServiceImpl implements UserService {
         user.setEmail(dto.getEmail());
         user.setStatus(dto.getStatus());
         // 重置密码场景（hospital 经 Feign 传入）：null 不改密码，空回退默认密码
-        if (dto.getPassword() != null) {
+        boolean passwordUpdated = dto.getPassword() != null;
+        if (passwordUpdated) {
             user.setPassword(PasswordSupport.encodeOrDefault(dto.getPassword(), passwordEncoder));
         }
         // 医院/科室绑定仅在有传值时覆盖（系统管理端不传绑定字段，医院端按数据权限收敛后传入）
@@ -257,7 +258,8 @@ public class UserServiceImpl implements UserService {
             UserRoleBinder.bind(userRoleMapper, id, dto.getRoleIds());
         }
         evictAuth(id);
-        if (StatusConstants.DISABLED.equals(dto.getStatus())) {
+        // 改密或禁用后踢下线：旧 access 与 refresh 均失效，需重新登录
+        if (passwordUpdated || StatusConstants.DISABLED.equals(dto.getStatus())) {
             kickout(id);
         }
     }
