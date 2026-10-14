@@ -3,6 +3,7 @@ package com.auth.controller;
 import com.api.dto.ChangePasswordDTO;
 import com.api.dto.ProfileUpdateDTO;
 import com.auth.dto.LoginRequest;
+import com.auth.dto.RefreshTokenRequest;
 import com.auth.service.AuthService;
 import com.auth.vo.LoginVO;
 import com.auth.vo.UserInfoVO;
@@ -18,9 +19,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 认证接口：登录、登出、获取当前用户信息
+ * 认证接口：登录、登出、令牌刷新、获取当前用户信息
  * <p>
- * 登出撤销当前令牌，无需请求参数
+ * 登出撤销当前令牌并可携带 refresh token 一并撤销
  *
  * @author yh
  * @date 2026-10-12
@@ -49,8 +50,32 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public Result<Void> logout(HttpServletRequest request) {
-        authService.logout(request);
+    public Result<Void> logout(HttpServletRequest request,
+                               @RequestBody(required = false) RefreshTokenRequest body) {
+        authService.logout(request, body == null ? null : body.getRefreshToken());
+        return Result.success();
+    }
+
+    /**
+     * 刷新令牌（旧 refresh token 轮换失效，返回新 access + 新 refresh token）
+     *
+     * @param request 刷新入参
+     * @return 新令牌对
+     */
+    @PostMapping("/refresh")
+    public Result<LoginVO> refresh(@RequestBody RefreshTokenRequest request) {
+        return Result.success(authService.refresh(request.getRefreshToken()));
+    }
+
+    /**
+     * 撤销刷新令牌（登出兜底，幂等）
+     *
+     * @param request 刷新令牌入参
+     * @return 空结果
+     */
+    @PostMapping("/refresh/revoke")
+    public Result<Void> revokeRefresh(@RequestBody RefreshTokenRequest request) {
+        authService.revokeRefresh(request.getRefreshToken());
         return Result.success();
     }
 

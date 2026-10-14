@@ -8,9 +8,9 @@ import com.auth.vo.UserInfoVO;
 import jakarta.servlet.http.HttpServletRequest;
 
 /**
- * 认证服务：登录、登出、获取当前用户信息
+ * 认证服务：登录、登出、令牌刷新、获取当前用户信息
  * <p>
- * 登录凭据校验/资料与密码更新经 Feign 调用用户中心；登出撤销当前令牌
+ * 登录凭据校验/资料与密码更新经 Feign 调用用户中心；登出撤销当前令牌并可一并撤销刷新令牌
  *
  * @author yh
  * @date 2026-10-12
@@ -31,9 +31,27 @@ public interface AuthService {
     LoginVO patientLogin(LoginRequest request);
 
     /**
-     * 登出：撤销当前令牌
+     * 登出：撤销当前令牌，refreshToken 可空，携带则一并撤销
+     *
+     * @param request HTTP 请求（携带 Authorization 头）
+     * @param refreshToken 刷新令牌串（可空）
      */
-    void logout(HttpServletRequest request);
+    void logout(HttpServletRequest request, String refreshToken);
+
+    /**
+     * 刷新令牌（轮换：消费旧 refresh token，签发新 access 与新 refresh token）
+     *
+     * @param refreshToken 刷新令牌串
+     * @return 新令牌对
+     */
+    LoginVO refresh(String refreshToken);
+
+    /**
+     * 撤销刷新令牌（幂等）
+     *
+     * @param refreshToken 刷新令牌串
+     */
+    void revokeRefresh(String refreshToken);
 
     /**
      * 获取当前登录用户的信息、角色、按钮权限、菜单树。

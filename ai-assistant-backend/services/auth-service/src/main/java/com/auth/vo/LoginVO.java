@@ -16,4 +16,7 @@ public class LoginVO {
 
     /** 令牌类型，固定 Bearer */
     private String tokenType = "Bearer";
+
+    /** 刷新令牌（随机串，用于静默续期） */
+    private String refreshToken;
 }

@@ -28,6 +28,7 @@ security:
   jwt:
     secret: ${JWT_SECRET:aidaima-dev-jwt-secret-please-override-0123456789}
     expiration-seconds: 3600
+    refresh-expiration-seconds: ${JWT_REFRESH_EXPIRATION_SECONDS:604800}
   internal:
     token: ${INTERNAL_TOKEN:aidaima-internal-token-please-override}
   login:

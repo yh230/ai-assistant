@@ -17,6 +17,7 @@ import com.common.auth.UserSnapshotStore;
 import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.jwt.JwtTokenService;
+import com.common.jwt.RefreshTokenStore;
 import com.common.jwt.TokenRevocationService;
 import com.common.result.Result;
 import com.common.security.SecurityUtils;
@@ -31,8 +32,9 @@ import org.springframework.util.StringUtils;
  * 认证服务实现（认证中心）
  * <p>
  * 员工登录凭据校验经 {@link UserClient#authenticate} 下沉用户中心、患者登录经 {@link PatientClient#authenticate}
- * 下沉患者中心，通过后签发 JWT 并写权限快照；
- * 登出按 jti 撤销当前令牌；getInfo 优先权限快照，菜单树经用户中心实时组装
+ * 下沉患者中心，通过后签发 JWT 与刷新令牌并写权限快照；
+ * 刷新令牌走轮换（消费旧 refresh token 签发新令牌对）；登出按 jti 撤销当前令牌并可一并撤销刷新令牌；
+ * getInfo 优先权限快照，菜单树经用户中心实时组装
  *
  * @author yh
  * @date 2026-10-12
@@ -49,12 +51,13 @@ public class AuthServiceImpl implements AuthService {
     private final UserSnapshotStore userSnapshotStore;
     private final SnapshotManager snapshotManager;
     private final LoginAttemptGuard loginAttemptGuard;
+    private final RefreshTokenStore refreshTokenStore;
 
     /**
-     * 登录认证（账号密码校验经 Feign 下沉用户中心，通过后签发 JWT 并写快照）
+     * 登录认证（账号密码校验经 Feign 下沉用户中心，通过后签发 JWT 与刷新令牌并写快照）
      *
      * @param request 登录入参（账号/密码）
-     * @return 登录结果（JWT 令牌）
+     * @return 登录结果（JWT 令牌与刷新令牌）
      */
     @Override
     public LoginVO login(LoginRequest request) {
@@ -74,14 +77,15 @@ public class AuthServiceImpl implements AuthService {
         snapshotManager.saveFromLogin(info.getUser().getId(), info);
         LoginVO vo = new LoginVO();
         vo.setToken(token);
+        vo.setRefreshToken(refreshTokenStore.issue(SecurityConstants.IDENTITY_STAFF, info.getUser().getId()));
         return vo;
     }
 
     /**
-     * 患者登录认证（凭据校验经 Feign 下沉患者中心，通过后签发 PATIENT 身份 JWT 并写患者快照）
+     * 患者登录认证（凭据校验经 Feign 下沉患者中心，通过后签发 PATIENT 身份 JWT 与刷新令牌并写患者快照）
      *
      * @param request 登录入参（username=手机号）
-     * @return 登录结果（JWT 令牌）
+     * @return 登录结果（JWT 令牌与刷新令牌）
      */
     @Override
     public LoginVO patientLogin(LoginRequest request) {
@@ -101,18 +105,21 @@ public class AuthServiceImpl implements AuthService {
         snapshotManager.saveFromPatientLogin(info.getUser().getId(), info);
         LoginVO vo = new LoginVO();
         vo.setToken(token);
+        vo.setRefreshToken(refreshTokenStore.issue(SecurityConstants.IDENTITY_PATIENT, info.getUser().getId()));
         return vo;
     }
 
     /**
-     * 登出：解析请求头 Bearer 令牌并撤销（jti 入 Redis 黑名单，TTL=剩余有效期）
+     * 登出：先撤销携带的刷新令牌（可空），再解析请求头 Bearer 令牌并撤销（jti 入 Redis 黑名单，TTL=剩余有效期）
      * <p>
-     * 解析失败静默返回
+     * 令牌解析失败静默返回
      *
      * @param request HTTP 请求（携带 Authorization 头）
+     * @param refreshToken 刷新令牌串（可空）
      */
     @Override
-    public void logout(HttpServletRequest request) {
+    public void logout(HttpServletRequest request, String refreshToken) {
+        refreshTokenStore.revoke(refreshToken);
         String header = request.getHeader(SecurityConstants.AUTHORIZATION);
         if (!StringUtils.hasText(header) || !header.startsWith(SecurityConstants.TOKEN_PREFIX)) {
             return;
@@ -125,6 +132,38 @@ public class AuthServiceImpl implements AuthService {
             // 无效/过期/被篡改令牌：静默返回
             log.debug("登出令牌解析失败: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 刷新令牌（轮换：消费旧 RT → 校验踢下线 → 签发新 access 与新 RT）
+     *
+     * @param refreshToken 刷新令牌串
+     * @return 新令牌对
+     */
+    @Override
+    public LoginVO refresh(String refreshToken) {
+        RefreshTokenStore.RefreshTokenInfo info = refreshTokenStore.consume(refreshToken);
+        if (info == null) {
+            throw new BusinessException("登录已过期，请重新登录");
+        }
+        long kickedAt = tokenRevocationService.kickoutAt(info.identity(), info.userId());
+        if (kickedAt != 0 && info.issuedAtMillis() <= kickedAt) {
+            throw new BusinessException("登录已过期，请重新登录");
+        }
+        LoginVO vo = new LoginVO();
+        vo.setToken(jwtTokenService.issue(info.userId(), info.identity()));
+        vo.setRefreshToken(refreshTokenStore.issue(info.identity(), info.userId()));
+        return vo;
+    }
+
+    /**
+     * 撤销刷新令牌（幂等）
+     *
+     * @param refreshToken 刷新令牌串
+     */
+    @Override
+    public void revokeRefresh(String refreshToken) {
+        refreshTokenStore.revoke(refreshToken);
     }
 
     /**
