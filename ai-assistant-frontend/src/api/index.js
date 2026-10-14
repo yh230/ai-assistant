@@ -50,7 +50,7 @@ api.interceptors.response.use(
       if (status === 401) {
         forceToLogin()
       }
-      const msg = (data && data.msg) || `请求错误 (${status})`
+      const msg = status === 429 ? '操作过于频繁，请稍后再试' : ((data && data.msg) || `请求错误 (${status})`)
       return Promise.reject(new Error(msg))
     }
     return Promise.reject(new Error('网络异常或服务不可用'))

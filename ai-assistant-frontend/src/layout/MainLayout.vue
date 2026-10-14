@@ -55,6 +55,12 @@
             </svg>
             <span>菜单管理</span>
           </router-link>
+          <router-link v-if="hasPerm(PERMS.SYSTEM_OPERLOG_LIST)" to="/system/operlog" class="nav-item sub" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/>
+            </svg>
+            <span>操作日志</span>
+          </router-link>
         </template>
 
         <!-- 医院管理（按数据权限相关功能权限渲染，自动数据过滤由后端完成） -->
@@ -184,7 +190,8 @@ const hasAnySystemPerm = computed(() =>
   hasAnyPerm([
     PERMS.SYSTEM_USER_LIST,
     PERMS.SYSTEM_ROLE_LIST,
-    PERMS.SYSTEM_MENU_LIST
+    PERMS.SYSTEM_MENU_LIST,
+    PERMS.SYSTEM_OPERLOG_LIST
   ])
 )
 

@@ -3,6 +3,7 @@ export const PERMS = {
   SYSTEM_USER_LIST: 'system:user:list',
   SYSTEM_ROLE_LIST: 'system:role:list',
   SYSTEM_MENU_LIST: 'system:menu:list',
+  SYSTEM_OPERLOG_LIST: 'system:operlog:list',
   HOSPITAL_MANAGE: 'hospital:manage',
   HOSPITAL_EMPLOYEE_LIST: 'hospital:employee:list',
   HOSPITAL_ATTENDANCE_LIST: 'hospital:attendance:list',

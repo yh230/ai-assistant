@@ -71,6 +71,12 @@ const routes = [
         component: () => import('../views/MenuManageView.vue'),
         meta: { title: '菜单管理', requiresAuth: true, perm: PERMS.SYSTEM_MENU_LIST }
       },
+      {
+        path: 'system/operlog',
+        name: 'OperLog',
+        component: () => import('../views/OperLogView.vue'),
+        meta: { title: '操作日志', requiresAuth: true, perm: PERMS.SYSTEM_OPERLOG_LIST }
+      },
       // ===== 医院科室人员 & 出勤模块（数据权限：后端按登录人自动过滤）=====
       {
         path: 'hospital/info',
