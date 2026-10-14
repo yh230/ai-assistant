@@ -40,5 +40,7 @@ public class ChatResponse {
         private String role;
         private String content;
         private LocalDateTime createdAt;
+        /** 引用来源 JSON（无来源为空/为 null） */
+        private String referenceJson;
     }
 }

@@ -10,6 +10,7 @@ import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
 import com.aiassistant.entity.PendingAction;
+import com.aiassistant.rag.KnowledgeReferencesBuilder;
 import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
@@ -109,6 +110,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
     private final KnowledgeVectorStore knowledgeVectorStore;
+    private final KnowledgeReferencesBuilder knowledgeReferencesBuilder;
 
     // ==================== 流式对话（核心链路） ====================
 
@@ -137,6 +139,14 @@ public class PatientChatServiceImpl implements PatientChatService {
         ChatSession session = ensureSession(request, user);
         saveMessage(session.getSessionId(), "user", request.getMessage());
 
+        // 急症红线优先：命中即短路（不调模型），以正常消息返回紧急就医指引
+        if (safetyFilter.emergencyHit(request.getMessage())) {
+            String emergencyMessage = safetyFilter.emergencyMessage();
+            saveMessage(session.getSessionId(), "assistant", emergencyMessage);
+            log.info("输入侧命中急症红线，短路返回就医指引 sessionId={}", session.getSessionId());
+            return new PatientChatContext(session, user, List.of(), "", request.getMessage(), "", emergencyMessage);
+        }
+
         // 输入侧风控：命中敏感词不调用大模型，落库标准文案后以 error 事件输出
         if (safetyFilter.blockedInput(request.getMessage())) {
             String blockedMessage = safetyFilter.blockedMessage();
@@ -152,19 +162,22 @@ public class PatientChatServiceImpl implements PatientChatService {
                         ? new UserMessage(m.getContent()) : new AssistantMessage(m.getContent())))
                 .toList();
         String systemPrompt = resolvePrompt(session.getSessionType());
+        String referenceJson = "";
         if (TYPE_RAG.equals(session.getSessionType())) {
             List<Document> hits = knowledgeVectorStore.search(user.getHospitalId(), request.getMessage(),
                     aiProperties.getRag().getTopK(), aiProperties.getRag().getSimilarityThreshold());
             systemPrompt = systemPrompt + "\n\n" + buildKnowledgeContext(hits);
+            referenceJson = knowledgeReferencesBuilder.build(hits, aiProperties.getRag().getMaxReferences());
         }
 
         log.info("患者流式对话 sessionId={}, sessionType={}, 历史消息数={}",
                 session.getSessionId(), session.getSessionType(), history.size());
-        return new PatientChatContext(session, user, contextMessages, systemPrompt, request.getMessage());
+        return new PatientChatContext(session, user, contextMessages, systemPrompt, request.getMessage(), referenceJson, null);
     }
 
     /**
-     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级，末尾追加免责 token）+ 输出侧风控兜底 + 写操作确认事件 + 结束事件
+     * 构建完整回复流：会话事件 + 急症短路分支或内容流（AI 或本地降级，末尾追加免责 token）
+     * + 输出侧风控兜底 + references 事件 + 写操作确认事件 + 结束事件
      *
      * @param ctx 患者聊天上下文
      * @return SSE 事件流
@@ -176,9 +189,24 @@ public class PatientChatServiceImpl implements PatientChatService {
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
+        // 急症红线短路：单条消息 + 落库 + 结束（不调模型、不追加免责、不装配工具、不检查待确认）
+        if (ctx.emergencyReply() != null) {
+            ServerSentEvent<String> emergencyEvent = ServerSentEvent.builder(ctx.emergencyReply())
+                    .event(ChatConstants.EVENT_TOKEN)
+                    .build();
+            ServerSentEvent<String> emergencyDone = ServerSentEvent.builder(toJson(Map.of("localFallback", false)))
+                    .event(ChatConstants.EVENT_DONE)
+                    .build();
+            return Flux.concat(Mono.just(sessionEvent), Mono.just(emergencyEvent),
+                    Mono.fromRunnable(() -> persistReplyAsync(sessionId, ctx.emergencyReply(), null))
+                            .then(Mono.<ServerSentEvent<String>>empty()),
+                    Mono.just(emergencyDone));
+        }
+
         boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
         AtomicBoolean persisted = new AtomicBoolean(false);
+        AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuilder full = new StringBuilder();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
                 ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, true))
@@ -189,8 +217,17 @@ public class PatientChatServiceImpl implements PatientChatService {
                         .event(ChatConstants.EVENT_DONE)
                         .build());
 
+        // 引用来源：仅在模型作答、未降级、未被输出风控拦截且有命中时下发（降级/拦截时展示来源会误导）
+        Mono<ServerSentEvent<String>> referencesEvent = Mono.defer(() ->
+                (blocked.get() || fallback.get() || ctx.referenceJson().isEmpty())
+                        ? Mono.empty()
+                        : Mono.just(ServerSentEvent.builder(ctx.referenceJson())
+                                .event(ChatConstants.EVENT_REFERENCES)
+                                .build()));
+
         return Flux.concat(Mono.just(sessionEvent), contentFlux,
-                outputSafetyGuard(sessionId, full, persisted),
+                outputSafetyGuard(ctx, sessionId, full, persisted, fallback, blocked),
+                referencesEvent,
                 buildConfirmRequiredEvent(sessionId), doneEvent)
                 .doOnCancel(() -> handleClientCancel(sessionId, full, persisted));
     }
@@ -308,27 +345,34 @@ public class PatientChatServiceImpl implements PatientChatService {
      * 输出侧风控兜底：内容流结束后对累计正文做敏感词校验，命中则丢弃生成内容改持久化标准文案并追加 error 事件
      * <p>
      * 判定仅扫描模型/本地生成的正文（不含免责文案与固定前置话术，防关键词与免责重叠致全量误拦）；
-     * token 已流出的场景前端以 error 文案为准；未命中则按「正文 + 免责」持久化（AI 与本地降级分支同款）
+     * token 已流出的场景前端以 error 文案为准；未命中则按「正文 + 免责」持久化（AI 与本地降级分支同款），
+     * 模型作答未降级时引用 JSON 随消息一并持久化
      *
+     * @param ctx       患者聊天上下文
      * @param sessionId 会话ID
      * @param full      回复正文累积器
      * @param persisted 已持久化标记（客户端断开兜底落库去重用）
+     * @param fallback  降级标记（降级回复不持久化引用）
+     * @param blocked   输出侧拦截标记（供 references 事件下发判定）
      * @return 命中时输出 error 事件流，未命中则为空流
      */
-    private Mono<ServerSentEvent<String>> outputSafetyGuard(String sessionId, StringBuilder full,
-                                                            AtomicBoolean persisted) {
+    private Mono<ServerSentEvent<String>> outputSafetyGuard(PatientChatContext ctx, String sessionId,
+                                                            StringBuilder full, AtomicBoolean persisted,
+                                                            AtomicBoolean fallback, AtomicBoolean blocked) {
         return Mono.defer(() -> {
             String body = full.toString();
             if (safetyFilter.blockedInput(body)) {
+                blocked.set(true);
                 persisted.set(true);
-                persistReplyAsync(sessionId, safetyFilter.blockedMessage());
+                persistReplyAsync(sessionId, safetyFilter.blockedMessage(), null);
                 log.warn("输出侧命中风控敏感词，已拦截并改持久化标准文案 sessionId={}", sessionId);
                 return Mono.just(ServerSentEvent.builder(toJson(Map.of("message", safetyFilter.blockedMessage())))
                         .event(ChatConstants.EVENT_ERROR)
                         .build());
             }
             persisted.set(true);
-            persistReplyAsync(sessionId, body + "\n\n" + aiProperties.getDisclaimer());
+            String referenceJson = (!fallback.get() && !ctx.referenceJson().isEmpty()) ? ctx.referenceJson() : null;
+            persistReplyAsync(sessionId, body + "\n\n" + aiProperties.getDisclaimer(), referenceJson);
             return Mono.empty();
         });
     }
@@ -343,7 +387,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private void handleClientCancel(String sessionId, StringBuilder full, AtomicBoolean persisted) {
         log.info("SSE 客户端断开: sessionId={}", sessionId);
         if (persisted.compareAndSet(false, true) && full.length() > 0) {
-            persistReplyAsync(sessionId, full + "\n\n" + aiProperties.getDisclaimer());
+            persistReplyAsync(sessionId, full + "\n\n" + aiProperties.getDisclaimer(), null);
         }
     }
 
@@ -413,7 +457,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         log.info("患者确认写操作 actionId={}, tool={}, 会话={}, 结果={}",
                 actionId, action.getToolName(), session.getSessionId(), resultText);
         return new PatientChatContext(session, user, contextMessages,
-                resolvePrompt(session.getSessionType()), confirmMessage);
+                resolvePrompt(session.getSessionType()), confirmMessage, "", null);
     }
 
     /**
@@ -427,6 +471,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
         AtomicBoolean persisted = new AtomicBoolean(false);
+        AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuilder full = new StringBuilder();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
                 ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, false))
@@ -437,7 +482,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                         .event(ChatConstants.EVENT_DONE)
                         .build());
 
-        return Flux.concat(contentFlux, outputSafetyGuard(sessionId, full, persisted), doneEvent)
+        return Flux.concat(contentFlux, outputSafetyGuard(ctx, sessionId, full, persisted, fallback, blocked), doneEvent)
                 .doOnCancel(() -> handleClientCancel(sessionId, full, persisted));
     }
 
@@ -469,6 +514,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                         .role(m.getRole())
                         .content(m.getContent())
                         .createdAt(m.getCreatedAt())
+                        .referenceJson(m.getReferenceJson())
                         .build())
                 .collect(Collectors.toList());
         return ChatResponse.builder()
@@ -644,26 +690,29 @@ public class PatientChatServiceImpl implements PatientChatService {
     /**
      * 异步落库 AI 回复（卸载到弹性线程池，避免阻塞响应流）
      *
-     * @param sessionId 会话ID
-     * @param content   回复内容
+     * @param sessionId     会话ID
+     * @param content       回复内容
+     * @param referenceJson 引用来源 JSON（无来源传 null）
      */
-    private void persistReplyAsync(String sessionId, String content) {
+    private void persistReplyAsync(String sessionId, String content, String referenceJson) {
         if (content == null || content.isBlank()) {
             return;
         }
-        Schedulers.boundedElastic().schedule(() -> saveAssistantMessage(sessionId, content));
+        Schedulers.boundedElastic().schedule(() -> saveAssistantMessage(sessionId, content, referenceJson));
     }
 
     /**
      * 落库 AI 回复并刷新会话更新时间（事务内）
      *
-     * @param sessionId 会话ID
-     * @param content   回复内容
+     * @param sessionId     会话ID
+     * @param content       回复内容
+     * @param referenceJson 引用来源 JSON（无来源传 null）
      */
-    private void saveAssistantMessage(String sessionId, String content) {
+    private void saveAssistantMessage(String sessionId, String content, String referenceJson) {
         new TransactionTemplate(txManager).executeWithoutResult(status -> {
             messageRepository.save(ChatMessage.builder()
-                    .sessionId(sessionId).role("assistant").content(content).build());
+                    .sessionId(sessionId).role("assistant").content(content)
+                    .referenceJson(referenceJson).build());
             sessionRepository.findBySessionId(sessionId).ifPresent(s -> {
                 s.setUpdatedAt(LocalDateTime.now());
                 sessionRepository.save(s);
@@ -732,19 +781,23 @@ public class PatientChatServiceImpl implements PatientChatService {
     // ==================== 内部上下文记录 ====================
 
     /**
-     * 患者流式聊天上下文（不可变值对象）
+     * 患者聊天上下文（流式对话单次请求的装配结果）
      *
-     * @param session      归属当前患者的会话实体
-     * @param user         当前患者快照
-     * @param messages     组装好的 Spring AI 上下文消息
-     * @param systemPrompt 最终系统提示词
-     * @param userMessage  当前用户消息
+     * @param session       归属会话
+     * @param user          当前患者快照
+     * @param messages      组装好的 Spring AI 上下文消息
+     * @param systemPrompt  最终系统提示词
+     * @param userMessage   当前用户消息
+     * @param referenceJson 引用来源 JSON（RAG 命中时非空；无来源为空串）
+     * @param emergencyReply 急症红线短路回复（命中时非 null，服务层据此走短路链路）
      */
     private record PatientChatContext(
             ChatSession session,
             UserSnapshot user,
             List<Message> messages,
             String systemPrompt,
-            String userMessage) {
+            String userMessage,
+            String referenceJson,
+            String emergencyReply) {
     }
 }

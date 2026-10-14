@@ -125,7 +125,8 @@ public class AdminChatServiceImpl implements AdminChatService {
         List<ChatResponse.ChatMessageDTO> messageDTOs =
                 messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
                         .map(m -> ChatResponse.ChatMessageDTO.builder()
-                                .role(m.getRole()).content(m.getContent()).createdAt(m.getCreatedAt()).build())
+                                .role(m.getRole()).content(m.getContent()).createdAt(m.getCreatedAt())
+                                .referenceJson(m.getReferenceJson()).build())
                         .collect(Collectors.toList());
         return ChatResponse.builder()
                 .sessionId(sessionId).messages(messageDTOs)
