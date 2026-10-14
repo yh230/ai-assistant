@@ -36,3 +36,11 @@ ARCHITECTURE.md
 
 # 本机密钥配置（真实值，不入库）
 application-local.yml
+
+# E2E test project（ai-assistant-e2e）
+ai-assistant-e2e/.venv/
+ai-assistant-e2e/.env
+ai-assistant-e2e/reports/
+ai-assistant-e2e/.pytest_cache/
+__pycache__/
+*.pyc
