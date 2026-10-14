@@ -7,7 +7,7 @@
 - **智能聊天**：SSE 流式输出（逐 token 实时推送）、Tool Calling（对话中直接查真实天气）、多会话管理、Markdown 渲染；
 - **天气查询**：实时天气 + 未来预报（高德开放平台数据）；
 - **聊天人设管理**：人设角色存数据库，页面自由增删改（DB 驱动，首次启动自动播种默认角色）；
-- **RBAC 员工权限**：Spring Security 登录鉴权（JWT + Redis 撤销）+ 角色/菜单/按钮权限（含个人中心、踢下线）。
+- **RBAC 员工权限**：Spring Security 登录鉴权（JWT + Redis 撤销）+ 角色/菜单/按钮权限（含个人中心、踢下线）；安全加固：登录失败锁定（默认 5 次错密锁 15 分钟）、公开接口网关按 IP 限流（登录/注册/匿名预约）、操作审计（关键写操作落 `sys_oper_log`，「系统管理 → 操作日志」页可查）。
 
 **另有业务模块**
 
@@ -48,7 +48,7 @@
 |------|------|
 | `src/api/` | axios 实例（拦截器统一处理鉴权与错误）+ 各模块接口封装 |
 | `src/router/` `src/store/` | 路由表与守卫、登录态（轻量单例，无 Pinia） |
-| `src/layout/` `src/views/` | 主布局（侧边栏按权限渲染，含「AI 助手」分组）+ 21 个业务页面（含患者端 2 页与管理端知识库/问诊记录页） |
+| `src/layout/` `src/views/` | 主布局（侧边栏按权限渲染，含「AI 助手」分组）+ 22 个业务页面（含患者端 2 页与管理端知识库/问诊记录/操作日志页） |
 | `src/components/` `src/composables/` | 通用组件（菜单树 / 轻提示）与管理页 CRUD 骨架 `useCrudPage` |
 | `src/utils/` | 时间格式化（`format.js`）、权限常量与判定（`perm.js`）、轻提示（`message.js`） |
 | `src/assets/` | 全局样式（含管理页公共样式段） |
@@ -147,7 +147,7 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 ## 七、AI 助手数据目录与验收清单
 
 - **`data/vector/`**：知识库向量文件目录（Nacos `ai.rag.vector-path` 默认 `data/vector`，相对 ai-chat-service 的启动工作目录，如 `ai-assistant-backend/services/ai-chat-service/data/vector/`），按医院分文件 `hospital_{id}.json`；服务启动时全量加载、上传/删除文档即时落盘重建。该目录为**运行产物**（服务启动时自动创建），不随仓库分发，请勿手工编辑。
-- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离、安全与并发补测共 28 项。
+- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离、安全与并发补测共 28 项，另含 2026-10-14 安全加固验收 5 项（登录失败锁定 / 公开接口限流 / 操作审计）。
 
 ## 八、常见问题
 
