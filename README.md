@@ -12,7 +12,10 @@
 **另有业务模块**
 
 - **医院人员与出勤**：多医院 / 多科室，按【医院-科室-角色】三级数据隔离，出勤多维统计；
-- **门诊挂号**：排班号源、预约取号、退号就诊、多维度统计（含公开的患者预约入口）。
+- **门诊挂号**：排班号源、预约取号、退号就诊、多维度统计（含公开的患者预约入口）；
+- **AI 医院助手（患者端）**：患者独立账号（注册/登录，绑定医院）、AI 导诊、AI 智能挂号（工具调用 + 二次确认）、知识库问答（RAG，管理员上传 md/txt）、AI 问诊记录与知识库管理。
+
+**患者端入口**：`http://localhost:5173/patient/login`（注册/登录）→ `http://localhost:5173/patient/chat`（导诊 / 知识库问答 / 闲聊）。
 
 ## 一、架构概览
 
@@ -30,11 +33,11 @@
 | `services/system-service/` | RBAC 用户中心：用户 / 角色 / 菜单 / 按钮权限 |
 | `services/hospital-service/` | 医院 / 科室 / 员工 / 出勤（后端自动数据权限过滤） |
 | `services/registration-service/` | 门诊挂号：排班 / 号源 / 预约取号 / 统计 |
-| `services/ai-chat-service/` | 聊天 / 天气 / 人设（Spring AI + JPA） |
+| `services/ai-chat-service/` | 聊天 / 天气 / 人设 / 患者导诊与知识库 / 管理端（Spring AI + JPA，RAG 向量） |
 
 | 数据库 | 归属服务 |
 |--------|----------|
-| `system_db` | system-service（RBAC 五表） |
+| `system_db` | system-service（RBAC 五表 + 患者账号表 `patient_user`） |
 | `hospital_db` | hospital-service |
 | `registration_db` | registration-service |
 | `chat_db` | ai-chat-service（表由 JPA 首次启动自动创建） |
@@ -45,7 +48,7 @@
 |------|------|
 | `src/api/` | axios 实例（拦截器统一处理鉴权与错误）+ 各模块接口封装 |
 | `src/router/` `src/store/` | 路由表与守卫、登录态（轻量单例，无 Pinia） |
-| `src/layout/` `src/views/` | 主布局（侧边栏按权限渲染）+ 17 个业务页面 |
+| `src/layout/` `src/views/` | 主布局（侧边栏按权限渲染，含「AI 助手」分组）+ 21 个业务页面（含患者端 2 页与管理端知识库/问诊记录页） |
 | `src/components/` `src/composables/` | 通用组件（菜单树 / 轻提示）与管理页 CRUD 骨架 `useCrudPage` |
 | `src/utils/` | 时间格式化（`format.js`）、权限常量与判定（`perm.js`）、轻提示（`message.js`） |
 | `src/assets/` | 全局样式（含管理页公共样式段） |
@@ -77,13 +80,15 @@
 
 执行 `ai-assistant-backend/sql/` 下的四个建库脚本，顺序：`system_db.sql` → `hospital_db.sql` → `registration_db.sql` → `chat_db.sql`（脚本含建库；chat 相关表由 JPA 首次启动自动创建，无需手工建表）。
 
+> AI 医院助手 V1.0 使用的 `system_db.patient_user`（患者账号表）已含在 `system_db.sql` 中；`registration.patient_id`（患者账号关联列）已含在 `registration_db.sql` 中。**已建库升级**：重跑 `system_db.sql` 补患者表、执行 `registration_db.sql` 末尾注释的 `ALTER TABLE registration ADD COLUMN patient_id ...` 补列（chat 库的 `pending_action`/`knowledge_document`/`chat_session` 新列由 JPA 自动补齐）。
+
 ### 2. 启动 Nacos
 
 运行 `scripts/start-nacos.bat`，控制台 `http://localhost:8849`（首次登录按提示初始化 admin 口令）。
 
 ### 3. 创建共享配置
 
-Nacos 控制台「配置管理 → 新建」，dataId 填 `common-shared.yaml`、group 填 `DEFAULT_GROUP`，内容粘贴 `scripts/nacos-common-shared.yaml` 文件全文（含 JWT 密钥、内部调用令牌、Redis 地址等）。
+Nacos 控制台「配置管理 → 新建」，dataId 填 `common-shared.yaml`、group 填 `DEFAULT_GROUP`，内容粘贴 `scripts/nacos-common-shared.yaml` 文件全文（含 JWT 密钥、内部调用令牌、Redis 地址，以及 **AI 助手 V1.0 的 `ai.*` 配置段**（prompt/免责文案/风控词/rag/限流阈值）与 `spring.ai.model.embedding: none`）。
 
 ### 4. 配置本机密钥（环境变量，PowerShell/CMD 通用）
 
@@ -99,6 +104,8 @@ setx AMAP_KEY 你的高德Key
 
 运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关；各窗口日志逐个出现 `Started` 后进入下一步）。
 
+> **ai-chat-service 首次启动说明**：知识库问答的向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会**自动从 GitHub 下载模型并加载，可能明显变慢**（下载缓存于系统临时目录 `%TEMP%\spring-ai-onnx-generative\`，网络受限时请确保代理可用或改用下述预置方式）；未配置 `DEEPSEEK_API_KEY` 时 AI 对话自动降级本地回复引擎，不影响启动。离线/加速部署：把 `all-MiniLM-L6-v2` 的 `.onnx` 模型文件放到本机任意路径，在该服务配置（Nacos `ai.rag.embedding-model-path`）填入完整路径即可（tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」，如 `all-MiniLM-L6-v2.onnx` + `all-MiniLM-L6-v2-tokenizer.json`）。
+
 ### 6. 启动前端
 
 ```bash
@@ -107,7 +114,7 @@ npm install
 npm run dev
 ```
 
-访问 `http://localhost:5173`（代理已指向网关 8080）。
+访问 `http://localhost:5173`（员工端，默认 admin/admin123；代理已指向网关 8080）；患者端入口 `http://localhost:5173/patient/login`。
 
 ## 四、端口一览表
 
@@ -137,7 +144,12 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 
 依赖走阿里云镜像（已配置在本机 Maven `conf/settings.xml`）；本机旧离线命令已作废。
 
-## 七、常见问题
+## 七、AI 助手数据目录与验收清单
+
+- **`data/vector/`**：知识库向量文件目录（Nacos `ai.rag.vector-path` 默认 `data/vector`，相对 ai-chat-service 的启动工作目录，如 `ai-assistant-backend/services/ai-chat-service/data/vector/`），按医院分文件 `hospital_{id}.json`；服务启动时全量加载、上传/删除文档即时落盘重建。该目录为**运行产物**（首次上传后自动创建），不随仓库分发，请勿手工编辑。
+- **E2E 验收清单**（本地文档，手动执行）：[`docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md`](docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md)——覆盖身份与越权、AI 导诊、智能挂号（二次确认）、RAG 知识库、安全底座、会话隔离共 24 项。
+
+## 八、常见问题
 
 | 问题 | 处理 |
 |------|------|
