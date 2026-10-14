@@ -82,6 +82,13 @@
               <div class="message-avatar">{{ msg.role === 'user' ? '我' : '医' }}</div>
               <div class="message-bubble">
                 <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
+                <div v-if="msg.references && msg.references.length" class="reference-block">
+                  <div class="reference-title">参考来源</div>
+                  <div v-for="(ref, ri) in msg.references" :key="ri" class="reference-item">
+                    <span class="reference-name">{{ ref.name }}</span>
+                    <span class="reference-snippet">{{ ref.snippet }}</span>
+                  </div>
+                </div>
                 <span v-if="msg.streaming" class="streaming-cursor"></span>
               </div>
             </div>
@@ -280,7 +287,8 @@ async function loadSession(s) {
     messages.value = (data.messages || []).map(m => ({
       role: m.role,
       content: m.content,
-      createdAt: m.createdAt
+      createdAt: m.createdAt,
+      references: parseReferences(m.referenceJson)
     }))
     nextTick(scrollToBottom)
   } catch (e) {
@@ -303,6 +311,17 @@ async function removeSession(sessionId) {
   }
 }
 
+// 解析历史消息的引用来源 JSON（容错：空/非法返回空数组）
+function parseReferences(raw) {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 function resetCurrentSession() {
   currentSessionId.value = null
   currentSessionType.value = 'CHAT'
@@ -319,7 +338,7 @@ function sendMessage() {
   autoResize()
 
   // 预先创建一条空的 assistant 消息，用于流式追加内容
-  messages.value.push({ role: 'assistant', content: '', streaming: true })
+  messages.value.push({ role: 'assistant', content: '', streaming: true, references: [] })
   const assistantIndex = messages.value.length - 1
   loading.value = true
   nextTick(scrollToBottom)
@@ -339,6 +358,11 @@ function sendMessage() {
       },
       onConfirm: (info) => {
         pendingConfirm.value = info
+      },
+      onReferences: (refs) => {
+        if (Array.isArray(refs)) {
+          messages.value[assistantIndex].references = refs
+        }
       },
       onDone: () => {
         finishStreaming(assistantIndex)
@@ -1114,5 +1138,38 @@ onBeforeUnmount(() => {
 .primary-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.reference-block {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.06);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.reference-title {
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 4px;
+}
+
+.reference-item {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+  color: #64748b;
+}
+
+.reference-name {
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.reference-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

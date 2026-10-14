@@ -79,6 +79,13 @@
                 <div class="record-avatar">{{ m.role === 'user' ? '患' : '医' }}</div>
                 <div class="record-bubble">
                   <div class="markdown-body" v-html="renderMarkdownSafe(m.content)"></div>
+                  <div v-if="m.references && m.references.length" class="reference-block">
+                    <div class="reference-title">参考来源</div>
+                    <div v-for="(ref, ri) in m.references" :key="ri" class="reference-item">
+                      <span class="reference-name">{{ ref.name }}</span>
+                      <span class="reference-snippet">{{ ref.snippet }}</span>
+                    </div>
+                  </div>
                   <div class="record-time" v-if="m.createdAt">{{ formatTime(m.createdAt) }}</div>
                 </div>
               </div>
@@ -148,6 +155,17 @@ function changePage(p) {
   loadData()
 }
 
+// 解析历史消息的引用来源 JSON（容错：空/非法返回空数组）
+function parseReferences(raw) {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 // 查看会话消息详情
 async function openDetail(s) {
   detailSession.value = s
@@ -159,7 +177,8 @@ async function openDetail(s) {
     messages.value = (data.messages || []).map(m => ({
       role: m.role,
       content: m.content,
-      createdAt: m.createdAt
+      createdAt: m.createdAt,
+      references: parseReferences(m.referenceJson)
     }))
   } catch (e) {
     toast.error('加载会话详情失败：' + e.message)
@@ -295,5 +314,38 @@ onMounted(loadData)
 .type-tag.RAG {
   background: rgba(16, 185, 129, 0.12);
   color: var(--success);
+}
+
+.reference-block {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.06);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.reference-title {
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 4px;
+}
+
+.reference-item {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+  color: #64748b;
+}
+
+.reference-name {
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.reference-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

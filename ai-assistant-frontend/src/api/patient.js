@@ -197,6 +197,8 @@ async function consumeSse(response, handlers, signal) {
         handlers.onToken?.(dataStr)
       } else if (eventType === 'confirm_required') {
         try { handlers.onConfirm?.(JSON.parse(dataStr)) } catch { /* ignore */ }
+      } else if (eventType === 'references') {
+        try { handlers.onReferences?.(JSON.parse(dataStr)) } catch { /* ignore */ }
       } else if (eventType === 'done') {
         doneSeen = true
         try { handlers.onDone?.(JSON.parse(dataStr)) } catch { handlers.onDone?.({}) }
