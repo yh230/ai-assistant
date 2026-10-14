@@ -26,7 +26,6 @@
 - [自动化测试](#自动化测试)
 - [构建](#构建)
 - [常见问题](#常见问题)
-- [文档](#文档)
 - [贡献](#贡献)
 - [许可](#许可)
 
@@ -103,7 +102,6 @@ aidaima/
 ├── ai-assistant-frontend/    # 前端：Vue 3 + Vite（员工端 + 患者端）
 ├── ai-assistant-e2e/         # API 级 E2E 自动化测试（Python + pytest + httpx）
 ├── scripts/                  # 一键脚本：Nacos / 服务 / E2E（含共享配置样例）
-└── docs/                     # 本地设计文档（按约定不入库）
 ```
 
 ## 环境要求
@@ -208,10 +206,6 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 | GitHub 相关下载失败（如嵌入模型） | 本机代理走 `127.0.0.1:7897`，确认代理隧道可用 |
 | 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
 | 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |
-
-## 文档
-
-- 设计文档与验收清单在 `docs/`（**本地文档，按约定不入库**）：包括 AI 医院助手 V1.0 设计、Spring Cloud 迁移设计、E2E 验收清单（本地手动执行版）
 
 ## 贡献
 
