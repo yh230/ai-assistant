@@ -189,7 +189,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
-        // 急症红线短路：单条消息 + 落库 + 结束（不调模型、不追加免责、不装配工具、不检查待确认）
+        // 急症红线短路：单条消息 + 结束（落库已在 prepare 完成，不调模型、不追加免责、不装配工具、不检查待确认）
         if (ctx.emergencyReply() != null) {
             ServerSentEvent<String> emergencyEvent = ServerSentEvent.builder(ctx.emergencyReply())
                     .event(ChatConstants.EVENT_TOKEN)
@@ -197,10 +197,7 @@ public class PatientChatServiceImpl implements PatientChatService {
             ServerSentEvent<String> emergencyDone = ServerSentEvent.builder(toJson(Map.of("localFallback", false)))
                     .event(ChatConstants.EVENT_DONE)
                     .build();
-            return Flux.concat(Mono.just(sessionEvent), Mono.just(emergencyEvent),
-                    Mono.fromRunnable(() -> persistReplyAsync(sessionId, ctx.emergencyReply(), null))
-                            .then(Mono.<ServerSentEvent<String>>empty()),
-                    Mono.just(emergencyDone));
+            return Flux.concat(Mono.just(sessionEvent), Mono.just(emergencyEvent), Mono.just(emergencyDone));
         }
 
         boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
