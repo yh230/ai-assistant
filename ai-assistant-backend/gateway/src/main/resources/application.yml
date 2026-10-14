@@ -16,7 +16,7 @@ spring:
         - id: login-ratelimited
           uri: lb://auth-service
           predicates:
-            - Path=/api/login,/api/patient/login
+            - Path=/api/login,/api/patient/login,/api/refresh,/api/refresh/revoke
           filters:
             - name: RequestRateLimiter
               args:
@@ -57,7 +57,7 @@ spring:
         - id: auth-service
           uri: lb://auth-service
           predicates:
-            - Path=/api/login,/api/logout,/api/getInfo,/api/profile,/api/profile/password,/api/patient/login
+            - Path=/api/login,/api/logout,/api/getInfo,/api/profile,/api/profile/password,/api/patient/login,/api/refresh,/api/refresh/revoke
         - id: system-service
           uri: lb://system-service
           predicates:
@@ -100,6 +100,8 @@ gateway:
     - /api/registration/appointments/**
     - /api/registration/schedule/public/**
     - /api/hospital/public/**
+    - /api/refresh
+    - /api/refresh/revoke
 
 security:
   jwt:

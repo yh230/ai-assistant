@@ -75,6 +75,8 @@ public class SecurityAutoConfiguration {
                 // CORS 预检直接放行（跨域响应头由既有 CorsConfig 的 CorsFilter 承担）
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/api/login", "/api/health", "/error").permitAll()
+                // 令牌续期/吊销（refresh token 公开端点）
+                .requestMatchers("/api/refresh", "/api/refresh/revoke").permitAll()
                 // 患者公开端点（注册/登录免登录）
                 .requestMatchers("/api/patient/login", "/api/patient/register").permitAll()
                 // 医院公开列表（患者注册选院）
