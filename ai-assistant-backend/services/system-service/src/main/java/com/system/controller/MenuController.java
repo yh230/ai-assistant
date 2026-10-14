@@ -2,6 +2,7 @@ package com.system.controller;
 
 import com.api.dto.MenuNodeDTO;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.system.dto.MenuSaveDTO;
 import com.system.service.MenuService;
 import jakarta.validation.Valid;
@@ -45,6 +46,7 @@ public class MenuController {
     }
 
     /** 新增菜单 */
+    @OperLog(module = "菜单管理", action = "新增菜单")
     @PostMapping
     @PreAuthorize("hasAuthority('system:menu:add')")
     public Result<Void> add(@Valid @RequestBody MenuSaveDTO dto) {
@@ -53,6 +55,7 @@ public class MenuController {
     }
 
     /** 编辑菜单 */
+    @OperLog(module = "菜单管理", action = "修改菜单")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('system:menu:edit')")
     public Result<Void> update(@PathVariable Long id, @Valid @RequestBody MenuSaveDTO dto) {
@@ -61,6 +64,7 @@ public class MenuController {
     }
 
     /** 删除菜单（含子孙节点） */
+    @OperLog(module = "菜单管理", action = "删除菜单")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('system:menu:delete')")
     public Result<Void> delete(@PathVariable Long id) {

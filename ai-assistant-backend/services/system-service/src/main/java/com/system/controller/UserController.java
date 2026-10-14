@@ -5,6 +5,7 @@ import com.api.dto.UserCreateRequest;
 import com.api.dto.UserUpdateRequest;
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.system.service.UserService;
 import com.system.vo.UserVO;
 import jakarta.validation.Valid;
@@ -41,6 +42,7 @@ public class UserController {
         return Result.success(userService.pageUsers(keyword, pageNum, pageSize));
     }
 
+    @OperLog(module = "用户管理", action = "新增用户")
     @PostMapping
     @PreAuthorize("hasAuthority('system:user:add')")
     public Result<Void> add(@Valid @RequestBody UserCreateRequest dto) {
@@ -48,6 +50,7 @@ public class UserController {
         return Result.success();
     }
 
+    @OperLog(module = "用户管理", action = "修改用户")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('system:user:edit')")
     public Result<Void> update(@PathVariable Long id, @Valid @RequestBody UserUpdateRequest dto) {
@@ -55,6 +58,7 @@ public class UserController {
         return Result.success();
     }
 
+    @OperLog(module = "用户管理", action = "删除用户")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('system:user:delete')")
     public Result<Void> delete(@PathVariable Long id) {
@@ -62,6 +66,7 @@ public class UserController {
         return Result.success();
     }
 
+    @OperLog(module = "用户管理", action = "用户启用禁用")
     @PostMapping("/{id}/status")
     @PreAuthorize("hasAuthority('system:user:edit')")
     public Result<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {
@@ -78,6 +83,7 @@ public class UserController {
      * @param dto 重置密码请求体（可空）
      * @return 操作结果
      */
+    @OperLog(module = "用户管理", action = "重置用户密码")
     @PostMapping("/{id}/reset-password")
     @PreAuthorize("hasAuthority('system:user:reset')")
     public Result<Void> resetPassword(@PathVariable Long id,
@@ -92,6 +98,7 @@ public class UserController {
      * @param id 用户 ID
      * @return 操作结果
      */
+    @OperLog(module = "用户管理", action = "强制下线用户")
     @PostMapping("/{id}/kickout")
     @PreAuthorize("hasRole('admin')") // 对应 RoleConstants.ADMIN；SecurityConfig 已配置 rolePrefix=""
     public Result<Void> kickout(@PathVariable Long id) {

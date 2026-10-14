@@ -2,6 +2,7 @@ package com.system.controller;
 
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.system.dto.AssignMenuDTO;
 import com.system.dto.RoleSaveDTO;
 import com.system.service.RoleService;
@@ -42,6 +43,7 @@ public class RoleController {
         return Result.success(roleService.pageRoles(keyword, pageNum, pageSize));
     }
 
+    @OperLog(module = "角色权限", action = "新增角色")
     @PostMapping
     @PreAuthorize("hasAuthority('system:role:add')")
     public Result<Void> add(@Valid @RequestBody RoleSaveDTO dto) {
@@ -49,6 +51,7 @@ public class RoleController {
         return Result.success();
     }
 
+    @OperLog(module = "角色权限", action = "修改角色")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('system:role:edit')")
     public Result<Void> update(@PathVariable Long id, @Valid @RequestBody RoleSaveDTO dto) {
@@ -56,6 +59,7 @@ public class RoleController {
         return Result.success();
     }
 
+    @OperLog(module = "角色权限", action = "删除角色")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('system:role:delete')")
     public Result<Void> delete(@PathVariable Long id) {
@@ -63,6 +67,7 @@ public class RoleController {
         return Result.success();
     }
 
+    @OperLog(module = "角色权限", action = "分配角色菜单")
     @PostMapping("/{id}/menus")
     @PreAuthorize("hasAuthority('system:role:assign')")
     public Result<Void> assignMenus(@PathVariable Long id, @Valid @RequestBody AssignMenuDTO dto) {

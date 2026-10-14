@@ -82,3 +82,23 @@ CREATE TABLE IF NOT EXISTS patient_user (
     PRIMARY KEY (id),
     UNIQUE KEY uk_patient_phone (phone)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '患者账号';
+
+CREATE TABLE IF NOT EXISTS sys_oper_log (
+  id          BIGINT        NOT NULL AUTO_INCREMENT COMMENT '主键',
+  module      VARCHAR(64)   NOT NULL COMMENT '业务模块',
+  action      VARCHAR(64)   NOT NULL COMMENT '操作动作',
+  user_id     BIGINT        DEFAULT NULL COMMENT '操作人ID（匿名为空）',
+  username    VARCHAR(64)   DEFAULT '' COMMENT '操作人账号（匿名为空）',
+  identity    VARCHAR(16)   DEFAULT '' COMMENT '身份：staff-员工，patient-患者（匿名为空）',
+  method      VARCHAR(8)    DEFAULT '' COMMENT 'HTTP方法',
+  request_uri VARCHAR(255)  DEFAULT '' COMMENT '请求路径',
+  params      VARCHAR(2000) DEFAULT '' COMMENT '请求参数（敏感字段脱敏、超长截断）',
+  ip          VARCHAR(64)   DEFAULT '' COMMENT '操作IP',
+  status      TINYINT       NOT NULL DEFAULT 0 COMMENT '结果：0-成功，1-失败',
+  error_msg   VARCHAR(500)  DEFAULT '' COMMENT '错误摘要（失败时）',
+  cost_ms     BIGINT        DEFAULT NULL COMMENT '耗时毫秒',
+  oper_time   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+  PRIMARY KEY (id),
+  KEY idx_oper_time (oper_time),
+  KEY idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作日志表';

@@ -67,6 +67,7 @@ public class SystemDataSeeder implements CommandLineRunner {
             seedMenus();
             log.info("RBAC 初始菜单已写入");
         }
+        ensureSecurityModule(); // 先于 admin 补链执行，使新菜单当次启动即可见
         // 每次启动都幂等补齐 admin 角色与全部菜单的关联，
         // 避免「菜单已存在但未关联 admin」导致超级管理员权限缺失。
         ensureAdminRoleAllMenus(adminRoleId);
@@ -93,6 +94,25 @@ public class SystemDataSeeder implements CommandLineRunner {
         if (added > 0) {
             log.info("已为 admin 角色补齐 {} 个菜单权限关联（超级管理员拥有全部菜单权限）", added);
         }
+    }
+
+    /**
+     * 播种安全模块菜单（操作日志页），幂等
+     */
+    private void ensureSecurityModule() {
+        if (menuMapper.selectCount(new LambdaQueryWrapper<SysMenu>().eq(SysMenu::getPerms, "system:operlog:list")) > 0) {
+            return;
+        }
+        SysMenu parent = menuMapper.selectOne(new LambdaQueryWrapper<SysMenu>()
+                .eq(SysMenu::getParentId, 0L)
+                .eq(SysMenu::getMenuName, "系统管理")
+                .last("LIMIT 1"));
+        if (parent == null) {
+            log.warn("未找到「系统管理」菜单，跳过操作日志菜单播种");
+            return;
+        }
+        menuMapper.insert(menu(parent.getId(), "操作日志", "operlog", "system/operlog/index", "system:operlog:list", 1, 9));
+        log.info("操作日志菜单已播种");
     }
 
     private Long ensureAdminUser() {

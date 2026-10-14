@@ -1,6 +1,7 @@
 package com.system.patient.controller;
 
 import com.common.result.Result;
+import com.common.security.operlog.OperLog;
 import com.system.patient.dto.PatientRegisterDTO;
 import com.system.patient.service.PatientService;
 import jakarta.validation.Valid;
@@ -29,6 +30,7 @@ public class PatientController {
      * @param dto 注册入参（手机号/密码/姓名/医院）
      * @return 新账号 ID
      */
+    @OperLog(module = "患者账号", action = "患者注册")
     @PostMapping("/register")
     public Result<Long> register(@Valid @RequestBody PatientRegisterDTO dto) {
         return Result.success(patientService.register(dto));
