@@ -81,7 +81,7 @@
             <div v-else class="message-item" :class="msg.role">
               <div class="message-avatar">{{ msg.role === 'user' ? '我' : '医' }}</div>
               <div class="message-bubble">
-                <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
                 <span v-if="msg.streaming" class="streaming-cursor"></span>
               </div>
             </div>
@@ -151,7 +151,6 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { marked } from 'marked'
 import { patientAuth, clearPatientAuth } from '../../store/patientAuth'
 import {
   patientSessions,
@@ -163,6 +162,7 @@ import {
   cancelPatientAction
 } from '../../api/patient'
 import { confirm as showConfirm, msg } from '../../utils/message'
+import { renderMarkdownSafe } from '../../utils/safeMarkdown'
 
 // 会话类型（类型选择仅在新建会话时出现）
 const SESSION_TYPES = [
@@ -189,8 +189,6 @@ const confirmLoading = ref(false)
 const inputRef = ref(null)
 const messageListRef = ref(null)
 let currentController = null
-
-marked.setOptions({ breaks: true })
 
 const displayPhone = computed(() => (patientAuth.user && patientAuth.user.phone) || '患者')
 
@@ -233,16 +231,6 @@ const showTypingDots = computed(() => {
 
 function typeLabel(type) {
   return TYPE_LABELS[type] || '闲聊'
-}
-
-// 渲染 Markdown
-function renderMarkdown(content) {
-  if (!content) return ''
-  try {
-    return marked.parse(content)
-  } catch {
-    return content
-  }
 }
 
 // 加载会话列表

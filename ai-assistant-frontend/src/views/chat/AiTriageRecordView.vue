@@ -78,7 +78,7 @@
               <div v-else class="record-item" :class="m.role">
                 <div class="record-avatar">{{ m.role === 'user' ? '患' : '医' }}</div>
                 <div class="record-bubble">
-                  <div class="markdown-body" v-html="renderMarkdown(m.content)"></div>
+                  <div class="markdown-body" v-html="renderMarkdownSafe(m.content)"></div>
                   <div class="record-time" v-if="m.createdAt">{{ formatTime(m.createdAt) }}</div>
                 </div>
               </div>
@@ -96,15 +96,13 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { marked } from 'marked'
 import { adminSessions, adminSessionHistory } from '../../api/admin'
 import { formatTime } from '../../utils/format'
 import { toast } from '../../utils/message'
+import { renderMarkdownSafe } from '../../utils/safeMarkdown'
 
 // 会话类型显示名（与患者端口径一致：CHAT=闲聊 / TRIAGE=导诊 / RAG=知识库）
 const TYPE_LABELS = { CHAT: '闲聊', TRIAGE: 'AI 导诊', RAG: '知识库问答' }
-
-marked.setOptions({ breaks: true })
 
 const list = ref([])
 const total = ref(0)
@@ -121,16 +119,6 @@ const messages = ref([])
 
 function typeLabel(type) {
   return TYPE_LABELS[type] || type || '—'
-}
-
-// 渲染 Markdown（与聊天页同款）
-function renderMarkdown(content) {
-  if (!content) return ''
-  try {
-    return marked.parse(content)
-  } catch {
-    return content
-  }
 }
 
 async function loadData() {

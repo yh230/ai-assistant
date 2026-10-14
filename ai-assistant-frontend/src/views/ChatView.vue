@@ -93,7 +93,7 @@
             {{ msg.role === 'user' ? '我' : '伴' }}
           </div>
           <div class="message-bubble">
-            <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+            <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
             <span v-if="msg.streaming" class="streaming-cursor"></span>
             <span v-if="msg.role === 'assistant' && msg.localFallback" class="local-badge">本地回复</span>
           </div>
@@ -139,9 +139,9 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted } from 'vue'
-import { marked } from 'marked'
 import { sendMessageStream, getChatHistory, getSessions, deleteSession, getRoles, getModels } from '../api/chat'
 import { confirm as showConfirm, toast } from '../utils/message'
+import { renderMarkdownSafe } from '../utils/safeMarkdown'
 
 const messages = ref([])
 const inputText = ref('')
@@ -157,8 +157,6 @@ const models = ref([])
 const selectedRoleId = ref('')
 const selectedModelId = ref('')
 
-marked.setOptions({ breaks: true })
-
 // 是否显示打字动画（loading 且最后一条消息不是正在流式输出的 assistant 消息）
 const showTypingDots = computed(() => {
   if (!loading.value) return false
@@ -167,16 +165,6 @@ const showTypingDots = computed(() => {
   if (last.streaming && !last.content) return true
   return false
 })
-
-// 渲染 Markdown
-function renderMarkdown(content) {
-  if (!content) return ''
-  try {
-    return marked.parse(content)
-  } catch {
-    return content
-  }
-}
 
 // 加载会话列表
 async function loadSessions() {
