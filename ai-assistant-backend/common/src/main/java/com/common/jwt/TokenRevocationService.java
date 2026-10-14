@@ -16,8 +16,7 @@ import java.time.Duration;
  * <ul>
  *     <li>踢下线判定为"签发时间 > 踢出时间"；因 JWT iat 为秒级截断，踢出与重新登录发生在同一秒时，
  *         新 token 可能被误判失效（窗口 ≤1s，fail-closed，晚 1 秒重新登录即自愈）</li>
- *     <li>{@link #KICK_KEY_TTL}（24h）需大于令牌有效期；若未来调大 {@code security.jwt.expiration-seconds}
- *         超过 24h，需同步调整该常量</li>
+ *     <li>{@link #KICK_KEY_TTL}（8 天）需大于 access 与 refresh 的最大有效期；若未来调大任一有效期，需同步调整该常量</li>
  * </ul>
  *
  * @author yh
@@ -33,8 +32,8 @@ public class TokenRevocationService {
     /** 踢下线阈值键前缀（值为踢出时刻毫秒时间戳） */
     private static final String KICK_PREFIX = "jwt:invalid-after:";
 
-    /** 踢下线键 TTL：需大于令牌最大有效期（默认 1h），过期自动清理 */
-    private static final Duration KICK_KEY_TTL = Duration.ofHours(24);
+    /** 踢下线键 TTL：需大于 access（1h）与 refresh（默认 7 天）最大有效期，过期自动清理 */
+    private static final Duration KICK_KEY_TTL = Duration.ofDays(8);
 
     private final StringRedisTemplate redisTemplate;
 
