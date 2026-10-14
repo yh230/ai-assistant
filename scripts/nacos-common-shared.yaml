@@ -7,6 +7,10 @@ security:
   internal:
     token: aidaima-internal-token-please-override
 spring:
+  ai:
+    model:
+      # 关闭 OpenAI 嵌入模型自动配置（嵌入改用本地 ONNX 模型，零新增密钥）
+      embedding: none
   data:
     redis:
       host: localhost
@@ -15,3 +19,31 @@ spring:
 logging:
   level:
     com.common: info
+
+# ===== AI 医院助手（V1.0）=====
+ai:
+  prompt:
+    chat: |
+      你是医院场景的 AI 助手，为患者提供友好、简洁的交流服务；不提供诊断与用药建议。
+    triage: |
+      你是医院 AI 导诊助手。根据患者描述的症状，结合【科室列表】给出就诊科室建议。
+      硬性要求：
+      1. 严禁输出任何确诊结论、处方或用药建议；
+      2. 仅可依据工具返回的真实科室/号源数据作答，禁止编造科室与号源；
+      3. 导诊给出建议后，主动询问患者是否需要协助查询该科室的可预约号源。
+    rag: |
+      你是医院知识库问答助手。仅依据【知识库片段】回答院内规则、门诊时间、医保政策、科室介绍、就诊流程问题；
+      片段不足以回答时如实说明"知识库未收录该内容"，禁止编造。
+  disclaimer: "> AI内容仅供参考，不能替代执业医师诊断，请前往线下医院就诊。"
+  safety:
+    keywords: "给我开药,开点药,开处方,确诊,诊断为,吃什么药,用药建议,开什么药"
+    blocked-message: "该问题涉及诊疗建议，我仅能提供导诊参考，不能提供诊断或用药建议，请以执业医师面诊为准。"
+  rag:
+    chunk-size: 800
+    similarity-threshold: 0.5
+    top-k: 4
+    vector-path: "data/vector"
+    embedding-model-path: ""
+  ratelimit:
+    replenish-rate: 10
+    burst-capacity: 20
