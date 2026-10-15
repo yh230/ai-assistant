@@ -7,85 +7,91 @@
         <p class="brand-sub">患者自助入口</p>
       </div>
 
-      <div class="tabs">
-        <button class="tab" :class="{ active: tab === 'login' }" @click="switchTab('login')">登录</button>
-        <button class="tab" :class="{ active: tab === 'register' }" @click="switchTab('register')">注册</button>
-      </div>
+      <el-tabs v-model="tab" @tab-change="switchTab">
+        <!-- 登录 -->
+        <el-tab-pane label="登录" name="login">
+          <form class="login-form" @submit.prevent="handleLogin">
+            <div class="field">
+              <label>手机号</label>
+              <el-input
+                v-model="loginForm.phone"
+                type="text"
+                placeholder="请输入手机号"
+                autocomplete="username"
+              />
+            </div>
 
-      <!-- 登录 -->
-      <form v-if="tab === 'login'" class="login-form" @submit.prevent="handleLogin">
-        <div class="field">
-          <label>手机号</label>
-          <input
-            v-model="loginForm.phone"
-            class="field-input"
-            type="text"
-            placeholder="请输入手机号"
-            autocomplete="username"
-          />
-        </div>
+            <div class="field">
+              <label>密码</label>
+              <el-input
+                v-model="loginForm.password"
+                type="password"
+                placeholder="请输入密码"
+                autocomplete="current-password"
+              />
+            </div>
 
-        <div class="field">
-          <label>密码</label>
-          <input
-            v-model="loginForm.password"
-            class="field-input"
-            type="password"
-            placeholder="请输入密码"
-            autocomplete="current-password"
-          />
-        </div>
+            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
 
-        <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">
+              {{ loading ? '登录中…' : '登 录' }}
+            </el-button>
+          </form>
+        </el-tab-pane>
 
-        <button class="login-btn" type="submit" :disabled="loading">
-          {{ loading ? '登录中…' : '登 录' }}
-        </button>
-      </form>
+        <!-- 注册 -->
+        <el-tab-pane label="注册" name="register">
+          <form class="login-form" @submit.prevent="handleRegister">
+            <div class="field">
+              <label>姓名</label>
+              <el-input v-model="registerForm.name" type="text" placeholder="请输入姓名" />
+            </div>
 
-      <!-- 注册 -->
-      <form v-else class="login-form" @submit.prevent="handleRegister">
-        <div class="field">
-          <label>姓名</label>
-          <input v-model="registerForm.name" class="field-input" type="text" placeholder="请输入姓名" />
-        </div>
+            <div class="field">
+              <label>手机号</label>
+              <el-input
+                v-model="registerForm.phone"
+                type="text"
+                placeholder="请输入手机号"
+                autocomplete="username"
+              />
+            </div>
 
-        <div class="field">
-          <label>手机号</label>
-          <input
-            v-model="registerForm.phone"
-            class="field-input"
-            type="text"
-            placeholder="请输入手机号"
-            autocomplete="username"
-          />
-        </div>
+            <div class="field">
+              <label>密码</label>
+              <el-input
+                v-model="registerForm.password"
+                type="password"
+                placeholder="6-32 位密码"
+                autocomplete="new-password"
+              />
+            </div>
 
-        <div class="field">
-          <label>密码</label>
-          <input
-            v-model="registerForm.password"
-            class="field-input"
-            type="password"
-            placeholder="6-32 位密码"
-            autocomplete="new-password"
-          />
-        </div>
+            <div class="field">
+              <label>所属医院</label>
+              <el-select
+                v-model="registerForm.hospitalId"
+                class="hospital-select"
+                :disabled="hospitalsLoading"
+                :placeholder="hospitalsLoading ? '医院加载中…' : '请选择医院'"
+              >
+                <el-option
+                  v-for="h in hospitals"
+                  :key="h.id"
+                  :label="h.name"
+                  :value="h.id"
+                />
+              </el-select>
+            </div>
 
-        <div class="field">
-          <label>所属医院</label>
-          <select v-model="registerForm.hospitalId" class="field-input" :disabled="hospitalsLoading">
-            <option :value="null" disabled>{{ hospitalsLoading ? '医院加载中…' : '请选择医院' }}</option>
-            <option v-for="h in hospitals" :key="h.id" :value="h.id">{{ h.name }}</option>
-          </select>
-        </div>
+            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
 
-        <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
-
-        <button class="login-btn" type="submit" :disabled="loading">
-          {{ loading ? '注册中…' : '注 册' }}
-        </button>
-      </form>
+            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">
+              {{ loading ? '注册中…' : '注 册' }}
+            </el-button>
+          </form>
+        </el-tab-pane>
+      </el-tabs>
 
       <p class="login-tip">患者账号用于 AI 导诊与线上预约，员工请从管理端登录</p>
     </div>
@@ -184,7 +190,7 @@ onMounted(loadHospitals)
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1e1b2e 0%, #312e5e 100%);
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
 }
 
 .login-card {
@@ -227,59 +233,12 @@ onMounted(loadHospitals)
   color: var(--text-tertiary);
 }
 
-.tabs {
-  display: flex;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.tab {
-  flex: 1;
-  padding: 10px 0;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: var(--transition);
-}
-
-.tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-  font-weight: 600;
-}
-
-.field {
-  margin-bottom: 16px;
-}
-
-.field label {
-  display: block;
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.field-input {
-  width: 100%;
-  padding: 11px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-sm);
+.login-form :deep(.el-input__wrapper) {
   background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
 }
 
-.field-input:focus {
-  border-color: var(--primary);
-}
-
-select.field-input {
-  cursor: pointer;
+.hospital-select {
+  width: 100%;
 }
 
 .form-error {
@@ -290,23 +249,7 @@ select.field-input {
 
 .login-btn {
   width: 100%;
-  padding: 11px;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--border-radius-sm);
   font-size: 15px;
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.login-btn:hover:not(:disabled) {
-  background: var(--primary-dark);
-}
-
-.login-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .login-tip {
