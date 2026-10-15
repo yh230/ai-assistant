@@ -5,112 +5,104 @@
         <h2 class="page-title">角色权限</h2>
         <p class="page-sub">维护系统角色，并为角色分配菜单 / 按钮权限。</p>
       </div>
-      <button class="primary-btn" @click="openCreate">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        新增角色
-      </button>
+      <el-button type="primary" :icon="Plus" @click="openCreate">新增角色</el-button>
     </div>
 
     <div class="toolbar">
-      <input v-model="keyword" class="search-input" placeholder="搜索角色编码 / 名称" @keyup.enter="reload" />
-      <button class="ghost-btn" @click="reload">查询</button>
+      <el-input v-model="keyword" placeholder="搜索角色编码 / 名称" style="width: 240px" @keyup.enter="reload" />
+      <el-button @click="reload">查询</el-button>
     </div>
 
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th style="width: 70px">ID</th>
-            <th style="width: 140px">角色编码</th>
-            <th>角色名称</th>
-            <th>描述</th>
-            <th style="width: 160px">创建时间</th>
-            <th style="width: 200px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in list" :key="r.id">
-            <td><code class="id-cell">{{ r.id }}</code></td>
-            <td><code class="code-cell">{{ r.roleCode }}</code></td>
-            <td>{{ r.roleName }}</td>
-            <td class="desc-cell">{{ r.roleDesc || '—' }}</td>
-            <td class="time-cell">{{ formatTime(r.createTime) }}</td>
-            <td>
-              <button class="link-btn" @click="openAssign(r)">分配权限</button>
-              <button class="link-btn" @click="openEdit(r)">编辑</button>
-              <button class="link-btn danger" @click="removeRole(r)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-tip">暂无角色数据</div>
+      <el-table v-if="list.length > 0" :data="list" stripe>
+        <el-table-column label="ID" width="70">
+          <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
+        </el-table-column>
+        <el-table-column label="角色编码" width="140">
+          <template #default="{ row }"><code class="code-cell">{{ row.roleCode }}</code></template>
+        </el-table-column>
+        <el-table-column prop="roleName" label="角色名称" />
+        <el-table-column label="描述">
+          <template #default="{ row }"><span class="desc-cell">{{ row.roleDesc || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170">
+          <template #default="{ row }"><span class="time-cell">{{ formatTime(row.createTime) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="200">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openAssign(row)">分配权限</el-button>
+            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" @click="removeRole(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无角色数据" :image-size="96" />
     </div>
 
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="changePage(pageNum - 1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum >= totalPages" @click="changePage(pageNum + 1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
 
     <!-- 新增/编辑角色 -->
-    <div class="modal-mask" v-if="showModal" @click.self="closeModal">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>{{ isEdit ? '编辑角色' : '新增角色' }}</h3>
-          <button class="modal-close" @click="closeModal">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-row">
-            <label>角色编码 <span class="req">*</span></label>
-            <input v-model="form.roleCode" :disabled="isEdit" class="form-input" placeholder="如 admin（字母数字下划线）" />
-            <span class="form-hint" v-if="isEdit">编辑时不可修改</span>
-          </div>
-          <div class="form-row">
-            <label>角色名称 <span class="req">*</span></label>
-            <input v-model="form.roleName" class="form-input" placeholder="如 超级管理员" />
-          </div>
-          <div class="form-row">
-            <label>描述</label>
-            <textarea v-model="form.roleDesc" class="form-textarea" rows="3" placeholder="角色用途说明"></textarea>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="closeModal">取消</button>
-          <button class="primary-btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-        </div>
-      </div>
-    </div>
+    <el-dialog v-model="showModal" :title="isEdit ? '编辑角色' : '新增角色'" width="520px" @close="closeModal">
+      <el-form label-position="top">
+        <el-form-item label="角色编码" required>
+          <el-input v-model="form.roleCode" :disabled="isEdit" placeholder="如 admin（字母数字下划线）" />
+          <span class="form-hint" v-if="isEdit">编辑时不可修改</span>
+        </el-form-item>
+        <el-form-item label="角色名称" required>
+          <el-input v-model="form.roleName" placeholder="如 超级管理员" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="form.roleDesc" type="textarea" :rows="3" placeholder="角色用途说明" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="closeModal">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 分配菜单权限 -->
-    <div class="modal-mask" v-if="showAssign" @click.self="showAssign = false">
-      <div class="modal modal-lg">
-        <div class="modal-header">
-          <h3>分配权限 - {{ assignTarget?.roleName }}</h3>
-          <button class="modal-close" @click="showAssign = false">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="tree-panel">
-            <MenuTreeCheckbox v-model="checkedMenuIds" :nodes="menuTree" />
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="showAssign = false">取消</button>
-          <button class="primary-btn" :disabled="savingAssign" @click="saveAssign">
-            {{ savingAssign ? '保存中…' : '保存权限' }}
-          </button>
-        </div>
+    <el-dialog v-model="showAssign" :title="'分配权限 - ' + (assignTarget?.roleName || '')" width="640px">
+      <div class="tree-panel">
+        <el-tree
+          ref="treeRef"
+          :data="menuTree"
+          node-key="id"
+          show-checkbox
+          check-strictly
+          default-expand-all
+          :props="{ label: 'menuName', children: 'children' }"
+          @check="onTreeCheck"
+        >
+          <template #default="{ data }">
+            <span class="node-name">{{ data.menuName }}</span>
+            <em class="node-meta">{{ data.type === 2 ? '按钮' : '菜单' }}<template v-if="data.perms"> · {{ data.perms }}</template></em>
+          </template>
+        </el-tree>
       </div>
-    </div>
+      <template #footer>
+        <el-button @click="showAssign = false">取消</el-button>
+        <el-button type="primary" :loading="savingAssign" @click="saveAssign">
+          {{ savingAssign ? '保存中…' : '保存权限' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
+import { Plus } from '@element-plus/icons-vue'
 import { pageRoles, createRole, updateRole, deleteRole, assignRoleMenus, getRoleMenus } from '../api/sysrole'
 import { allMenus } from '../api/sysmenu'
-import MenuTreeCheckbox from '../components/MenuTreeCheckbox.vue'
 import { useCrudPage } from '../composables/useCrudPage'
 import { formatTime } from '../utils/format'
 import { toast } from '../utils/message'
@@ -137,20 +129,39 @@ const {
   removeConfirm: (r) => `确定删除角色「${r.roleName}」(${r.roleCode}) 吗？`
 })
 
-// 页面特有：分配菜单权限弹窗（含 MenuTreeCheckbox 勾选逻辑，不并入骨架）
+// 页面特有：分配菜单权限弹窗（el-tree 级联勾选逻辑，不并入骨架）
 const showAssign = ref(false)
 const savingAssign = ref(false)
 const assignTarget = ref(null)
 const menuTree = ref([])
 const checkedMenuIds = ref([])
+const treeRef = ref(null)
+
+// 收集某节点下所有子孙 ID（含自身）——与原自研树语义一致
+function collectDescendants(node, acc = []) {
+  acc.push(node.id)
+  if (node.children) node.children.forEach((c) => collectDescendants(c, acc))
+  return acc
+}
+
+// check-strictly 独立勾选 + 事件内级联：勾/取消 = 增删「自身+全部子孙」；子不反哺父，无半选
+function onTreeCheck(data, { checkedKeys }) {
+  const checked = checkedKeys.includes(data.id)
+  const set = new Set(checkedKeys)
+  collectDescendants(data).forEach((id) => (checked ? set.add(id) : set.delete(id)))
+  checkedMenuIds.value = [...set]
+  treeRef.value?.setCheckedKeys(checkedMenuIds.value)
+}
 
 async function openAssign(r) {
-  assignTarget.value = r
   savingAssign.value = true
   try {
     menuTree.value = await allMenus()
     checkedMenuIds.value = await getRoleMenus(r.id)
+    assignTarget.value = r
     showAssign.value = true
+    await nextTick()
+    treeRef.value?.setCheckedKeys(checkedMenuIds.value)
   } catch (e) {
     toast.error('加载菜单失败：' + e.message)
   } finally {
@@ -175,26 +186,12 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.primary-btn {
-  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px;
-  background: var(--primary); color: white; border: none; border-radius: var(--border-radius-sm);
-  font-size: 14px; cursor: pointer; transition: var(--transition);
-}
-
 .code-cell { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--text-secondary); }
-.desc-cell { color: var(--text-secondary); max-width: 320px; }
+.desc-cell { color: var(--text-secondary); }
 
-.modal-lg { width: 640px; }
-
-.form-input, .form-textarea {
-  width: 100%; padding: 9px 12px; border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-sm); background: var(--bg-input);
-  color: var(--text-primary); font-size: 14px; outline: none; font-family: inherit;
-}
-.form-input:focus, .form-textarea:focus { border-color: var(--primary); }
-.form-textarea { resize: vertical; line-height: 1.6; }
-.form-input:disabled { background: var(--bg-hover); color: var(--text-tertiary); cursor: not-allowed; }
 .form-hint { font-size: 12px; color: var(--text-tertiary); }
 
 .tree-panel { max-height: 50vh; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 12px; background: var(--bg-input); }
+.node-name { font-size: 14px; color: var(--text-primary); }
+.node-meta { margin-left: 8px; font-size: 12px; color: var(--text-tertiary); font-style: normal; }
 </style>
