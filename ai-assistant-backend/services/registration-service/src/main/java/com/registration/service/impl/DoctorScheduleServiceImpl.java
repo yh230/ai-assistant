@@ -12,9 +12,13 @@ import com.common.security.DataScopeResolver;
 import com.registration.dto.ScheduleQueryDTO;
 import com.registration.dto.ScheduleSaveDTO;
 import com.registration.entity.DoctorSchedule;
+import com.registration.entity.Registration;
 import com.registration.enums.Period;
+import com.registration.enums.RegistrationStatus;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
+import com.registration.mapper.RegistrationMapper;
+import com.registration.mq.RegistrationEventPublisher;
 import com.registration.service.DoctorScheduleService;
 import com.registration.service.NumberSourceService;
 import com.registration.vo.ScheduleVO;
@@ -51,6 +55,8 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     private final UserClient userClient;
     private final OrgClient orgClient;
     private final DataScopeResolver dataScopeResolver;
+    private final RegistrationMapper registrationMapper;
+    private final RegistrationEventPublisher eventPublisher;
 
     /**
      * 分页查询出诊排班（按当前登录人数据范围过滤）
@@ -132,6 +138,12 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         numberSourceMapper.delete(new LambdaQueryWrapper<com.registration.entity.NumberSource>()
                 .eq(com.registration.entity.NumberSource::getScheduleId, id)
                 .eq(com.registration.entity.NumberSource::getStatus, 1));
+        // 停诊通知：对该排班下仍有效（已预约/已取号）的挂号单逐条发布事件（事务提交后发送）
+        List<Registration> affected = registrationMapper.selectList(new LambdaQueryWrapper<Registration>()
+                .eq(Registration::getScheduleId, id)
+                .in(Registration::getStatus,
+                        RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
+        eventPublisher.publishScheduleCancelled(s, affected);
     }
 
     @Override
