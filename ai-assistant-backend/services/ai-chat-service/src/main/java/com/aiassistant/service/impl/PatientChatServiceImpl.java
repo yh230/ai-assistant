@@ -486,6 +486,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildConfirmReplyFlux(PatientChatContext ctx) {
+        patientSseActive.incrementAndGet();
         String sessionId = ctx.session().getSessionId();
         boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
@@ -502,7 +503,8 @@ public class PatientChatServiceImpl implements PatientChatService {
                         .build());
 
         return Flux.concat(contentFlux, outputSafetyGuard(ctx, sessionId, full, persisted, fallback, blocked), doneEvent)
-                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted));
+                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted))
+                .doFinally(signal -> patientSseActive.decrementAndGet());
     }
 
     // ==================== 历史与列表 ====================
