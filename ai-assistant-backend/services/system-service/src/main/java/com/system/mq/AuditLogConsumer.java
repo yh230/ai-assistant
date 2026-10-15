@@ -46,9 +46,14 @@ public class AuditLogConsumer {
     public void onMessage(ConsumerRecord<String, String> record, Acknowledgment ack) throws Exception {
         MqEnvelope envelope = objectMapper.readValue(record.value(), MqEnvelope.class);
         if (idempotentGuard.consumeOnce(GROUP, envelope.getEventId(), IDEMPOTENT_TTL)) {
-            operLogService.save(objectMapper.readValue(envelope.getPayload(), OperLogDTO.class));
+            try {
+                operLogService.save(objectMapper.readValue(envelope.getPayload(), OperLogDTO.class));
+            } catch (Exception e) {
+                // 失败释放幂等键：重试可重放同一事件（重放耗尽由错误处理器转 DLT）
+                idempotentGuard.release(GROUP, envelope.getEventId());
+                throw e;
+            }
         }
         ack.acknowledge();
-        // 保存失败将抛出并由 DefaultErrorHandler 重试/转 DLT，此时不 ack
     }
 }

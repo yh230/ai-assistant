@@ -16,6 +16,7 @@ import org.springframework.kafka.support.Acknowledgment;
 
 import java.time.Duration;
 
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -71,5 +72,24 @@ class AuditLogConsumerTest {
 
         verify(operLogService, never()).save(any());
         verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldReleaseIdempotentKeyAndRethrowOnFailure() throws Exception {
+        OperLogDTO dto = new OperLogDTO();
+        dto.setModule("用户管理");
+        dto.setAction("新增用户");
+        MqEnvelope envelope = new MqEnvelope();
+        envelope.setEventId("e1");
+        envelope.setEventType("AUDIT_LOG");
+        envelope.setPayload(new ObjectMapper().writeValueAsString(dto));
+        when(idempotentGuard.consumeOnce(eq("audit-consumer"), eq("e1"), any(Duration.class))).thenReturn(true);
+        doThrow(new RuntimeException("db down")).when(operLogService).save(any(OperLogDTO.class));
+
+        assertThrows(RuntimeException.class,
+                () -> consumer.onMessage(record(new ObjectMapper().writeValueAsString(envelope)), ack));
+
+        verify(idempotentGuard).release("audit-consumer", "e1");
+        verify(ack, never()).acknowledge();
     }
 }
