@@ -127,4 +127,20 @@ class KnowledgeTaskConsumerTest {
         verify(idempotentGuard).release("knowledge-consumer", "k1");
         verify(ack, never()).acknowledge();
     }
+
+    @Test
+    void shouldReleaseIdempotentKeyWhenPayloadMalformed() throws Exception {
+        MqEnvelope envelope = new MqEnvelope();
+        envelope.setEventId("k1");
+        envelope.setEventType(KnowledgeMqEvent.KNOWLEDGE_UPLOADED);
+        envelope.setPayload("{bad");
+        String envelopeJson = objectMapper.writeValueAsString(envelope);
+        when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
+
+        assertThrows(Exception.class, () -> consumer.onMessage(
+                new ConsumerRecord<>(MqTopics.KNOWLEDGE_TASK, 0, 0L, "k", envelopeJson), ack));
+
+        verify(idempotentGuard).release("knowledge-consumer", "k1");
+        verify(ack, never()).acknowledge();
+    }
 }

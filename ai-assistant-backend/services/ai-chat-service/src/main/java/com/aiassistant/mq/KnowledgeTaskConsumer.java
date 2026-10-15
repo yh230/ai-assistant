@@ -53,8 +53,8 @@ public class KnowledgeTaskConsumer {
     public void onMessage(ConsumerRecord<String, String> record, Acknowledgment ack) throws Exception {
         MqEnvelope envelope = objectMapper.readValue(record.value(), MqEnvelope.class);
         if (idempotentGuard.consumeOnce(GROUP, envelope.getEventId(), IDEMPOTENT_TTL)) {
-            KnowledgeMqEvent event = objectMapper.readValue(envelope.getPayload(), KnowledgeMqEvent.class);
             try {
+                KnowledgeMqEvent event = objectMapper.readValue(envelope.getPayload(), KnowledgeMqEvent.class);
                 documentRepository.findById(event.getDocumentId()).ifPresentOrElse(doc -> {
                     List<Document> chunks = knowledgeChunker.split(doc.getName(), doc.getContent());
                     knowledgeVectorStore.addDocuments(event.getHospitalId(), chunks);
