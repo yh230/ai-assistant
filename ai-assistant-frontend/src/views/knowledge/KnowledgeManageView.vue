@@ -43,6 +43,12 @@
         <el-table-column label="切片数" width="100">
           <template #default="{ row }">{{ row.chunkCount ?? '—' }}</template>
         </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.status === 1" type="success" size="small">就绪</el-tag>
+            <el-tag v-else type="warning" size="small">处理中</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="上传时间" width="170">
           <template #default="{ row }"><span class="time-cell" :title="formatTime(row.createTime)">{{ formatTime(row.createTime) }}</span></template>
         </el-table-column>
@@ -146,7 +152,7 @@ async function doUpload() {
   uploading.value = true
   try {
     await knowledgeUpload(file)
-    toast.success('上传成功，已自动切片向量化')
+    toast.success('上传成功，处理中，稍后刷新查看状态')
     selectedFile.value = null
     pageNum.value = 1
     await loadData()

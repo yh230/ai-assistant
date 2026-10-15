@@ -11,6 +11,11 @@
       </div>
       <div class="topbar-user">
         <span class="user-phone">{{ displayPhone }}</span>
+        <el-badge :value="unreadCount" :hidden="unreadCount === 0" class="notify-badge">
+          <el-button circle text @click="openNotifications" title="通知">
+            <el-icon><Bell /></el-icon>
+          </el-button>
+        </el-badge>
         <el-button size="small" round plain class="logout-btn" @click="handleLogout">退出</el-button>
       </div>
     </header>
@@ -140,13 +145,30 @@
         <el-button type="primary" :disabled="confirmLoading" @click="submitConfirm">确认</el-button>
       </template>
     </el-dialog>
+
+    <!-- 通知抽屉（站内信） -->
+    <el-drawer v-model="notifyVisible" title="我的通知" size="360px">
+      <div class="notify-actions">
+        <el-button size="small" text :disabled="unreadCount === 0" @click="markAllRead">全部已读</el-button>
+      </div>
+      <el-empty v-if="!notifications.length" description="暂无通知" />
+      <div v-else class="notify-list">
+        <div v-for="n in notifications" :key="n.id" class="notify-item" :class="{ unread: n.readFlag === 0 }" @click="markRead(n)">
+          <div class="notify-title">{{ n.title }}</div>
+          <div class="notify-content">{{ n.content }}</div>
+          <div class="notify-time">{{ n.createTime }}</div>
+        </div>
+      </div>
+      <el-pagination v-if="notifyTotal > notifyPageSize" layout="prev, pager, next" :total="notifyTotal"
+                     :page-size="notifyPageSize" :current-page="notifyPage" @current-change="onNotifyPage" />
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Close, ChatDotRound, Position, VideoPause } from '@element-plus/icons-vue'
+import { Plus, Close, ChatDotRound, Position, VideoPause, Bell } from '@element-plus/icons-vue'
 import { patientAuth, clearPatientAuth } from '../../store/patientAuth'
 import {
   patientSessions,
@@ -156,7 +178,11 @@ import {
   sendPatientStream,
   confirmPatientAction,
   cancelPatientAction,
-  revokePatientRefresh
+  revokePatientRefresh,
+  patientNotifications,
+  patientUnreadCount,
+  readPatientNotification,
+  readAllPatientNotifications
 } from '../../api/patient'
 import { confirm as showConfirm, msg } from '../../utils/message'
 import { renderMarkdownSafe } from '../../utils/safeMarkdown'
@@ -188,6 +214,14 @@ const confirmLoading = ref(false)
 const inputRef = ref(null)
 const messageListRef = ref(null)
 let currentController = null
+
+// 通知（站内信）状态
+const unreadCount = ref(0)
+const notifyVisible = ref(false)
+const notifications = ref([])
+const notifyTotal = ref(0)
+const notifyPage = ref(1)
+const notifyPageSize = ref(10)
 
 const displayPhone = computed(() => (patientAuth.user && patientAuth.user.phone) || '患者')
 
@@ -360,6 +394,7 @@ function sendMessage() {
       },
       onDone: () => {
         finishStreaming(assistantIndex)
+        loadUnread()
       },
       onError: (m) => {
         failStreaming(assistantIndex, m)
@@ -483,6 +518,62 @@ async function handleLogout() {
   router.replace('/patient/login')
 }
 
+// 未读数刷新
+async function loadUnread() {
+  try {
+    unreadCount.value = Number(await patientUnreadCount()) || 0
+  } catch (e) {
+    console.error('加载未读数失败:', e)
+  }
+}
+
+// 通知分页加载
+async function loadNotifications() {
+  try {
+    const res = await patientNotifications({ pageNum: notifyPage.value, pageSize: notifyPageSize.value })
+    notifications.value = (res && res.list) || []
+    notifyTotal.value = (res && res.total) || 0
+  } catch (e) {
+    msg('加载通知失败：' + e.message)
+  }
+}
+
+// 打开通知抽屉：刷新未读数与列表
+async function openNotifications() {
+  notifyVisible.value = true
+  notifyPage.value = 1
+  await Promise.all([loadUnread(), loadNotifications()])
+}
+
+// 标记单条已读（已读项点击不重复请求）
+async function markRead(n) {
+  if (!n || n.readFlag !== 0) return
+  try {
+    await readPatientNotification(n.id)
+    n.readFlag = 1
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+  } catch (e) {
+    msg('标记已读失败：' + e.message)
+  }
+}
+
+// 全部标记已读
+async function markAllRead() {
+  if (unreadCount.value === 0) return
+  try {
+    await readAllPatientNotifications()
+    notifications.value.forEach(n => { n.readFlag = 1 })
+    unreadCount.value = 0
+  } catch (e) {
+    msg('操作失败：' + e.message)
+  }
+}
+
+async function onNotifyPage(p) {
+  notifyPage.value = p
+  await loadNotifications()
+}
+
 // 键盘事件
 function handleKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -501,6 +592,7 @@ function scrollToBottom() {
 
 onMounted(() => {
   loadSessions()
+  loadUnread()
   document.addEventListener('click', onDocumentClick)
   nextTick(() => inputRef.value?.focus())
 })
@@ -997,5 +1089,60 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 通知铃铛 */
+.notify-badge {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 通知抽屉 */
+.notify-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.notify-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notify-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.notify-item:hover {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+}
+
+.notify-item.unread {
+  border-left: 3px solid var(--primary);
+}
+
+.notify-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.notify-content {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.notify-time {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
 }
 </style>
