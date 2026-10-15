@@ -61,7 +61,7 @@ spring:
         - id: system-service
           uri: lb://system-service
           predicates:
-            - Path=/api/system/**,/api/patient/register
+            - Path=/api/system/**,/api/patient/register,/api/patient/notifications/**
         - id: hospital-service
           uri: lb://hospital-service
           predicates:
