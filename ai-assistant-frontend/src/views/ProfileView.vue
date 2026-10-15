@@ -6,52 +6,53 @@
     </div>
 
     <!-- 基本信息 -->
-    <section class="card">
-      <h3 class="card-title">基本信息</h3>
-      <div class="form-row">
-        <label>账号</label>
-        <input :value="profile.username" class="form-input" disabled />
-      </div>
-      <div class="form-row">
-        <label>姓名</label>
-        <input :value="profile.name" class="form-input" disabled />
-      </div>
-      <div class="form-row">
-        <label>手机号</label>
-        <input v-model="form.phone" class="form-input" placeholder="选填" />
-      </div>
-      <div class="form-row">
-        <label>邮箱</label>
-        <input v-model="form.email" class="form-input" placeholder="选填" />
-      </div>
+    <el-card shadow="never" class="profile-card">
+      <template #header>
+        <h3 class="card-title">基本信息</h3>
+      </template>
+      <el-form label-position="top">
+        <el-form-item label="账号">
+          <el-input :model-value="profile.username" disabled />
+        </el-form-item>
+        <el-form-item label="姓名">
+          <el-input :model-value="profile.name" disabled />
+        </el-form-item>
+        <el-form-item label="手机号">
+          <el-input v-model="form.phone" placeholder="选填" />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="form.email" placeholder="选填" />
+        </el-form-item>
+      </el-form>
       <div class="card-footer">
-        <button class="primary-btn" :disabled="saving" @click="saveProfile">
+        <el-button type="primary" :loading="saving" @click="saveProfile">
           {{ saving ? '保存中…' : '保存' }}
-        </button>
+        </el-button>
       </div>
-    </section>
+    </el-card>
 
     <!-- 修改密码 -->
-    <section class="card">
-      <h3 class="card-title">修改密码</h3>
-      <div class="form-row">
-        <label>原密码 <span class="req">*</span></label>
-        <input v-model="pwd.oldPassword" type="password" class="form-input" placeholder="请输入当前密码" />
-      </div>
-      <div class="form-row">
-        <label>新密码 <span class="req">*</span></label>
-        <input v-model="pwd.newPassword" type="password" class="form-input" placeholder="请输入新密码" />
-      </div>
-      <div class="form-row">
-        <label>确认新密码 <span class="req">*</span></label>
-        <input v-model="pwd.confirm" type="password" class="form-input" placeholder="再次输入新密码" />
-      </div>
+    <el-card shadow="never" class="profile-card">
+      <template #header>
+        <h3 class="card-title">修改密码</h3>
+      </template>
+      <el-form label-position="top">
+        <el-form-item label="原密码" required>
+          <el-input v-model="pwd.oldPassword" type="password" placeholder="请输入当前密码" />
+        </el-form-item>
+        <el-form-item label="新密码" required>
+          <el-input v-model="pwd.newPassword" type="password" placeholder="请输入新密码" />
+        </el-form-item>
+        <el-form-item label="确认新密码" required>
+          <el-input v-model="pwd.confirm" type="password" placeholder="再次输入新密码" />
+        </el-form-item>
+      </el-form>
       <div class="card-footer">
-        <button class="primary-btn" :disabled="pwding" @click="doChangePwd">
+        <el-button type="primary" :loading="pwding" @click="doChangePwd">
           {{ pwding ? '提交中…' : '修改密码' }}
-        </button>
+        </el-button>
       </div>
-    </section>
+    </el-card>
   </div>
 </template>
 
@@ -125,30 +126,7 @@ onMounted(load)
 .page-title { font-size: 22px; color: var(--text-primary); margin: 0; }
 .page-sub { margin: 6px 0 0; font-size: 13px; color: var(--text-tertiary); }
 
-.card {
-  background: var(--bg-card); border: 1px solid var(--border-color);
-  border-radius: var(--border-radius); padding: 20px 24px; margin-bottom: 20px;
-}
-.card-title { margin: 0 0 16px; font-size: 16px; color: var(--text-primary); }
-
-.form-row { margin-bottom: 16px; }
-.form-row label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
-.req { color: var(--danger); }
-.form-input {
-  width: 100%; padding: 9px 12px; border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-sm); background: var(--bg-input);
-  color: var(--text-primary); font-size: 14px; outline: none; font-family: inherit;
-}
-.form-input:focus { border-color: var(--primary); }
-.form-input:disabled { background: var(--bg-hover); color: var(--text-tertiary); cursor: not-allowed; }
-
+.profile-card { margin-bottom: 20px; }
+.card-title { margin: 0; font-size: 16px; color: var(--text-primary); }
 .card-footer { display: flex; justify-content: flex-end; }
-
-.primary-btn {
-  display: inline-flex; align-items: center; gap: 6px; padding: 9px 20px;
-  background: var(--primary); color: white; border: none; border-radius: var(--border-radius-sm);
-  font-size: 14px; cursor: pointer; transition: var(--transition);
-}
-.primary-btn:hover:not(:disabled) { background: var(--primary-dark); }
-.primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>
