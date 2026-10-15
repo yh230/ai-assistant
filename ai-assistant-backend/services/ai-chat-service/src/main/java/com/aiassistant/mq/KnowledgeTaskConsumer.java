@@ -54,13 +54,19 @@ public class KnowledgeTaskConsumer {
         MqEnvelope envelope = objectMapper.readValue(record.value(), MqEnvelope.class);
         if (idempotentGuard.consumeOnce(GROUP, envelope.getEventId(), IDEMPOTENT_TTL)) {
             KnowledgeMqEvent event = objectMapper.readValue(envelope.getPayload(), KnowledgeMqEvent.class);
-            documentRepository.findById(event.getDocumentId()).ifPresentOrElse(doc -> {
-                List<Document> chunks = knowledgeChunker.split(doc.getName(), doc.getContent());
-                knowledgeVectorStore.addDocuments(event.getHospitalId(), chunks);
-                doc.setChunkCount(chunks.size());
-                doc.setStatus(KnowledgeDocument.STATUS_READY);
-                documentRepository.save(doc);
-            }, () -> log.warn("知识库任务文档不存在，跳过: {}", event.getDocumentId()));
+            try {
+                documentRepository.findById(event.getDocumentId()).ifPresentOrElse(doc -> {
+                    List<Document> chunks = knowledgeChunker.split(doc.getName(), doc.getContent());
+                    knowledgeVectorStore.addDocuments(event.getHospitalId(), chunks);
+                    doc.setChunkCount(chunks.size());
+                    doc.setStatus(KnowledgeDocument.STATUS_READY);
+                    documentRepository.save(doc);
+                }, () -> log.warn("知识库任务文档不存在，跳过: {}", event.getDocumentId()));
+            } catch (Exception e) {
+                // 失败释放幂等键：重试可重放同一事件（重放耗尽由错误处理器转 DLT）
+                idempotentGuard.release(GROUP, envelope.getEventId());
+                throw e;
+            }
         }
         ack.acknowledge();
     }

@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -104,5 +105,26 @@ class KnowledgeTaskConsumerTest {
 
         verify(documentRepository, never()).findById(any());
         verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldReleaseIdempotentKeyAndRethrowOnFailure() throws Exception {
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        KnowledgeDocument doc = new KnowledgeDocument();
+        doc.setId(9L);
+        doc.setHospitalId(1L);
+        doc.setName("guide.md");
+        doc.setContent("正文");
+        when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+        when(knowledgeChunker.split(any(), any())).thenReturn(List.of());
+        doThrow(new RuntimeException("embed down")).when(knowledgeVectorStore).addDocuments(any(), any());
+
+        assertThrows(RuntimeException.class, () -> consumer.onMessage(record(event), ack));
+
+        verify(idempotentGuard).release("knowledge-consumer", "k1");
+        verify(ack, never()).acknowledge();
     }
 }

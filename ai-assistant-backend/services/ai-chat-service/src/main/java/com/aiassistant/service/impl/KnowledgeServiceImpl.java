@@ -1,10 +1,8 @@
 package com.aiassistant.service.impl;
 
-import com.aiassistant.config.AiProperties;
 import com.aiassistant.dto.KnowledgeDocumentDTO;
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.mq.KnowledgeTaskPublisher;
-import com.aiassistant.rag.KnowledgeChunker;
 import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.aiassistant.service.KnowledgeService;
@@ -43,9 +41,6 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     /** 知识库文档仓库 */
     private final KnowledgeDocumentRepository documentRepository;
 
-    /** 文档切片器 */
-    private final KnowledgeChunker knowledgeChunker;
-
     /** 本院向量存储 */
     private final KnowledgeVectorStore knowledgeVectorStore;
 
@@ -53,19 +48,16 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     private final KnowledgeTaskPublisher taskPublisher;
 
     /**
-     * 构造器注入：切片大小取 Nacos ai.rag.chunk-size（KnowledgeChunker 为普通类，非容器组件）
+     * 构造器注入
      *
      * @param documentRepository   知识库文档仓库
-     * @param aiProperties         AI 配置（取切片大小）
      * @param knowledgeVectorStore 知识库向量存储
      * @param taskPublisher        知识库任务事件发布器
      */
     public KnowledgeServiceImpl(KnowledgeDocumentRepository documentRepository,
-                                AiProperties aiProperties,
                                 KnowledgeVectorStore knowledgeVectorStore,
                                 KnowledgeTaskPublisher taskPublisher) {
         this.documentRepository = documentRepository;
-        this.knowledgeChunker = new KnowledgeChunker(aiProperties.getRag().getChunkSize());
         this.knowledgeVectorStore = knowledgeVectorStore;
         this.taskPublisher = taskPublisher;
     }
