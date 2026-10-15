@@ -140,8 +140,14 @@ public class RegistrationEventPublisher {
             envelope.setEventType(eventType);
             envelope.setOccurredAt(System.currentTimeMillis());
             envelope.setPayload(objectMapper.writeValueAsString(event));
-            kafkaTemplate.send(MqTopics.REGISTRATION_EVENT, envelope.getEventId(),
-                    objectMapper.writeValueAsString(envelope));
+            String json = objectMapper.writeValueAsString(envelope);
+            kafkaTemplate.send(MqTopics.REGISTRATION_EVENT, envelope.getEventId(), json)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.warn("事件发送失败: topic={}, eventId={}, err={}",
+                                    MqTopics.REGISTRATION_EVENT, envelope.getEventId(), ex.getMessage());
+                        }
+                    });
         } catch (Exception e) {
             log.warn("预约域事件发布失败: type={}, reason={}", eventType, e.getMessage());
         }

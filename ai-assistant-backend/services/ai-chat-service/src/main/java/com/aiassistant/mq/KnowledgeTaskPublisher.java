@@ -41,8 +41,14 @@ public class KnowledgeTaskPublisher {
             envelope.setEventType(KnowledgeMqEvent.KNOWLEDGE_UPLOADED);
             envelope.setOccurredAt(System.currentTimeMillis());
             envelope.setPayload(objectMapper.writeValueAsString(event));
-            kafkaTemplate.send(MqTopics.KNOWLEDGE_TASK, envelope.getEventId(),
-                    objectMapper.writeValueAsString(envelope));
+            String json = objectMapper.writeValueAsString(envelope);
+            kafkaTemplate.send(MqTopics.KNOWLEDGE_TASK, envelope.getEventId(), json)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.warn("事件发送失败: topic={}, eventId={}, err={}",
+                                    MqTopics.KNOWLEDGE_TASK, envelope.getEventId(), ex.getMessage());
+                        }
+                    });
         } catch (Exception e) {
             log.warn("知识库任务事件发布失败: {}", e.getMessage());
         }

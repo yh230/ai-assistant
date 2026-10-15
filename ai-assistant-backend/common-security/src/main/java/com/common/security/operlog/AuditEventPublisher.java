@@ -37,8 +37,14 @@ public class AuditEventPublisher {
             envelope.setEventType("AUDIT_LOG");
             envelope.setOccurredAt(System.currentTimeMillis());
             envelope.setPayload(objectMapper.writeValueAsString(dto));
-            kafkaTemplate.send(MqTopics.AUDIT_LOG, envelope.getEventId(),
-                    objectMapper.writeValueAsString(envelope));
+            String json = objectMapper.writeValueAsString(envelope);
+            kafkaTemplate.send(MqTopics.AUDIT_LOG, envelope.getEventId(), json)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.warn("事件发送失败: topic={}, eventId={}, err={}",
+                                    MqTopics.AUDIT_LOG, envelope.getEventId(), ex.getMessage());
+                        }
+                    });
         } catch (Exception e) {
             log.warn("审计事件发布失败: {}", e.getMessage());
         }
