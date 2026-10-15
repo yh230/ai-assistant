@@ -12,6 +12,7 @@ import org.springframework.data.redis.core.ValueOperations;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
@@ -27,11 +28,14 @@ class LoginAttemptGuardTest {
     @Mock private StringRedisTemplate stringRedisTemplate;
     @Mock private ValueOperations<String, String> valueOperations;
 
+    private final io.micrometer.core.instrument.simple.SimpleMeterRegistry meterRegistry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+
     private LoginAttemptGuard guard;
 
     @BeforeEach
     void setUp() {
-        guard = new LoginAttemptGuard(stringRedisTemplate, 5, 15, 15);
+        guard = new LoginAttemptGuard(stringRedisTemplate, 5, 15, 15, meterRegistry);
     }
 
     @Test
@@ -67,5 +71,17 @@ class LoginAttemptGuardTest {
     void resetShouldDeleteBothKeys() {
         guard.reset("staff", "admin");
         verify(stringRedisTemplate).delete(java.util.List.of("login:fail:staff:admin", "login:lock:staff:admin"));
+    }
+
+    @Test
+    void shouldIncrementLoginCounters() {
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment("login:fail:staff:admin")).thenReturn(1L);
+
+        guard.recordFailure("staff", "admin");
+        guard.reset("staff", "admin");
+
+        assertEquals(1.0, meterRegistry.get("ai.login.total").tag("result", "failure").counter().count());
+        assertEquals(1.0, meterRegistry.get("ai.login.total").tag("result", "success").counter().count());
     }
 }

@@ -5,87 +5,92 @@
         <h2 class="page-title">菜单管理</h2>
         <p class="page-sub">维护系统菜单与按钮权限目录，供角色分配使用。</p>
       </div>
-      <button class="primary-btn" @click="openCreateRoot">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        新增顶级菜单
-      </button>
+      <el-button type="primary" :icon="Plus" @click="openCreateRoot">新增顶级菜单</el-button>
     </div>
 
-    <div class="tree-card">
-      <div v-if="tree.length === 0" class="empty-tip">暂无菜单数据</div>
-      <MenuTreeNode
-        v-for="node in tree"
-        :key="node.id"
-        :node="node"
-        :depth="0"
-        @add-child="openCreateChild"
-        @edit="openEdit"
-        @remove="removeMenu"
-      />
+    <div class="table-card">
+      <el-table
+        v-if="tree.length > 0"
+        :data="tree"
+        row-key="id"
+        default-expand-all
+        :tree-props="{ children: 'children' }"
+      >
+        <el-table-column label="菜单名称">
+          <template #default="{ row }">
+            <span class="menu-name">{{ row.menuName }}</span>
+            <el-tag v-if="row.type === 2" class="type-tag btn-tag" size="small" effect="light">按钮</el-tag>
+            <el-tag v-else class="type-tag menu-tag" size="small" effect="light">菜单</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="权限标识">
+          <template #default="{ row }">{{ row.perms || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="路由">
+          <template #default="{ row }">{{ row.path || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="200">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openCreateChild(row)">加子项</el-button>
+            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" @click="removeMenu(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无菜单数据" :image-size="96" />
     </div>
 
     <!-- 新增/编辑弹窗 -->
-    <div class="modal-mask" v-if="showModal" @click.self="showModal = false">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>{{ isEdit ? '编辑菜单' : (form.parentId === 0 ? '新增顶级菜单' : '新增子菜单') }}</h3>
-          <button class="modal-close" @click="showModal = false">✕</button>
+    <el-dialog
+      v-model="showModal"
+      :title="isEdit ? '编辑菜单' : (form.parentId === 0 ? '新增顶级菜单' : '新增子菜单')"
+      width="540px"
+    >
+      <el-form label-position="top">
+        <el-form-item label="上级菜单" required>
+          <el-select v-model="form.parentId" :disabled="isEdit" style="width: 100%">
+            <el-option label="顶级菜单" :value="0" />
+            <el-option v-for="opt in parentOptions" :key="opt.id" :label="opt.label" :value="opt.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="菜单名称" required>
+          <el-input v-model="form.menuName" placeholder="如 用户管理" />
+        </el-form-item>
+        <el-form-item label="类型">
+          <el-select v-model="form.type" style="width: 100%">
+            <el-option label="菜单" :value="1" />
+            <el-option label="按钮" :value="2" />
+          </el-select>
+        </el-form-item>
+        <div class="two-col">
+          <el-form-item label="路由 path">
+            <el-input v-model="form.path" placeholder="菜单填路由，按钮留空" />
+          </el-form-item>
+          <el-form-item label="组件 component">
+            <el-input v-model="form.component" placeholder="如 system/user/index" />
+          </el-form-item>
         </div>
-        <div class="modal-body">
-          <div class="form-row">
-            <label>上级菜单</label>
-            <select v-model.number="form.parentId" class="form-input" :disabled="isEdit">
-              <option :value="0">顶级菜单</option>
-              <option v-for="opt in parentOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>菜单名称 <span class="req">*</span></label>
-            <input v-model="form.menuName" class="form-input" placeholder="如 用户管理" />
-          </div>
-          <div class="form-row">
-            <label>类型</label>
-            <select v-model.number="form.type" class="form-input">
-              <option :value="1">菜单</option>
-              <option :value="2">按钮</option>
-            </select>
-          </div>
-          <div class="form-row two-col">
-            <div>
-              <label>路由 path</label>
-              <input v-model="form.path" class="form-input" placeholder="菜单填路由，按钮留空" />
-            </div>
-            <div>
-              <label>组件 component</label>
-              <input v-model="form.component" class="form-input" placeholder="如 system/user/index" />
-            </div>
-          </div>
-          <div class="form-row two-col">
-            <div>
-              <label>权限标识 perms</label>
-              <input v-model="form.perms" class="form-input" placeholder="如 system:user:add" />
-            </div>
-            <div>
-              <label>排序</label>
-              <input v-model.number="form.sort" type="number" class="form-input" placeholder="数字越小越靠前" />
-            </div>
-          </div>
+        <div class="two-col">
+          <el-form-item label="权限标识 perms">
+            <el-input v-model="form.perms" placeholder="如 system:user:add" />
+          </el-form-item>
+          <el-form-item label="排序">
+            <el-input-number v-model="form.sort" :min="0" controls-position="right" style="width: 100%" />
+          </el-form-item>
         </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="showModal = false">取消</button>
-          <button class="primary-btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-        </div>
-      </div>
-    </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="showModal = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { Plus } from '@element-plus/icons-vue'
 import { allMenus, createMenu, updateMenu, deleteMenu } from '../api/sysmenu'
-import MenuTreeNode from '../components/MenuTreeNode.vue'
 import { useCrudPage } from '../composables/useCrudPage'
 
 const {
@@ -174,17 +179,9 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.primary-btn {
-  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px;
-  background: var(--primary); color: white; border: none; border-radius: var(--border-radius-sm);
-  font-size: 14px; cursor: pointer; transition: var(--transition);
-}
-
-.tree-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); overflow: hidden; }
-
-.modal { width: 540px; max-width: 92vw; max-height: 90vh; background: var(--bg-card); border-radius: var(--border-radius); display: flex; flex-direction: column; box-shadow: var(--shadow-xl); overflow: hidden; }
-
-.form-input:disabled { background: var(--bg-hover); color: var(--text-tertiary); cursor: not-allowed; }
+.type-tag { margin-left: 8px; }
+.type-tag.menu-tag { color: var(--primary); background: rgba(20, 184, 166, 0.1); border-color: transparent; }
+.type-tag.btn-tag { color: #d97706; background: rgba(217, 119, 6, 0.1); border-color: transparent; }
 .two-col { display: flex; gap: 16px; }
-.two-col > div { flex: 1; }
+.two-col > .el-form-item { flex: 1; }
 </style>

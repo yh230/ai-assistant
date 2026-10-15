@@ -2,7 +2,7 @@
 
 AI 医院助手 V1.0 的 API 级 E2E 回归套件（Python + pytest + httpx）。
 
-把 `docs/superpowers/e2e/2026-10-13-ai-hospital-v1-e2e.md` 手工验收清单中可 API 断言的部分自动化：
+把项目手工 E2E 验收清单中可 API 断言的部分自动化：
 **全黑盒**——只经网关 `http://localhost:8080` 调用（与前端同路径），不直连数据库、不 mock 服务、不改动任何生产代码。
 
 ## 前置条件

@@ -16,6 +16,12 @@ import java.time.LocalDateTime;
 @Table(name = "knowledge_document")
 public class KnowledgeDocument {
 
+    /** 状态：处理中 */
+    public static final int STATUS_PENDING = 0;
+
+    /** 状态：就绪 */
+    public static final int STATUS_READY = 1;
+
     /** 主键 ID */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -39,6 +45,10 @@ public class KnowledgeDocument {
     /** 切片数量 */
     @Column(name = "chunk_count")
     private Integer chunkCount;
+
+    /** 处理状态：0-处理中（待切片向量化），1-就绪 */
+    @Column(nullable = false)
+    private Integer status = STATUS_PENDING;
 
     /** 文档全文（删除重建向量用） */
     @Lob

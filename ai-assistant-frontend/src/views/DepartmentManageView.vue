@@ -5,111 +5,93 @@
         <h2 class="page-title">科室管理</h2>
         <p class="page-sub">维护科室并绑定科室主任（仅院长/管理员可操作，数据范围：全部）。</p>
       </div>
-      <button class="primary-btn" @click="openCreate">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        新增科室
-      </button>
+      <el-button type="primary" :icon="Plus" @click="openCreate">新增科室</el-button>
     </div>
 
     <div class="toolbar">
-      <select v-model="filterHospital" class="search-input" @change="reload">
-        <option :value="null">全部医院</option>
-        <option v-for="h in hospitalOptions" :key="h.id" :value="h.id">{{ h.name }}</option>
-      </select>
-      <input v-model="keyword" class="search-input" placeholder="搜索科室名称" @keyup.enter="reload" />
-      <button class="ghost-btn" @click="reload">查询</button>
+      <el-select v-model="filterHospital" placeholder="全部医院" clearable style="width: 220px" @change="reload">
+        <el-option v-for="h in hospitalOptions" :key="h.id" :label="h.name" :value="h.id" />
+      </el-select>
+      <el-input v-model="keyword" placeholder="搜索科室名称" style="width: 240px" @keyup.enter="reload" />
+      <el-button @click="reload">查询</el-button>
     </div>
 
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th style="width: 70px">ID</th>
-            <th>所属医院</th>
-            <th>科室名称</th>
-            <th>科室主任</th>
-            <th style="width: 80px">状态</th>
-            <th style="width: 160px">创建时间</th>
-            <th style="width: 200px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="d in list" :key="d.id">
-            <td><code class="id-cell">{{ d.id }}</code></td>
-            <td>{{ d.hospitalName || '—' }}</td>
-            <td>{{ d.name }}</td>
-            <td>{{ d.directorName || '—' }}</td>
-            <td>
-              <span class="status-tag" :class="d.status === 1 ? 'on' : 'off'">
-                {{ d.status === 1 ? '启用' : '禁用' }}
-              </span>
-            </td>
-            <td class="time-cell">{{ formatTime(d.createTime) }}</td>
-            <td>
-              <button class="link-btn" @click="openEdit(d)">编辑</button>
-              <button class="link-btn" @click="toggleStatus(d)">
-                {{ d.status === 1 ? '禁用' : '启用' }}
-              </button>
-              <button class="link-btn danger" @click="remove(d)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-tip">暂无科室数据</div>
+      <el-table v-if="list.length > 0" :data="list" stripe>
+        <el-table-column label="ID" width="70">
+          <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
+        </el-table-column>
+        <el-table-column label="所属医院">
+          <template #default="{ row }">{{ row.hospitalName || '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="name" label="科室名称" />
+        <el-table-column label="科室主任">
+          <template #default="{ row }">{{ row.directorName || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 1 ? 'success' : 'info'" effect="light">
+              {{ row.status === 1 ? '启用' : '禁用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170">
+          <template #default="{ row }"><span class="time-cell">{{ formatTime(row.createTime) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="200">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="primary" @click="toggleStatus(row)">{{ row.status === 1 ? '禁用' : '启用' }}</el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无科室数据" :image-size="96" />
     </div>
 
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="changePage(pageNum - 1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum >= totalPages" @click="changePage(pageNum + 1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
 
-    <div class="modal-mask" v-if="showModal" @click.self="closeModal">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>{{ isEdit ? '编辑科室' : '新增科室' }}</h3>
-          <button class="modal-close" @click="closeModal">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-row">
-            <label>所属医院 <span class="req">*</span></label>
-            <select v-model.number="form.hospitalId" class="form-input">
-              <option :value="null" disabled>请选择医院</option>
-              <option v-for="h in hospitalOptions" :key="h.id" :value="h.id">{{ h.name }}</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>科室名称 <span class="req">*</span></label>
-            <input v-model="form.name" class="form-input" placeholder="如 骨科" />
-          </div>
-          <div class="form-row">
-            <label>科室主任</label>
-            <select v-model.number="form.directorUserId" class="form-input">
-              <option :value="null">未指定</option>
-              <option v-for="u in employeeOptions" :key="u.id" :value="u.id">{{ u.name }}（{{ u.username }}）</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>状态</label>
-            <select v-model.number="form.status" class="form-input">
-              <option :value="1">启用</option>
-              <option :value="0">禁用</option>
-            </select>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="closeModal">取消</button>
-          <button class="primary-btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-        </div>
-      </div>
-    </div>
+    <el-dialog v-model="showModal" :title="isEdit ? '编辑科室' : '新增科室'" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="所属医院" required>
+          <el-select v-model="form.hospitalId" placeholder="请选择医院" style="width: 100%">
+            <el-option v-for="h in hospitalOptions" :key="h.id" :label="h.name" :value="h.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="科室名称" required>
+          <el-input v-model="form.name" placeholder="如 骨科" />
+        </el-form-item>
+        <el-form-item label="科室主任">
+          <el-select v-model="form.directorUserId" placeholder="未指定" clearable style="width: 100%">
+            <el-option v-for="u in employeeOptions" :key="u.id" :label="`${u.name}（${u.username}）`" :value="u.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="form.status" style="width: 100%">
+            <el-option label="启用" :value="1" />
+            <el-option label="禁用" :value="0" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="closeModal">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { Plus } from '@element-plus/icons-vue'
 import {
   pageDepartments, createDepartment, updateDepartment, deleteDepartment,
   changeDeptStatus, listHospitals, pageEmployees
@@ -168,7 +150,3 @@ async function ensureOptions() {
 
 onMounted(async () => { await ensureOptions(); await loadData() })
 </script>
-
-<style scoped>
-.search-input { width: 220px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px; outline: none; }
-</style>

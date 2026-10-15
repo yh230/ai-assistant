@@ -162,6 +162,34 @@ export function cancelPatientAction(actionId) {
 }
 
 /**
+ * 患者通知分页（仅本人）
+ */
+export function patientNotifications(params) {
+  return patientApi.get('/patient/notifications', { params })
+}
+
+/**
+ * 患者未读通知数
+ */
+export function patientUnreadCount() {
+  return patientApi.get('/patient/notifications/unread-count')
+}
+
+/**
+ * 标记通知已读
+ */
+export function readPatientNotification(id) {
+  return patientApi.post(`/patient/notifications/${id}/read`)
+}
+
+/**
+ * 全部标记已读
+ */
+export function readAllPatientNotifications() {
+  return patientApi.post('/patient/notifications/read-all')
+}
+
+/**
  * 解析 SSE 事件流（患者侧，事件：session/token/done/error/confirm_required）
  */
 async function consumeSse(response, handlers, signal) {
@@ -197,6 +225,8 @@ async function consumeSse(response, handlers, signal) {
         handlers.onToken?.(dataStr)
       } else if (eventType === 'confirm_required') {
         try { handlers.onConfirm?.(JSON.parse(dataStr)) } catch { /* ignore */ }
+      } else if (eventType === 'references') {
+        try { handlers.onReferences?.(JSON.parse(dataStr)) } catch { /* ignore */ }
       } else if (eventType === 'done') {
         doneSeen = true
         try { handlers.onDone?.(JSON.parse(dataStr)) } catch { handlers.onDone?.({}) }

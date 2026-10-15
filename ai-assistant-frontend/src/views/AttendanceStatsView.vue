@@ -6,9 +6,9 @@
         <p class="page-sub">按维度聚合出勤数据。院长看全院、科室主任看本科室（后端自动过滤）。</p>
       </div>
       <div class="dim-switch">
-        <button v-for="d in dims" :key="d.value" class="ghost-btn" :class="{ active: dimension === d.value }" @click="switchDim(d.value)">
-          {{ d.label }}
-        </button>
+        <el-radio-group :model-value="dimension" @change="switchDim">
+          <el-radio-button v-for="d in dims" :key="d.value" :value="d.value">{{ d.label }}</el-radio-button>
+        </el-radio-group>
       </div>
     </div>
 
@@ -32,7 +32,7 @@
         <div class="bar-value">{{ r.cnt }}</div>
       </div>
     </div>
-    <div v-else class="empty-tip">暂无统计数据</div>
+    <el-empty v-else description="暂无统计数据" :image-size="96" />
   </div>
 </template>
 
@@ -76,8 +76,6 @@ onMounted(load)
 .page-title { font-size: 22px; color: var(--text-primary); margin: 0; }
 .page-sub { margin: 6px 0 0; font-size: 13px; color: var(--text-tertiary); }
 .dim-switch { display: flex; gap: 8px; }
-.ghost-btn { padding: 8px 16px; background: var(--bg-hover); border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: var(--border-radius-sm); cursor: pointer; font-size: 13px; }
-.ghost-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .summary { display: flex; gap: 16px; margin-bottom: 20px; }
 .summary-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); padding: 18px 24px; display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
 .summary-num { font-size: 26px; font-weight: 700; color: var(--text-primary); }
@@ -88,5 +86,5 @@ onMounted(load)
 .bar-track { flex: 1; height: 22px; background: var(--bg-input); border-radius: 6px; overflow: hidden; }
 .bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--primary-light)); border-radius: 6px; transition: width 0.4s ease; }
 .bar-value { width: 56px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
-.empty-tip { padding: 48px; text-align: center; color: var(--text-tertiary); font-size: 14px; }
+.stats-page :deep(.el-empty) { padding: 48px 0; }
 </style>

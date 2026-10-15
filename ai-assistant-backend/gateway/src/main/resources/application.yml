@@ -61,7 +61,7 @@ spring:
         - id: system-service
           uri: lb://system-service
           predicates:
-            - Path=/api/system/**,/api/patient/register
+            - Path=/api/system/**,/api/patient/register,/api/patient/notifications/**
         - id: hospital-service
           uri: lb://hospital-service
           predicates:
@@ -108,6 +108,22 @@ security:
     secret: ${JWT_SECRET:aidaima-dev-jwt-secret-please-override-0123456789}
     expiration-seconds: 3600
 
+management:
+  server:
+    port: ${GATEWAY_MANAGEMENT_PORT:9290}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
 logging:
   level:
     com.gateway: info
+  pattern:
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"

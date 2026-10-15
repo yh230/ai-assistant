@@ -7,35 +7,40 @@
         <p class="brand-sub">后台管理系统</p>
       </div>
 
-      <form class="login-form" @submit.prevent="handleLogin">
-        <div class="field">
-          <label>账号</label>
-          <input
+      <el-form
+        class="login-form"
+        label-position="top"
+        @submit.prevent="handleLogin"
+      >
+        <el-form-item label="账号">
+          <el-input
             v-model="form.username"
-            class="field-input"
             type="text"
             placeholder="请输入账号"
             autocomplete="username"
           />
-        </div>
+        </el-form-item>
 
-        <div class="field">
-          <label>密码</label>
-          <input
+        <el-form-item label="密码">
+          <el-input
             v-model="form.password"
-            class="field-input"
             type="password"
             placeholder="请输入密码"
             autocomplete="current-password"
           />
-        </div>
+        </el-form-item>
 
         <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
 
-        <button class="login-btn" type="submit" :disabled="loading">
+        <el-button
+          class="login-btn"
+          type="primary"
+          native-type="submit"
+          :loading="loading"
+        >
           {{ loading ? '登录中…' : '登 录' }}
-        </button>
-      </form>
+        </el-button>
+      </el-form>
 
       <p class="login-tip">默认管理员：admin / admin123</p>
     </div>
@@ -87,7 +92,7 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1e1b2e 0%, #312e5e 100%);
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
 }
 
 .login-card {
@@ -130,30 +135,18 @@ async function handleLogin() {
   color: var(--text-tertiary);
 }
 
-.field {
+.login-form :deep(.el-form-item) {
   margin-bottom: 16px;
 }
 
-.field label {
-  display: block;
+.login-form :deep(.el-form-item__label) {
   font-size: 13px;
   color: var(--text-secondary);
-  margin-bottom: 6px;
+  padding-bottom: 4px;
 }
 
-.field-input {
-  width: 100%;
-  padding: 11px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-sm);
+.login-form :deep(.el-input__wrapper) {
   background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-}
-
-.field-input:focus {
-  border-color: var(--primary);
 }
 
 .form-error {
@@ -164,23 +157,7 @@ async function handleLogin() {
 
 .login-btn {
   width: 100%;
-  padding: 11px;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--border-radius-sm);
   font-size: 15px;
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.login-btn:hover:not(:disabled) {
-  background: var(--primary-dark);
-}
-
-.login-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .login-tip {

@@ -1,6 +1,5 @@
 package com.common.security.operlog;
 
-import com.api.client.OperLogClient;
 import com.api.dto.OperLogDTO;
 import com.common.exception.BusinessException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,7 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * 操作日志切面测试（上报成功不阻断、异常重抛、上报失败静默）
+ * 操作日志切面测试（发布成功不阻断、异常重抛、发布失败静默）
  *
  * @author yh
  * @date 2026-10-14
@@ -30,7 +29,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class OperLogAspectTest {
 
-    @Mock private OperLogClient operLogClient;
+    @Mock private AuditEventPublisher auditEventPublisher;
     @Mock private ProceedingJoinPoint joinPoint;
     @Mock private OperLog operLog;
 
@@ -38,7 +37,7 @@ class OperLogAspectTest {
 
     @BeforeEach
     void setUp() {
-        aspect = new OperLogAspect(operLogClient, new ObjectMapper());
+        aspect = new OperLogAspect(new ObjectMapper(), auditEventPublisher);
     }
 
     @Test
@@ -52,7 +51,7 @@ class OperLogAspectTest {
 
         assertEquals("ok", result);
         ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
-        verify(operLogClient).report(captor.capture());
+        verify(auditEventPublisher).publish(captor.capture());
         OperLogDTO dto = captor.getValue();
         assertEquals("患者预约", dto.getModule());
         assertEquals(0, dto.getStatus());
@@ -73,7 +72,7 @@ class OperLogAspectTest {
 
         assertEquals("状态已变更，请刷新后重试", thrown.getMessage());
         ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
-        verify(operLogClient).report(captor.capture());
+        verify(auditEventPublisher).publish(captor.capture());
         assertEquals(1, captor.getValue().getStatus());
         assertEquals("状态已变更，请刷新后重试", captor.getValue().getErrorMsg());
     }
@@ -84,7 +83,7 @@ class OperLogAspectTest {
         when(operLog.action()).thenReturn("新增用户");
         when(joinPoint.proceed()).thenReturn("ok");
         when(joinPoint.getArgs()).thenReturn(new Object[0]);
-        when(operLogClient.report(any(OperLogDTO.class))).thenThrow(new RuntimeException("服务不可达"));
+        doThrow(new RuntimeException("服务不可达")).when(auditEventPublisher).publish(any());
 
         assertEquals("ok", aspect.around(joinPoint, operLog));
     }
@@ -103,7 +102,7 @@ class OperLogAspectTest {
             aspect.around(joinPoint, operLog);
 
             ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
-            verify(operLogClient).report(captor.capture());
+            verify(auditEventPublisher).publish(captor.capture());
             assertEquals("2.2.2.2", captor.getValue().getIp());
         } finally {
             RequestContextHolder.resetRequestAttributes();
@@ -123,7 +122,7 @@ class OperLogAspectTest {
             aspect.around(joinPoint, operLog);
 
             ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
-            verify(operLogClient).report(captor.capture());
+            verify(auditEventPublisher).publish(captor.capture());
             assertEquals("127.0.0.1", captor.getValue().getIp());
         } finally {
             RequestContextHolder.resetRequestAttributes();
@@ -144,10 +143,24 @@ class OperLogAspectTest {
             aspect.around(joinPoint, operLog);
 
             ArgumentCaptor<OperLogDTO> captor = ArgumentCaptor.forClass(OperLogDTO.class);
-            verify(operLogClient).report(captor.capture());
+            verify(auditEventPublisher).publish(captor.capture());
             assertEquals("127.0.0.1", captor.getValue().getIp());
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
+    }
+
+    @Test
+    void shouldPublishAuditEventAfterMethodCompletes() throws Throwable {
+        when(operLog.module()).thenReturn("用户管理");
+        when(operLog.action()).thenReturn("新增用户");
+        when(joinPoint.proceed()).thenReturn("ok");
+        when(joinPoint.getArgs()).thenReturn(new Object[0]);
+
+        aspect.around(joinPoint, operLog);
+
+        ArgumentCaptor<com.api.dto.OperLogDTO> captor = ArgumentCaptor.forClass(com.api.dto.OperLogDTO.class);
+        verify(auditEventPublisher).publish(captor.capture());
+        assertEquals(0, captor.getValue().getStatus());
     }
 }

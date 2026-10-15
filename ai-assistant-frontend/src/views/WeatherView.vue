@@ -5,19 +5,20 @@
       <h1 class="page-title">天气查询</h1>
       <p class="page-subtitle">输入城市名称，查询实时天气和未来5天预报</p>
       <div class="search-box">
-        <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input
+        <el-input
           v-model="city"
           class="search-input"
           placeholder="输入城市名，如：北京、上海、深圳..."
+          clearable
           @keydown.enter="searchWeather"
-        />
-        <button class="search-btn" :disabled="!city.trim() || loading" @click="searchWeather">
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-button type="primary" :disabled="!city.trim() || loading" @click="searchWeather">
           查询天气
-        </button>
+        </el-button>
       </div>
 
       <!-- 快捷城市 -->
@@ -117,6 +118,8 @@
 
 <script setup>
 import { ref } from 'vue'
+import { ElInput, ElButton, ElIcon } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import { getWeather } from '../api/weather'
 
 const city = ref('')
@@ -207,51 +210,22 @@ function formatForecastDate(dateStr, index) {
   gap: 8px;
   max-width: 560px;
   margin: 20px auto 0;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  padding: 6px 6px 6px 16px;
-  box-shadow: var(--shadow-sm);
-  transition: var(--transition);
-}
-
-.search-box:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-bg);
-}
-
-.search-icon {
-  color: var(--text-tertiary);
-  flex-shrink: 0;
 }
 
 .search-input {
   flex: 1;
-  border: none;
-  background: transparent;
-  font-size: 15px;
-  padding: 10px 0;
-  color: var(--text-primary);
 }
 
-.search-btn {
-  padding: 10px 24px;
-  background: var(--primary);
-  color: white;
+.search-box :deep(.el-input__wrapper) {
   border-radius: 12px;
-  font-size: 14px;
-  transition: var(--transition);
+  padding: 4px 12px;
 }
 
-.search-btn:hover:not(:disabled) {
-  background: var(--primary-dark);
+.search-box :deep(.el-input__prefix .el-icon) {
+  color: var(--text-tertiary);
 }
 
-.search-btn:disabled {
-  background: var(--text-tertiary);
-  cursor: not-allowed;
-}
-
+/* 快捷城市 */
 .quick-cities {
   display: flex;
   align-items: center;
@@ -314,7 +288,7 @@ function formatForecastDate(dateStr, index) {
 
 /* 当前天气 */
 .current-weather {
-  background: linear-gradient(135deg, #6366f1, #818cf8);
+  background: linear-gradient(135deg, #0d9488, #2dd4bf);
   border-radius: 20px;
   padding: 32px;
   color: white;
@@ -428,7 +402,7 @@ function formatForecastDate(dateStr, index) {
 .forecast-card:hover {
   transform: translateY(-4px);
   box-shadow: var(--shadow);
-  border-color: var(--primary-light);
+  border-color: var(--primary);
 }
 
 .forecast-date {

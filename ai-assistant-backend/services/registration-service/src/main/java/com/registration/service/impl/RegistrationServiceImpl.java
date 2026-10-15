@@ -23,6 +23,7 @@ import com.registration.enums.SourceType;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
 import com.registration.mapper.RegistrationMapper;
+import com.registration.mq.RegistrationEventPublisher;
 import com.registration.service.RegistrationService;
 import com.registration.vo.RegistrationVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -103,6 +104,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final DataScopeResolver dataScopeResolver;
     private final RedissonClient redissonClient;
     private final TransactionTemplate txTemplate;
+    private final RegistrationEventPublisher eventPublisher;
 
     // ===================== 公开：患者线上预约 =====================
 
@@ -124,7 +126,9 @@ public class RegistrationServiceImpl implements RegistrationService {
             reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                     () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule)));
         }
-        return enrichSafe(List.of(reg)).get(0);
+        RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
+        eventPublisher.publishCreated(reg, vo);
+        return vo;
     }
 
     /**
@@ -225,7 +229,9 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
         doPatientCancel(reg, cur, reason);
-        return enrichSafe(List.of(reg)).get(0);
+        RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
+        eventPublisher.publishCancelled(reg, vo);
+        return vo;
     }
 
     @Override
@@ -253,7 +259,9 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
         doPatientCancel(reg, cur, reason);
-        return enrichSafe(List.of(reg)).get(0);
+        RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
+        eventPublisher.publishCancelled(reg, vo);
+        return vo;
     }
 
     // ===================== 员工：现场挂号 / 取号 / 退号 / 就诊 =====================
@@ -364,7 +372,9 @@ public class RegistrationServiceImpl implements RegistrationService {
                             reg.setUpdateTime(now);
                             return reg;
                         })));
-        return enrichSafe(List.of(reg)).get(0);
+        RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
+        eventPublisher.publishRefunded(reg, vo);
+        return vo;
     }
 
     /**
@@ -410,6 +420,9 @@ public class RegistrationServiceImpl implements RegistrationService {
             Boolean expired = withLock(REGISTRATION_LOCK_PREFIX + id, true,
                     () -> withLock(SCHEDULE_LOCK_PREFIX + pre.getScheduleId(), true,
                             () -> txTemplate.execute(status -> doExpireOverdue(id))));
+            if (Boolean.TRUE.equals(expired)) {
+                eventPublisher.publishExpired(pre);
+            }
             return Boolean.TRUE.equals(expired);
         } catch (BusinessException e) {
             // 锁被占用或状态已变：跳过本条，由下个周期重试

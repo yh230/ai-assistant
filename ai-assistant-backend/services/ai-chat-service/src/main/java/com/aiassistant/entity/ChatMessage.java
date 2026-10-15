@@ -32,6 +32,10 @@ public class ChatMessage {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
+    /** 引用来源 JSON（RAG 回答的知识库来源：文件名+摘要；无来源为 null） */
+    @Column(name = "reference_json", columnDefinition = "TEXT")
+    private String referenceJson;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
