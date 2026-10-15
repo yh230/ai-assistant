@@ -111,11 +111,11 @@ aidaima/
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
-| JDK | 17 | 本机路径 `C:\kaifa\jdk17` |
+| JDK | 17 | 自行安装并配置 `JAVA_HOME` |
 | MySQL | 8 | 需先建好四个库（见快速开始第 1 步） |
 | Redis | ≥ 6.2 | 默认 `localhost:6379`（刷新令牌消费用 GETDEL） |
 | Node.js | 18+ | 前端构建与开发 |
-| Nacos | 3.x | 本机路径 `C:\kaifa\nacos`（服务端口 8848，控制台 8849） |
+| Nacos | 3.x | 服务端口 8848，控制台 8849（安装路径自定，见快速开始第 2 步） |
 
 ## 快速开始
 
@@ -194,11 +194,10 @@ scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模
 
 ```bat
 cd ai-assistant-backend
-set JAVA_HOME=C:\kaifa\jdk17
-C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
+mvn -DskipTests clean package
 ```
 
-依赖走阿里云镜像（本机 Maven `conf/settings.xml` 已配置）。
+需 JDK 17 与 Maven 3.9+，并确保 `JAVA_HOME` 指向 JDK 17；依赖可配置阿里云镜像加速（Maven `conf/settings.xml`）。
 
 ## 常见问题
 
@@ -206,7 +205,7 @@ C:\kaifa\apache-maven-3.9.16\bin\mvn.cmd -DskipTests clean package
 |------|------|
 | 服务注册失败（启动日志报 Nacos 连接错误） | 先 `scripts/start-nacos.bat`，确认控制台 8849 可访问、共享配置已创建 |
 | 端口占用 | `netstat -ano | findstr <端口>` 查 PID 后结束进程（8080 / 9200-9204 / 8848 / 8849 / 5173） |
-| GitHub 相关下载失败（如嵌入模型） | 本机代理走 `127.0.0.1:7897`，确认代理隧道可用 |
+| GitHub 相关下载失败（如嵌入模型） | 确认本机可访问外网（如需代理请自行配置），或改用离线预置模型（见快速开始第 5 步） |
 | 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
 | 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |
 
