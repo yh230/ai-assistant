@@ -8,7 +8,6 @@ import com.common.result.Result;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -26,10 +25,6 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.security.web.savedrequest.NullRequestCache;
 
 import java.io.IOException;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Spring Security 自动配置（无状态 JWT + 内部令牌）
@@ -45,7 +40,6 @@ import java.util.concurrent.TimeUnit;
 @AutoConfiguration
 @EnableMethodSecurity
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@Slf4j
 @RequiredArgsConstructor
 public class SecurityAutoConfiguration {
 
@@ -135,23 +129,6 @@ public class SecurityAutoConfiguration {
     @Bean
     public GlobalExceptionHandler globalExceptionHandler() {
         return new GlobalExceptionHandler();
-    }
-
-    /**
-     * 操作审计上报线程池：单线程守护执行器，有界队列，拒绝时丢弃并告警（防积压拖累业务）
-     *
-     * @return 审计上报执行器
-     */
-    @Bean(destroyMethod = "shutdown")
-    public Executor operLogReportExecutor() {
-        return new ThreadPoolExecutor(1, 1, 60L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(1000),
-                thread -> {
-                    Thread worker = new Thread(thread, "oper-log-report");
-                    worker.setDaemon(true);
-                    return worker;
-                },
-                (runnable, executor) -> log.warn("操作日志上报队列已满，丢弃一条审计上报"));
     }
 
     /**
