@@ -64,4 +64,22 @@ class IdempotentGuardTest {
     void consumeOnceShouldSkipBlankEventId() {
         assertTrue(guard.consumeOnce("audit-consumer", " ", Duration.ofDays(7)));
     }
+
+    @Test
+    void releaseShouldDeleteKey() {
+        guard.release("audit-consumer", "e4");
+        verify(stringRedisTemplate).delete("mq:idem:audit-consumer:e4");
+    }
+
+    @Test
+    void releaseShouldSkipBlankEventId() {
+        guard.release("audit-consumer", " ");
+        verify(stringRedisTemplate, never()).delete(anyString());
+    }
+
+    @Test
+    void releaseShouldSwallowRedisError() {
+        when(stringRedisTemplate.delete(anyString())).thenThrow(new RuntimeException("redis down"));
+        assertDoesNotThrow(() -> guard.release("audit-consumer", "e5"));
+    }
 }

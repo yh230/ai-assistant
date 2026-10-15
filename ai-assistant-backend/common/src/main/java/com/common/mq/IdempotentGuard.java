@@ -48,4 +48,21 @@ public class IdempotentGuard {
             return true;
         }
     }
+
+    /**
+     * 失败回退幂等键（处理异常时调用，使重试可重放同一事件）
+     *
+     * @param consumerGroup 消费组
+     * @param eventId 事件唯一ID
+     */
+    public void release(String consumerGroup, String eventId) {
+        if (!StringUtils.hasText(eventId)) {
+            return;
+        }
+        try {
+            stringRedisTemplate.delete(KEY_PREFIX + consumerGroup + ":" + eventId);
+        } catch (Exception e) {
+            log.warn("幂等键释放失败: {}", e.getMessage());
+        }
+    }
 }
