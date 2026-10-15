@@ -102,3 +102,21 @@ CREATE TABLE IF NOT EXISTS sys_oper_log (
   KEY idx_oper_time (oper_time),
   KEY idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作日志表';
+
+-- ============================================================
+-- 患者站内信（预约域 Kafka 事件消费落库，患者端拉取查看）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS patient_notification (
+  id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  patient_id  BIGINT       NOT NULL COMMENT '患者用户ID',
+  hospital_id BIGINT       DEFAULT NULL COMMENT '归属医院ID（管理端过滤用）',
+  type        VARCHAR(32)  NOT NULL COMMENT '通知类型（对应事件类型码）',
+  title       VARCHAR(100) NOT NULL COMMENT '标题',
+  content     VARCHAR(500) NOT NULL COMMENT '内容',
+  biz_no      VARCHAR(64)  DEFAULT '' COMMENT '关联业务号（挂号号等）',
+  read_flag   TINYINT      NOT NULL DEFAULT 0 COMMENT '已读：0-未读，1-已读',
+  create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (id),
+  KEY idx_patient_read (patient_id, read_flag),
+  KEY idx_patient_time (patient_id, create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='患者站内信';
