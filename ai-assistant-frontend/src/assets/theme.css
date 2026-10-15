@@ -1,0 +1,97 @@
+/* 主题变量层：旧 token 兼容 + Element Plus 覆盖（Element Plus · 医疗青绿） */
+
+/* ==================== 1. 旧 token 兼容层（赋新值，未清完的引用自动呈现新色） ==================== */
+:root {
+  --primary: #0d9488;
+  --primary-light: #14b8a6;
+  --primary-dark: #0a766d;
+  --primary-bg: #e7f4f3;
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #0ea5e9;
+
+  --bg-main: #f4f8f7;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f7f6;
+  --bg-sidebar: #ffffff;
+  --bg-input: #f8fbfa;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #94a3b8;
+  --text-inverse: #ffffff;
+
+  --border-color: #e2e8f0;
+  --border-radius: 12px;
+  --border-radius-sm: 8px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.05);
+
+  --transition: all 0.25s ease;
+}
+
+/* ==================== 2. Element Plus 变量覆盖 ==================== */
+/* html:root 优先级高于 EP 默认 :root，规避按需样式注入顺序的不确定性 */
+html:root {
+  /* 主色梯度（EP 派生规则：light-N 与白色混合 N×10%，dark-2 与黑色混合 20%） */
+  --el-color-primary: #0d9488;
+  --el-color-primary-light-1: #259f94;
+  --el-color-primary-light-2: #3da9a0;
+  --el-color-primary-light-3: #56b4ac;
+  --el-color-primary-light-4: #6ebfb8;
+  --el-color-primary-light-5: #86cac4;
+  --el-color-primary-light-6: #9ed4cf;
+  --el-color-primary-light-7: #b6dfdb;
+  --el-color-primary-light-8: #cfeae7;
+  --el-color-primary-light-9: #e7f4f3;
+  --el-color-primary-dark-2: #0a766d;
+
+  /* 语义色 */
+  --el-color-success: #16a34a;
+  --el-color-success-light-3: #5cbf80;
+  --el-color-success-light-5: #8bd1a5;
+  --el-color-success-light-7: #b9e3c9;
+  --el-color-success-light-8: #d0eddb;
+  --el-color-success-light-9: #e8f6ed;
+  --el-color-success-dark-2: #12823b;
+  --el-color-warning: #f59e0b;
+  --el-color-warning-light-3: #f8bb54;
+  --el-color-warning-light-5: #facf85;
+  --el-color-warning-light-7: #fce2b6;
+  --el-color-warning-light-8: #fdecce;
+  --el-color-warning-light-9: #fef5e7;
+  --el-color-warning-dark-2: #c47e09;
+  --el-color-danger: #ef4444;
+  --el-color-danger-light-3: #f47c7c;
+  --el-color-danger-light-5: #f7a2a2;
+  --el-color-danger-light-7: #fac7c7;
+  --el-color-danger-light-8: #fcdada;
+  --el-color-danger-light-9: #fdecec;
+  --el-color-danger-dark-2: #bf3636;
+  --el-color-info: #0ea5e9;
+  --el-color-info-light-3: #56c0f0;
+  --el-color-info-light-5: #87d2f4;
+  --el-color-info-light-7: #b7e4f8;
+  --el-color-info-light-8: #cfedfb;
+  --el-color-info-light-9: #e7f6fd;
+  --el-color-info-dark-2: #0b84ba;
+
+  /* 文本/边框/填充/背景/圆角 */
+  --el-text-color-primary: #0f172a;
+  --el-text-color-regular: #475569;
+  --el-text-color-secondary: #64748b;
+  --el-text-color-placeholder: #94a3b8;
+  --el-border-color: #e2e8f0;
+  --el-border-color-light: #e8eef2;
+  --el-border-color-lighter: #eef2f6;
+  --el-fill-color-light: #f4f8f7;
+  --el-fill-color-lighter: #f8fbfa;
+  --el-bg-color-page: #f4f8f7;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-font-size-base: 14px;
+}

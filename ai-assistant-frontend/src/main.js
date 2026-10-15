@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
+import './assets/theme.css'
 import './assets/style.css'
 import './utils/message' // 必须在业务模块之前，拦截 window.alert
 
