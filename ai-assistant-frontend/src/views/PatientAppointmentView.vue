@@ -4,66 +4,62 @@
       <h2 class="title">门诊患者自助服务</h2>
       <p class="sub">线上预约挂号 · 凭手机号/身份证查询本人预约</p>
 
-      <div class="tabs">
-        <button class="tab" :class="{ active: tab === 'book' }" @click="tab = 'book'">在线预约</button>
-        <button class="tab" :class="{ active: tab === 'query' }" @click="tab = 'query'">我的预约</button>
-      </div>
-
-      <!-- 预约 -->
-      <div v-if="tab === 'book'">
-        <div class="form-row">
-          <label>就诊日期</label>
-          <input v-model="bookDate" type="date" class="input" @change="loadSlots" />
-        </div>
-        <p class="section-tip">可选号源（余量 > 0 可约）</p>
-        <div class="slot-list" v-if="slots.length">
-          <div v-for="s in slots" :key="s.id" class="slot"
-               :class="{ disabled: s.remaining <= 0 }" @click="s.remaining > 0 && pickSlot(s)">
-            <div class="slot-doc">{{ s.doctorName }}</div>
-            <div class="slot-meta">{{ s.departmentName }} · {{ s.scheduleDate }} {{ s.periodText }}</div>
-            <div class="slot-remain">余量 <b>{{ s.remaining }}</b> / {{ s.totalLimit }}</div>
+      <el-tabs v-model="tab">
+        <el-tab-pane label="在线预约" name="book">
+          <div class="form-row">
+            <label>就诊日期</label>
+            <el-date-picker v-model="bookDate" type="date" value-format="YYYY-MM-DD"
+                            style="width: 100%" @change="loadSlots" />
           </div>
-        </div>
-        <div class="empty" v-else>当日暂无可约号源</div>
-
-        <!-- 填写患者信息 -->
-        <div class="book-form" v-if="picked">
-          <div class="picked-tip">已选：{{ picked.doctorName }}（{{ picked.scheduleDate }} {{ picked.periodText }}）</div>
-          <label class="field"><span>姓名 *</span><input v-model="form.patientName" class="input" /></label>
-          <label class="field"><span>手机号 *</span><input v-model="form.patientPhone" class="input" /></label>
-          <label class="field"><span>身份证号 *</span><input v-model="form.patientIdCard" class="input" /></label>
-          <button class="btn primary block" :disabled="booking" @click="submitBook">提交预约（¥10）</button>
-          <p class="hint">提交后请在 15 分钟内完成支付，超时号源自动释放。</p>
-        </div>
-      </div>
-
-      <!-- 查询 -->
-      <div v-else>
-        <div class="form-row query-row">
-          <input v-model="q.phone" class="input" placeholder="手机号" />
-          <input v-model="q.idCard" class="input" placeholder="身份证号" />
-          <input v-model="q.registrationNo" class="input" placeholder="预约号（可选）" />
-          <button class="btn" @click="doQuery">查询</button>
-        </div>
-        <div class="result-list" v-if="myList.length">
-          <div v-for="r in myList" :key="r.id" class="result">
-            <div class="result-top">
-              <b>{{ r.doctorName }}</b>
-              <span class="r-status" :class="statusClass(r.status)">{{ r.statusText }}</span>
-            </div>
-            <div class="result-meta">{{ r.scheduleDate }} {{ r.periodText }} · 序号 {{ r.seqNo }} · {{ r.sourceTypeText }}</div>
-            <div class="result-meta">凭证号 {{ r.registrationNo }}</div>
-            <div class="result-ops" v-if="r.status === 1">
-              <button class="link" @click="pay(r)">确认支付</button>
-              <button class="link danger" @click="cancel(r)">取消预约</button>
-            </div>
-            <div class="result-ops" v-else-if="r.status === 2">
-              <span class="tip">请凭预约号/身份证到窗口或自助机取号</span>
+          <p class="section-tip">可选号源（余量 > 0 可约）</p>
+          <div class="slot-list" v-if="slots.length">
+            <div v-for="s in slots" :key="s.id" class="slot"
+                 :class="{ disabled: s.remaining <= 0 }" @click="s.remaining > 0 && pickSlot(s)">
+              <div class="slot-doc">{{ s.doctorName }}</div>
+              <div class="slot-meta">{{ s.departmentName }} · {{ s.scheduleDate }} {{ s.periodText }}</div>
+              <div class="slot-remain">余量 <b>{{ s.remaining }}</b> / {{ s.totalLimit }}</div>
             </div>
           </div>
-        </div>
-        <div class="empty" v-else-if="queried">未查询到预约记录</div>
-      </div>
+          <el-empty v-else description="当日暂无可约号源" :image-size="80" />
+
+          <!-- 填写患者信息 -->
+          <div class="book-form" v-if="picked">
+            <div class="picked-tip">已选：{{ picked.doctorName }}（{{ picked.scheduleDate }} {{ picked.periodText }}）</div>
+            <label class="field"><span>姓名 *</span><el-input v-model="form.patientName" /></label>
+            <label class="field"><span>手机号 *</span><el-input v-model="form.patientPhone" /></label>
+            <label class="field"><span>身份证号 *</span><el-input v-model="form.patientIdCard" /></label>
+            <el-button type="primary" class="block" :disabled="booking" @click="submitBook">提交预约（¥10）</el-button>
+            <p class="hint">提交后请在 15 分钟内完成支付，超时号源自动释放。</p>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="我的预约" name="query">
+          <div class="form-row query-row">
+            <el-input v-model="q.phone" placeholder="手机号" />
+            <el-input v-model="q.idCard" placeholder="身份证号" />
+            <el-input v-model="q.registrationNo" placeholder="预约号（可选）" />
+            <el-button @click="doQuery">查询</el-button>
+          </div>
+          <div class="result-list" v-if="myList.length">
+            <div v-for="r in myList" :key="r.id" class="result">
+              <div class="result-top">
+                <b>{{ r.doctorName }}</b>
+                <span class="r-status" :class="statusClass(r.status)">{{ r.statusText }}</span>
+              </div>
+              <div class="result-meta">{{ r.scheduleDate }} {{ r.periodText }} · 序号 {{ r.seqNo }} · {{ r.sourceTypeText }}</div>
+              <div class="result-meta">凭证号 {{ r.registrationNo }}</div>
+              <div class="result-ops" v-if="r.status === 1">
+                <el-button link type="primary" @click="pay(r)">确认支付</el-button>
+                <el-button link type="danger" @click="cancel(r)">取消预约</el-button>
+              </div>
+              <div class="result-ops" v-else-if="r.status === 2">
+                <span class="tip">请凭预约号/身份证到窗口或自助机取号</span>
+              </div>
+            </div>
+          </div>
+          <el-empty v-else-if="queried" description="未查询到预约记录" :image-size="80" />
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </div>
 </template>
@@ -162,14 +158,10 @@ onMounted(loadSlots)
   border-radius: var(--border-radius); padding: 24px; }
 .title { margin: 0; font-size: 20px; color: var(--text-primary); text-align: center; }
 .sub { margin: 6px 0 18px; color: var(--text-secondary); font-size: 13px; text-align: center; }
-.tabs { display: flex; gap: 8px; margin-bottom: 18px; }
-.tab { flex: 1; padding: 10px; background: var(--bg-hover); border: 1px solid var(--border-color); color: var(--text-secondary);
-  border-radius: var(--border-radius-sm); cursor: pointer; font-size: 14px; }
-.tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .form-row { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+.form-row :deep(.el-date-editor) { width: 100%; }
 .form-row.query-row { flex-wrap: wrap; }
-.input { flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);
-  border-radius: var(--border-radius-sm); padding: 9px 12px; font-size: 13px; min-width: 0; }
+.form-row.query-row .el-input { flex: 1; min-width: 140px; }
 .section-tip { color: var(--text-secondary); font-size: 13px; margin: 4px 0 10px; }
 .slot-list { display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; }
 .slot { border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 12px; cursor: pointer; transition: .2s; }
@@ -179,14 +171,10 @@ onMounted(loadSlots)
 .slot-meta { color: var(--text-secondary); font-size: 13px; margin: 4px 0; }
 .slot-remain { color: var(--text-secondary); font-size: 13px; }
 .slot-remain b { color: var(--success, #16a34a); }
-.empty { color: var(--text-secondary); text-align: center; padding: 30px; }
 .book-form { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px; display: flex; flex-direction: column; gap: 12px; }
 .picked-tip { font-size: 13px; color: var(--primary); }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
-.btn { background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);
-  border-radius: var(--border-radius-sm); padding: 9px 16px; cursor: pointer; font-size: 13px; }
-.btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-.btn.block { width: 100%; }
+.block { width: 100%; }
 .hint { font-size: 12px; color: var(--text-secondary); margin: 0; }
 .result-list { display: flex; flex-direction: column; gap: 12px; }
 .result { border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 14px; }
@@ -194,13 +182,11 @@ onMounted(loadSlots)
 .result-top b { color: var(--text-primary); }
 .result-meta { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
 .r-status { padding: 2px 9px; border-radius: 10px; font-size: 12px; }
-.r-status.reserved { background: rgba(59,130,246,.15); color: #3b82f6; }
-.r-status.called { background: rgba(168,85,247,.15); color: #a855f7; }
+.r-status.reserved { background: rgba(14,165,164,.15); color: var(--primary, #0d9488); }
+.r-status.called { background: rgba(245,158,11,.15); color: #f59e0b; }
 .r-status.treated { background: rgba(22,163,74,.15); color: #16a34a; }
 .r-status.cancel, .r-status.expired { background: rgba(148,163,184,.2); color: #64748b; }
 .r-status.refund { background: rgba(239,68,68,.15); color: #ef4444; }
 .result-ops { margin-top: 8px; display: flex; gap: 12px; align-items: center; }
-.link { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 13px; padding: 0; }
-.link.danger { color: #ef4444; }
 .tip { font-size: 12px; color: var(--text-secondary); }
 </style>
