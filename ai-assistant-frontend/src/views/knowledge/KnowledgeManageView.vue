@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <!-- 上传区 -->
+    <!-- 上传区（保留自研上传卡片结构，不使用 el-upload） -->
     <div class="upload-card">
       <div class="upload-info">
         <span class="upload-title">上传文档</span>
@@ -17,50 +17,54 @@
         <span class="file-name" :title="selectedFile ? selectedFile.name : ''">
           {{ selectedFile ? selectedFile.name : '未选择文件' }}
         </span>
-        <button class="ghost-btn" @click="chooseFile">选择文件</button>
-        <button class="primary-btn" :disabled="!selectedFile || uploading" @click="doUpload">
+        <el-button @click="chooseFile">选择文件</el-button>
+        <el-button type="primary" :disabled="!selectedFile || uploading" @click="doUpload">
           {{ uploading ? '上传中…' : '上传' }}
-        </button>
+        </el-button>
       </div>
       <input ref="fileInputRef" type="file" accept=".md,.txt" class="hidden-input" @change="onFileChange" />
     </div>
 
     <!-- 表格 -->
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th style="width: 64px">ID</th>
-            <th>文件名</th>
-            <th style="width: 90px">类型</th>
-            <th style="width: 120px">大小 (KB)</th>
-            <th style="width: 100px">切片数</th>
-            <th style="width: 170px">上传时间</th>
-            <th style="width: 100px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="d in list" :key="d.id">
-            <td :title="String(d.id)"><code class="id-cell">{{ d.id }}</code></td>
-            <td :title="d.name">{{ d.name }}</td>
-            <td>{{ d.type ? '.' + d.type : '—' }}</td>
-            <td>{{ formatKb(d.size) }}</td>
-            <td>{{ d.chunkCount ?? '—' }}</td>
-            <td class="time-cell" :title="formatTime(d.createTime)">{{ formatTime(d.createTime) }}</td>
-            <td>
-              <button class="link-btn danger" @click="removeDoc(d)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <el-table v-if="list.length > 0" :data="list" stripe>
+        <el-table-column label="ID" width="64">
+          <template #default="{ row }"><code class="id-cell" :title="String(row.id)">{{ row.id }}</code></template>
+        </el-table-column>
+        <el-table-column label="文件名">
+          <template #default="{ row }"><span :title="row.name">{{ row.name }}</span></template>
+        </el-table-column>
+        <el-table-column label="类型" width="90">
+          <template #default="{ row }">{{ row.type ? '.' + row.type : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="大小 (KB)" width="120">
+          <template #default="{ row }">{{ formatKb(row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="切片数" width="100">
+          <template #default="{ row }">{{ row.chunkCount ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="上传时间" width="170">
+          <template #default="{ row }"><span class="time-cell" :title="formatTime(row.createTime)">{{ formatTime(row.createTime) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="100">
+          <template #default="{ row }">
+            <el-button link type="danger" @click="removeDoc(row)">删除</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>{{ loading ? '加载中…' : '暂无知识库文档' }}</template>
+      </el-table>
       <div v-else class="empty-tip">{{ loading ? '加载中…' : '暂无知识库文档' }}</div>
     </div>
 
     <!-- 分页 -->
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="changePage(pageNum - 1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum >= totalPages" @click="changePage(pageNum + 1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
   </div>
 </template>
@@ -187,7 +191,7 @@ onMounted(loadData)
   padding: 14px 20px;
   margin-bottom: 16px;
   background: var(--bg-card);
-  border: 1px dashed var(--border-color);
+  border: 1px dashed var(--el-color-primary-light-5, var(--border-color));
   border-radius: var(--border-radius);
 }
 
