@@ -34,6 +34,9 @@ public class KnowledgeDocumentDTO {
     /** 切片数量 */
     private Integer chunkCount;
 
+    /** 处理状态：0-处理中，1-就绪 */
+    private Integer status;
+
     /** 上传时间 */
     private LocalDateTime createTime;
 }

@@ -3,6 +3,7 @@ package com.aiassistant.service.impl;
 import com.aiassistant.config.AiProperties;
 import com.aiassistant.dto.KnowledgeDocumentDTO;
 import com.aiassistant.entity.KnowledgeDocument;
+import com.aiassistant.mq.KnowledgeTaskPublisher;
 import com.aiassistant.rag.KnowledgeChunker;
 import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
@@ -11,7 +12,6 @@ import com.common.auth.UserSnapshot;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.common.security.SecurityUtils;
-import org.springframework.ai.document.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -26,7 +26,7 @@ import java.util.Set;
 /**
  * 知识库文档管理（上传/列表/删除；全部操作限定在操作者医院范围内）
  * <p>
- * 向量数据与文档行同步：上传即切片入向量；删除后按该医院剩余文档重建向量文件。
+ * 上传落库即返回，切片向量化经 Kafka 异步完成；删除后按该医院已就绪文档重建向量文件。
  *
  * @author yh
  * @date 2026-10-13
@@ -49,19 +49,25 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     /** 本院向量存储 */
     private final KnowledgeVectorStore knowledgeVectorStore;
 
+    /** 知识库任务事件发布器 */
+    private final KnowledgeTaskPublisher taskPublisher;
+
     /**
      * 构造器注入：切片大小取 Nacos ai.rag.chunk-size（KnowledgeChunker 为普通类，非容器组件）
      *
      * @param documentRepository   知识库文档仓库
      * @param aiProperties         AI 配置（取切片大小）
      * @param knowledgeVectorStore 知识库向量存储
+     * @param taskPublisher        知识库任务事件发布器
      */
     public KnowledgeServiceImpl(KnowledgeDocumentRepository documentRepository,
                                 AiProperties aiProperties,
-                                KnowledgeVectorStore knowledgeVectorStore) {
+                                KnowledgeVectorStore knowledgeVectorStore,
+                                KnowledgeTaskPublisher taskPublisher) {
         this.documentRepository = documentRepository;
         this.knowledgeChunker = new KnowledgeChunker(aiProperties.getRag().getChunkSize());
         this.knowledgeVectorStore = knowledgeVectorStore;
+        this.taskPublisher = taskPublisher;
     }
 
     @Override
@@ -83,18 +89,18 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         } catch (IOException e) {
             throw new BusinessException("文档读取失败");
         }
-        List<Document> chunks = knowledgeChunker.split(filename, text);
-        knowledgeVectorStore.addDocuments(hospitalId, chunks);
-
         KnowledgeDocument doc = new KnowledgeDocument();
         doc.setHospitalId(hospitalId);
         doc.setName(filename);
         doc.setType(ext);
         doc.setSize(file.getSize());
-        doc.setChunkCount(chunks.size());
+        doc.setChunkCount(0);
         doc.setContent(text);
         doc.setCreateBy(user.getUserId());
-        return documentRepository.save(doc).getId();
+        KnowledgeDocument saved = documentRepository.save(doc);
+        // 落库即返回，切片向量化交由消费者异步完成（消费端以文档不存在兜底回滚场景）
+        taskPublisher.publishUploaded(saved.getId(), hospitalId);
+        return saved.getId();
     }
 
     @Override
@@ -106,7 +112,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         List<KnowledgeDocumentDTO> rows = page.getContent().stream()
                 .map(d -> KnowledgeDocumentDTO.builder()
                         .id(d.getId()).name(d.getName()).type(d.getType()).size(d.getSize())
-                        .chunkCount(d.getChunkCount()).createTime(d.getCreateTime()).build())
+                        .chunkCount(d.getChunkCount()).status(d.getStatus()).createTime(d.getCreateTime()).build())
                 .toList();
         PageResult<KnowledgeDocumentDTO> result = new PageResult<>();
         result.setTotal(page.getTotalElements());
@@ -126,8 +132,9 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("无权操作该文档");
         }
         documentRepository.delete(doc);
-        // 按该医院剩余文档重建向量（文档量小，重建简单可靠）
-        knowledgeVectorStore.rebuild(user.getHospitalId(), documentRepository.findByHospitalId(user.getHospitalId()));
+        // 按该医院已就绪文档重建向量（未就绪文档尚未入向量；文档量小，重建简单可靠）
+        knowledgeVectorStore.rebuild(user.getHospitalId(),
+                documentRepository.findByHospitalIdAndStatus(user.getHospitalId(), KnowledgeDocument.STATUS_READY));
     }
 
     /**

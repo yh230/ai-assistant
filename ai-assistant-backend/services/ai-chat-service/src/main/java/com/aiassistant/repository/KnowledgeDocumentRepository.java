@@ -33,4 +33,13 @@ public interface KnowledgeDocumentRepository extends JpaRepository<KnowledgeDocu
      * @return 文档列表；无数据返回空列表
      */
     List<KnowledgeDocument> findByHospitalId(Long hospitalId);
+
+    /**
+     * 查询医院指定状态的文档
+     *
+     * @param hospitalId 医院 ID
+     * @param status     文档状态
+     * @return 符合条件的文档列表；无数据返回空列表
+     */
+    List<KnowledgeDocument> findByHospitalIdAndStatus(Long hospitalId, Integer status);
 }
