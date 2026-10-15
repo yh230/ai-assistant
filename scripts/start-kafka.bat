@@ -10,7 +10,8 @@ if "%KH%"=="" (
   echo Unzip here as kafka_2.13-3.x.y or set KAFKA_HOME.
   goto :end
 )
-if not exist "%KH%\config\kraft\server.properties" (
+rem 自定义 log.dirs 时需手动 kafka-storage format
+if not exist "C:\tmp\kraft-combined-logs\meta.properties" (
   echo kafka storage format required once...
   for /f %%u in ('"%KH%\bin\windows\kafka-storage.bat" random-uuid') do set "UUID=%%u"
   call "%KH%\bin\windows\kafka-storage.bat" format -t !UUID! -c "%KH%\config\kraft\server.properties"
