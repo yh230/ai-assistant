@@ -5,60 +5,67 @@
     </div>
 
     <div class="toolbar">
-      <input v-model.trim="filters.module" class="search-input" placeholder="业务模块" />
-      <input v-model.trim="filters.username" class="search-input" placeholder="操作人账号" />
-      <select v-model="filters.status" class="search-input">
-        <option :value="''">全部结果</option>
-        <option :value="0">成功</option>
-        <option :value="1">失败</option>
-      </select>
-      <input type="date" v-model="filters.dateFrom" class="search-input" />
+      <el-input v-model.trim="filters.module" placeholder="业务模块" style="width: 160px" />
+      <el-input v-model.trim="filters.username" placeholder="操作人账号" style="width: 160px" />
+      <el-select v-model="filters.status" placeholder="全部结果" clearable style="width: 160px">
+        <el-option label="成功" :value="0" />
+        <el-option label="失败" :value="1" />
+      </el-select>
+      <el-date-picker v-model="filters.dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" style="width: 160px" />
       <span class="til">至</span>
-      <input type="date" v-model="filters.dateTo" class="search-input" />
-      <button class="ghost-btn" @click="search">查询</button>
-      <button class="ghost-btn" @click="reset">重置</button>
+      <el-date-picker v-model="filters.dateTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" style="width: 160px" />
+      <el-button @click="search">查询</el-button>
+      <el-button @click="reset">重置</el-button>
     </div>
 
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th style="width: 160px">操作时间</th>
-            <th>模块</th>
-            <th>动作</th>
-            <th>操作人</th>
-            <th style="width: 70px">身份</th>
-            <th>请求</th>
-            <th style="width: 130px">IP</th>
-            <th style="width: 80px">结果</th>
-            <th style="width: 90px">耗时(ms)</th>
-            <th>错误摘要</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in list" :key="row.id">
-            <td class="time-cell">{{ formatTime(row.operTime) }}</td>
-            <td>{{ row.module }}</td>
-            <td>{{ row.action }}</td>
-            <td>{{ row.username || '匿名' }}</td>
-            <td>{{ identityText(row.identity) }}</td>
-            <td>{{ row.method }} {{ row.requestUri }}</td>
-            <td>{{ row.ip }}</td>
-            <td>
-              <span class="status-tag" :class="row.status === 0 ? 'success' : 'fail'">{{ row.status === 0 ? '成功' : '失败' }}</span>
-            </td>
-            <td>{{ row.costMs }}</td>
-            <td class="error-cell" :title="row.errorMsg">{{ row.errorMsg }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-tip">暂无数据</div>
+      <el-table v-if="list.length > 0" :data="list" stripe>
+        <el-table-column label="操作时间" width="170">
+          <template #default="{ row }"><span class="time-cell">{{ formatTime(row.operTime) }}</span></template>
+        </el-table-column>
+        <el-table-column label="模块">
+          <template #default="{ row }">{{ row.module }}</template>
+        </el-table-column>
+        <el-table-column label="动作">
+          <template #default="{ row }">{{ row.action }}</template>
+        </el-table-column>
+        <el-table-column label="操作人">
+          <template #default="{ row }">{{ row.username || '匿名' }}</template>
+        </el-table-column>
+        <el-table-column label="身份" width="70">
+          <template #default="{ row }">{{ identityText(row.identity) }}</template>
+        </el-table-column>
+        <el-table-column label="请求">
+          <template #default="{ row }">{{ row.method }} {{ row.requestUri }}</template>
+        </el-table-column>
+        <el-table-column label="IP" width="130">
+          <template #default="{ row }">{{ row.ip }}</template>
+        </el-table-column>
+        <el-table-column label="结果" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 0 ? 'success' : 'danger'" effect="light">
+              {{ row.status === 0 ? '成功' : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="耗时(ms)" width="90">
+          <template #default="{ row }">{{ row.costMs }}</template>
+        </el-table-column>
+        <el-table-column label="错误摘要">
+          <template #default="{ row }"><span class="error-cell" :title="row.errorMsg">{{ row.errorMsg }}</span></template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无数据" :image-size="96" />
     </div>
 
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="turn(-1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} 页 / 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum * pageSize >= total" @click="turn(1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
   </div>
 </template>
@@ -103,8 +110,8 @@ function reset() {
   search()
 }
 
-function turn(delta) {
-  pageNum.value += delta
+function changePage(p) {
+  pageNum.value = p
   load()
 }
 
@@ -122,11 +129,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-/* 筛选栏/徽标样式对齐现有管理页（AttendanceManageView 同款写法），不改全局样式 */
-.toolbar { align-items: center; flex-wrap: wrap; }
-.search-input { width: 160px; }
 .til { color: var(--text-tertiary); font-size: 13px; }
-.status-tag.success { background: rgba(34, 197, 94, 0.15); color: var(--success); }
-.status-tag.fail { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
-.error-cell { color: var(--text-secondary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.error-cell { color: var(--text-secondary); display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 </style>
