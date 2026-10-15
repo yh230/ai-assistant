@@ -5,101 +5,86 @@
         <h2 class="page-title">医院管理</h2>
         <p class="page-sub">维护医院基础信息（仅院长/管理员可操作，数据范围：全部）。</p>
       </div>
-      <button class="primary-btn" @click="openCreate">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        新增医院
-      </button>
+      <el-button type="primary" :icon="Plus" @click="openCreate">新增医院</el-button>
     </div>
 
     <div class="toolbar">
-      <input v-model="keyword" class="search-input" placeholder="搜索医院名称" @keyup.enter="reload" />
-      <button class="ghost-btn" @click="reload">查询</button>
+      <el-input v-model="keyword" placeholder="搜索医院名称" style="width: 240px" @keyup.enter="reload" />
+      <el-button @click="reload">查询</el-button>
     </div>
 
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th style="width: 70px">ID</th>
-            <th>名称</th>
-            <th>地址</th>
-            <th>电话</th>
-            <th style="width: 80px">状态</th>
-            <th style="width: 160px">创建时间</th>
-            <th style="width: 200px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="h in list" :key="h.id">
-            <td><code class="id-cell">{{ h.id }}</code></td>
-            <td>{{ h.name }}</td>
-            <td>{{ h.address || '—' }}</td>
-            <td>{{ h.phone || '—' }}</td>
-            <td>
-              <span class="status-tag" :class="h.status === 1 ? 'on' : 'off'">
-                {{ h.status === 1 ? '启用' : '禁用' }}
-              </span>
-            </td>
-            <td class="time-cell">{{ formatTime(h.createTime) }}</td>
-            <td>
-              <button class="link-btn" @click="openEdit(h)">编辑</button>
-              <button class="link-btn" @click="toggleStatus(h)">
-                {{ h.status === 1 ? '禁用' : '启用' }}
-              </button>
-              <button class="link-btn danger" @click="remove(h)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-tip">暂无医院数据</div>
+      <el-table v-if="list.length > 0" :data="list" stripe>
+        <el-table-column label="ID" width="70">
+          <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" />
+        <el-table-column label="地址">
+          <template #default="{ row }">{{ row.address || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="电话">
+          <template #default="{ row }">{{ row.phone || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 1 ? 'success' : 'info'" effect="light">
+              {{ row.status === 1 ? '启用' : '禁用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170">
+          <template #default="{ row }"><span class="time-cell">{{ formatTime(row.createTime) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="200">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="primary" @click="toggleStatus(row)">{{ row.status === 1 ? '禁用' : '启用' }}</el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无医院数据" :image-size="96" />
     </div>
 
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="changePage(pageNum - 1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum >= totalPages" @click="changePage(pageNum + 1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
 
-    <div class="modal-mask" v-if="showModal" @click.self="closeModal">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>{{ isEdit ? '编辑医院' : '新增医院' }}</h3>
-          <button class="modal-close" @click="closeModal">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-row">
-            <label>名称 <span class="req">*</span></label>
-            <input v-model="form.name" class="form-input" placeholder="如 市第一人民医院" />
-          </div>
-          <div class="form-row">
-            <label>地址</label>
-            <input v-model="form.address" class="form-input" placeholder="选填" />
-          </div>
-          <div class="form-row">
-            <label>电话</label>
-            <input v-model="form.phone" class="form-input" placeholder="选填" />
-          </div>
-          <div class="form-row">
-            <label>状态</label>
-            <select v-model.number="form.status" class="form-input">
-              <option :value="1">启用</option>
-              <option :value="0">禁用</option>
-            </select>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="closeModal">取消</button>
-          <button class="primary-btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-        </div>
-      </div>
-    </div>
+    <el-dialog v-model="showModal" :title="isEdit ? '编辑医院' : '新增医院'" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="名称" required>
+          <el-input v-model="form.name" placeholder="如 市第一人民医院" />
+        </el-form-item>
+        <el-form-item label="地址">
+          <el-input v-model="form.address" placeholder="选填" />
+        </el-form-item>
+        <el-form-item label="电话">
+          <el-input v-model="form.phone" placeholder="选填" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="form.status" style="width: 100%">
+            <el-option label="启用" :value="1" />
+            <el-option label="禁用" :value="0" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="closeModal">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { onMounted } from 'vue'
+import { Plus } from '@element-plus/icons-vue'
 import { pageHospitals, createHospital, updateHospital, deleteHospital, changeHospitalStatus } from '../api/hospital'
 import { useCrudPage } from '../composables/useCrudPage'
 import { formatTime } from '../utils/format'
