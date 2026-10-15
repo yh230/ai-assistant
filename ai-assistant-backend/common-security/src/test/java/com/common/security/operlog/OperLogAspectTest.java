@@ -15,7 +15,10 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,7 +41,7 @@ class OperLogAspectTest {
 
     @BeforeEach
     void setUp() {
-        aspect = new OperLogAspect(operLogClient, new ObjectMapper());
+        aspect = new OperLogAspect(operLogClient, new ObjectMapper(), Runnable::run);
     }
 
     @Test
@@ -149,5 +152,22 @@ class OperLogAspectTest {
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
+    }
+
+    @Test
+    void shouldSubmitReportToExecutorInsteadOfBlockingCall() throws Throwable {
+        List<Runnable> tasks = new ArrayList<>();
+        Executor collector = tasks::add;
+        OperLogAspect aspect = new OperLogAspect(operLogClient, new ObjectMapper(), collector);
+        when(operLog.module()).thenReturn("用户管理");
+        when(operLog.action()).thenReturn("新增用户");
+        when(joinPoint.proceed()).thenReturn("ok");
+        when(joinPoint.getArgs()).thenReturn(new Object[0]);
+
+        aspect.around(joinPoint, operLog);
+
+        verify(operLogClient, never()).report(any());
+        tasks.forEach(Runnable::run);
+        verify(operLogClient).report(any(OperLogDTO.class));
     }
 }

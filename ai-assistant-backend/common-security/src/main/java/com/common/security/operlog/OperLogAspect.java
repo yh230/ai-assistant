@@ -15,10 +15,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.concurrent.Executor;
+
 /**
  * 操作审计切面：采集登录人/请求/参数/结果耗时，经 OperLogClient 上报 system-service
  * <p>
- * 上报为 best-effort：任何上报异常仅记 warn，不阻断业务；业务异常原样重抛
+ * 上报为 best-effort：经独立线程池异步执行，任何上报异常仅记 warn，不阻断业务；业务异常原样重抛
  *
  * @author yh
  * @date 2026-10-14
@@ -31,6 +33,7 @@ public class OperLogAspect {
 
     private final OperLogClient operLogClient;
     private final ObjectMapper objectMapper;
+    private final Executor operLogReportExecutor;
 
     /**
      * 环绕被 @OperLog 标注的方法采集审计日志
@@ -50,11 +53,14 @@ public class OperLogAspect {
             error = t;
             throw t;
         } finally {
-            try {
-                operLogClient.report(buildDto(joinPoint, operLog, error, (System.nanoTime() - start) / 1_000_000));
-            } catch (Exception e) {
-                log.warn("操作日志上报失败: {}", e.getMessage());
-            }
+            OperLogDTO dto = buildDto(joinPoint, operLog, error, (System.nanoTime() - start) / 1_000_000);
+            operLogReportExecutor.execute(() -> {
+                try {
+                    operLogClient.report(dto);
+                } catch (Exception e) {
+                    log.warn("操作日志上报失败: {}", e.getMessage());
+                }
+            });
         }
     }
 
