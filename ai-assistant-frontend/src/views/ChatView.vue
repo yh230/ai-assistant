@@ -3,13 +3,7 @@
     <!-- 会话列表 -->
     <div class="session-panel">
       <div class="session-header">
-        <button class="new-chat-btn" @click="newChat">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          新建对话
-        </button>
+        <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="newChat">新建对话</el-button>
       </div>
       <div class="session-list">
         <div
@@ -19,14 +13,10 @@
           :class="{ active: currentSessionId === s.sessionId }"
           @click="loadSession(s.sessionId)"
         >
-          <svg class="session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
+          <el-icon class="session-icon" :size="16"><ChatDotRound /></el-icon>
           <span class="session-title">{{ s.title }}</span>
           <span class="session-delete" @click.stop="removeSession(s.sessionId)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 6L6 18M6 6l12 12"/>
-            </svg>
+            <el-icon :size="14"><Close /></el-icon>
           </span>
         </div>
         <div v-if="sessions.length === 0" class="empty-sessions">
@@ -53,11 +43,9 @@
           </button>
         </div>
         <div class="model-select">
-          <select v-model="selectedModelId" title="选择大模型">
-            <option v-for="m in models" :key="m.id" :value="m.id">
-              {{ m.label }}{{ m.active ? '' : '（未启用）' }}
-            </option>
-          </select>
+          <el-select v-model="selectedModelId" title="选择大模型" class="model-select-input">
+            <el-option v-for="m in models" :key="m.id" :value="m.id" :label="m.label + (m.active ? '' : '（未启用）')" />
+          </el-select>
         </div>
       </div>
 
@@ -95,7 +83,7 @@
           <div class="message-bubble">
             <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
             <span v-if="msg.streaming" class="streaming-cursor"></span>
-            <span v-if="msg.role === 'assistant' && msg.localFallback" class="local-badge">本地回复</span>
+            <el-tag v-if="msg.role === 'assistant' && msg.localFallback" type="warning" class="local-badge" effect="light">本地回复</el-tag>
           </div>
         </div>
 
@@ -113,21 +101,22 @@
       <!-- 输入区域 -->
       <div class="input-area">
         <div class="input-wrapper">
-          <textarea
+          <el-input
             ref="inputRef"
             v-model="inputText"
+            type="textarea"
             class="input-textarea"
+            :autosize="{ minRows: 1, maxRows: 6 }"
             placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
-            rows="1"
             @keydown="handleKeydown"
-            @input="autoResize"
-          ></textarea>
-          <button class="send-btn" :disabled="!inputText.trim() || loading" @click="sendMessage">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-          </button>
+          />
+          <el-button
+            type="primary"
+            class="send-btn"
+            :disabled="!inputText.trim() || loading"
+            :icon="Position"
+            @click="sendMessage"
+          />
         </div>
         <p class="input-hint">
           聊天小伙伴由 Spring AI + Vue 3 驱动 · 流式响应 · 对话内容保存在 MySQL
@@ -139,6 +128,7 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted } from 'vue'
+import { Plus, Close, ChatDotRound, Position } from '@element-plus/icons-vue'
 import { sendMessageStream, getChatHistory, getSessions, deleteSession, getRoles, getModels } from '../api/chat'
 import { confirm as showConfirm, toast } from '../utils/message'
 import { renderMarkdownSafe } from '../utils/safeMarkdown'
@@ -263,7 +253,6 @@ async function sendMessage() {
   // 添加用户消息
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
-  autoResize()
   loading.value = true
 
   // 预先创建一条空的 assistant 消息，用于流式追加内容
@@ -330,14 +319,6 @@ function handleKeydown(e) {
   }
 }
 
-// 自动调整高度
-function autoResize() {
-  const el = inputRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
-}
-
 // 滚动到底部
 function scrollToBottom() {
   const el = messageListRef.value
@@ -377,20 +358,6 @@ onMounted(() => {
 
 .new-chat-btn {
   width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
-  background: var(--primary);
-  color: white;
-  border-radius: var(--border-radius-sm);
-  font-size: 14px;
-  transition: var(--transition);
-}
-
-.new-chat-btn:hover {
-  background: var(--primary-dark);
 }
 
 .session-list {
@@ -511,19 +478,8 @@ onMounted(() => {
   font-size: 15px;
 }
 
-.model-select select {
-  padding: 6px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-main);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
-}
-
-.model-select select:focus {
-  border-color: var(--primary);
+.model-select-input {
+  width: 200px;
 }
 
 .message-list {
@@ -629,7 +585,7 @@ onMounted(() => {
 }
 
 .message-item.assistant .message-avatar {
-  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
   color: white;
 }
 
@@ -657,11 +613,6 @@ onMounted(() => {
 .local-badge {
   display: inline-block;
   margin-top: 8px;
-  padding: 2px 8px;
-  background: var(--warning);
-  color: white;
-  font-size: 11px;
-  border-radius: 4px;
 }
 
 /* 流式输出光标 */
@@ -741,36 +692,20 @@ onMounted(() => {
 
 .input-textarea {
   flex: 1;
+}
+
+.input-textarea :deep(.el-textarea__inner) {
   border: none;
   background: transparent;
   font-size: 14px;
   line-height: 1.6;
-  resize: none;
+  box-shadow: none;
+  padding: 4px 0;
   color: var(--text-primary);
-  max-height: 120px;
 }
 
 .send-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: var(--primary);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  transition: var(--transition);
-}
-
-.send-btn:hover:not(:disabled) {
-  background: var(--primary-dark);
-  transform: scale(1.05);
-}
-
-.send-btn:disabled {
-  background: var(--text-tertiary);
-  cursor: not-allowed;
 }
 
 .input-hint {
