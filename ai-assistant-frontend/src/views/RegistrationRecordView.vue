@@ -5,130 +5,134 @@
         <h2 class="page-title">挂号记录</h2>
         <p class="page-desc">现场挂号 / 取号 / 退号 / 标记就诊（按角色与数据权限自动过滤，仅见本院/本人数据）</p>
       </div>
-      <button v-if="can(PERMS.REGISTRATION_REGISTER_CREATE)" class="btn primary" @click="openWalkIn">+ 现场挂号</button>
+      <el-button v-if="can(PERMS.REGISTRATION_REGISTER_CREATE)" type="primary" @click="openWalkIn">+ 现场挂号</el-button>
     </div>
 
     <!-- 筛选 -->
     <div class="filter-bar">
-      <input v-model="filters.patientPhone" class="input" placeholder="患者手机号" @keyup.enter="load" />
-      <input v-model="filters.patientName" class="input" placeholder="患者姓名" @keyup.enter="load" />
-      <select v-model="filters.status" class="input" @change="load">
-        <option :value="null">全部状态</option>
-        <option v-for="o in statusOptions" :key="o.v" :value="o.v">{{ o.t }}</option>
-      </select>
-      <select v-model="filters.period" class="input" @change="load">
-        <option :value="null">全部时段</option>
-        <option :value="1">上午</option>
-        <option :value="2">下午</option>
-      </select>
-      <input v-model="filters.dateFrom" type="date" class="input" @change="load" />
+      <el-input v-model="filters.patientPhone" placeholder="患者手机号" style="width: 180px" clearable @keyup.enter="load" />
+      <el-input v-model="filters.patientName" placeholder="患者姓名" style="width: 160px" clearable @keyup.enter="load" />
+      <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 130px" @change="load">
+        <el-option v-for="o in statusOptions" :key="o.v" :label="o.t" :value="o.v" />
+      </el-select>
+      <el-select v-model="filters.period" placeholder="全部时段" clearable style="width: 130px" @change="load">
+        <el-option label="上午" :value="1" />
+        <el-option label="下午" :value="2" />
+      </el-select>
+      <el-date-picker v-model="filters.dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" style="width: 150px" @change="load" />
       <span class="tilde">至</span>
-      <input v-model="filters.dateTo" type="date" class="input" @change="load" />
-      <button class="btn" @click="resetFilters">重置</button>
+      <el-date-picker v-model="filters.dateTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" style="width: 150px" @change="load" />
+      <el-button @click="resetFilters">重置</el-button>
     </div>
 
     <div class="table-card">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th style="width:160px">凭证号</th>
-            <th style="width:90px">患者</th>
-            <th style="width:90px">医生</th>
-            <th style="width:100px">科室</th>
-            <th style="width:110px">日期/时段</th>
-            <th style="width:60px">序号</th>
-            <th style="width:80px">来源</th>
-            <th style="width:80px">支付</th>
-            <th style="width:90px">状态</th>
-            <th style="width:230px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in list" :key="r.id">
-            <td :title="r.registrationNo">{{ r.registrationNo }}</td>
-            <td :title="r.patientName">{{ r.patientName }}</td>
-            <td :title="r.doctorName">{{ r.doctorName }}</td>
-            <td :title="r.departmentName">{{ r.departmentName }}</td>
-            <td>{{ r.scheduleDate }} {{ r.periodText }}</td>
-            <td>{{ r.seqNo }}</td>
-            <td>{{ r.sourceTypeText }}</td>
-            <td>{{ r.payStatusText }}</td>
-            <td><span class="status-tag" :class="statusClass(r.status)">{{ r.statusText }}</span></td>
-            <td class="ops">
-              <button class="link" @click="printTicket(r)">凭证</button>
-              <button v-if="can(PERMS.REGISTRATION_REGISTER_TAKE) && r.status === 1" class="link" @click="doTake(r)">取号</button>
-              <button v-if="can(PERMS.REGISTRATION_REGISTER_REFUND) && r.status === 2" class="link danger" @click="doRefund(r)">退号</button>
-              <button v-if="can(PERMS.REGISTRATION_REGISTER_TREAT) && r.status === 2" class="link" @click="doTreat(r)">就诊</button>
-            </td>
-          </tr>
-          <tr v-if="!list.length">
-            <td colspan="10" class="empty">暂无挂号记录</td>
-          </tr>
-        </tbody>
-      </table>
+      <el-table :data="list" stripe min-width="1000">
+        <el-table-column label="凭证号" width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.registrationNo }}</template>
+        </el-table-column>
+        <el-table-column label="患者" width="90" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.patientName }}</template>
+        </el-table-column>
+        <el-table-column label="医生" width="90" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.doctorName }}</template>
+        </el-table-column>
+        <el-table-column label="科室" width="100" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.departmentName }}</template>
+        </el-table-column>
+        <el-table-column label="日期/时段" width="110">
+          <template #default="{ row }">{{ row.scheduleDate }} {{ row.periodText }}</template>
+        </el-table-column>
+        <el-table-column label="序号" width="60">
+          <template #default="{ row }">{{ row.seqNo }}</template>
+        </el-table-column>
+        <el-table-column label="来源" width="80">
+          <template #default="{ row }">{{ row.sourceTypeText }}</template>
+        </el-table-column>
+        <el-table-column label="支付" width="80">
+          <template #default="{ row }">{{ row.payStatusText }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :class="statusClass(row.status)" effect="light">{{ row.statusText }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="230">
+          <template #default="{ row }" class="ops">
+            <el-button link type="primary" @click="printTicket(row)">凭证</el-button>
+            <el-button v-if="can(PERMS.REGISTRATION_REGISTER_TAKE) && row.status === 1" link type="primary" @click="doTake(row)">取号</el-button>
+            <el-button v-if="can(PERMS.REGISTRATION_REGISTER_REFUND) && row.status === 2" link type="danger" @click="doRefund(row)">退号</el-button>
+            <el-button v-if="can(PERMS.REGISTRATION_REGISTER_TREAT) && row.status === 2" link type="primary" @click="doTreat(row)">就诊</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>暂无挂号记录</template>
+      </el-table>
     </div>
 
     <div class="pager" v-if="total > pageSize">
-      <button class="btn" :disabled="pageNum <= 1" @click="pageNum--; load()">上一页</button>
-      <span>{{ pageNum }} / {{ Math.ceil(total / pageSize) }}</span>
-      <button class="btn" :disabled="pageNum >= Math.ceil(total / pageSize)" @click="pageNum++; load()">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
 
     <!-- 现场挂号弹窗 -->
-    <div class="modal-mask" v-if="walkVisible" @click.self="walkVisible = false">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>现场窗口挂号</h3>
-          <button class="modal-close" @click="walkVisible = false">×</button>
-        </div>
-        <div class="modal-body">
-          <label class="field"><span>医生 *</span>
-            <select v-model="wform.doctorUserId" class="input">
-              <option :value="null">请选择医生</option>
-              <option v-for="d in doctors" :key="d.id" :value="d.id">{{ d.name }}（{{ d.departmentName }}）</option>
-            </select>
-          </label>
-          <label class="field"><span>日期 *</span><input v-model="wform.scheduleDate" type="date" class="input" /></label>
-          <label class="field"><span>时段 *</span>
-            <select v-model="wform.period" class="input"><option :value="1">上午</option><option :value="2">下午</option></select>
-          </label>
-          <label class="field"><span>患者姓名 *</span><input v-model="wform.patientName" class="input" /></label>
-          <label class="field"><span>手机号 *</span><input v-model="wform.patientPhone" class="input" /></label>
-          <label class="field"><span>身份证号</span><input v-model="wform.patientIdCard" class="input" /></label>
-          <label class="field"><span>收费金额</span><input v-model.number="wform.payAmount" type="number" step="0.01" class="input" /></label>
-        </div>
-        <div class="modal-footer">
-          <button class="btn" @click="walkVisible = false">取消</button>
-          <button class="btn primary" :disabled="saving" @click="submitWalkIn">{{ saving ? '处理中…' : '收费并取号' }}</button>
-        </div>
-      </div>
-    </div>
+    <el-dialog v-model="walkVisible" title="现场窗口挂号" width="500px">
+      <el-form label-position="top">
+        <el-form-item label="医生 *" required>
+          <el-select v-model="wform.doctorUserId" placeholder="请选择医生" style="width: 100%">
+            <el-option v-for="d in doctors" :key="d.id" :label="`${d.name}（${d.departmentName}）`" :value="d.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="日期 *" required>
+          <el-date-picker v-model="wform.scheduleDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="时段 *" required>
+          <el-select v-model="wform.period" style="width: 100%">
+            <el-option label="上午" :value="1" />
+            <el-option label="下午" :value="2" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="患者姓名 *" required>
+          <el-input v-model="wform.patientName" />
+        </el-form-item>
+        <el-form-item label="手机号 *" required>
+          <el-input v-model="wform.patientPhone" />
+        </el-form-item>
+        <el-form-item label="身份证号">
+          <el-input v-model="wform.patientIdCard" />
+        </el-form-item>
+        <el-form-item label="收费金额">
+          <el-input-number v-model="wform.payAmount" :step="0.01" :min="0" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="walkVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="saving" @click="submitWalkIn">{{ saving ? '处理中…' : '收费并取号' }}</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 凭证弹窗 -->
-    <div class="modal-mask" v-if="ticketVisible" @click.self="ticketVisible = false">
-      <div class="modal ticket" id="ticket-print">
-        <div class="modal-header">
-          <h3>挂号凭证</h3>
-          <button class="modal-close" @click="ticketVisible = false">×</button>
-        </div>
-        <div class="ticket-body" v-if="ticket">
-          <div class="ticket-row"><span>凭证号</span><b>{{ ticket.registrationNo }}</b></div>
-          <div class="ticket-row"><span>医院</span><b>{{ ticket.hospitalName }}</b></div>
-          <div class="ticket-row"><span>科室</span><b>{{ ticket.departmentName }}</b></div>
-          <div class="ticket-row"><span>医生</span><b>{{ ticket.doctorName }}</b></div>
-          <div class="ticket-row"><span>患者</span><b>{{ ticket.patientName }}（{{ ticket.patientPhone }}）</b></div>
-          <div class="ticket-row"><span>就诊日期</span><b>{{ ticket.scheduleDate }} {{ ticket.periodText }}</b></div>
-          <div class="ticket-row"><span>就诊序号</span><b class="seq">{{ ticket.seqNo }}</b></div>
-          <div class="ticket-row"><span>来源</span><b>{{ ticket.sourceTypeText }}</b></div>
-          <div class="ticket-row"><span>支付</span><b>{{ ticket.payStatusText }} {{ ticket.payAmount }}</b></div>
-          <div class="ticket-row"><span>状态</span><b>{{ ticket.statusText }}</b></div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn" @click="ticketVisible = false">关闭</button>
-          <button class="btn primary" @click="doPrint">打印</button>
-        </div>
+    <el-dialog v-model="ticketVisible" title="挂号凭证" width="400px">
+      <div class="ticket-body" id="ticket-print" v-if="ticket">
+        <div class="ticket-row"><span>凭证号</span><b>{{ ticket.registrationNo }}</b></div>
+        <div class="ticket-row"><span>医院</span><b>{{ ticket.hospitalName }}</b></div>
+        <div class="ticket-row"><span>科室</span><b>{{ ticket.departmentName }}</b></div>
+        <div class="ticket-row"><span>医生</span><b>{{ ticket.doctorName }}</b></div>
+        <div class="ticket-row"><span>患者</span><b>{{ ticket.patientName }}（{{ ticket.patientPhone }}）</b></div>
+        <div class="ticket-row"><span>就诊日期</span><b>{{ ticket.scheduleDate }} {{ ticket.periodText }}</b></div>
+        <div class="ticket-row"><span>就诊序号</span><b class="seq">{{ ticket.seqNo }}</b></div>
+        <div class="ticket-row"><span>来源</span><b>{{ ticket.sourceTypeText }}</b></div>
+        <div class="ticket-row"><span>支付</span><b>{{ ticket.payStatusText }} {{ ticket.payAmount }}</b></div>
+        <div class="ticket-row"><span>状态</span><b>{{ ticket.statusText }}</b></div>
       </div>
-    </div>
+      <template #footer>
+        <el-button @click="ticketVisible = false">关闭</el-button>
+        <el-button type="primary" @click="doPrint">打印</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -245,6 +249,8 @@ async function printTicket(r) {
 }
 function doPrint() { window.print() }
 
+function changePage(p) { pageNum.value = p; load() }
+
 onMounted(() => { loadDoctors(); load() })
 </script>
 
@@ -254,40 +260,17 @@ onMounted(() => { loadDoctors(); load() })
 .page-title { font-size: 20px; margin: 0; color: var(--text-primary); }
 .page-desc { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; }
 .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-.input { background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);
-  border-radius: var(--border-radius-sm); padding: 8px 10px; font-size: 13px; }
 .tilde { color: var(--text-secondary); }
 .table-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); overflow-x: auto; }
-.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 1000px; }
-.data-table th { text-align: left; padding: 12px 16px; background: var(--bg-hover); color: var(--text-secondary);
-  font-weight: 600; border-bottom: 1px solid var(--border-color); }
-.data-table td { padding: 12px 16px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
-.data-table th, .data-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status-tag { padding: 3px 10px; border-radius: 12px; font-size: 12px; }
-.status-tag.reserved { background: rgba(59,130,246,.15); color: #3b82f6; }
-.status-tag.called { background: rgba(168,85,247,.15); color: #a855f7; }
-.status-tag.treated { background: rgba(22,163,74,.15); color: #16a34a; }
-.status-tag.cancel { background: rgba(148,163,184,.2); color: #64748b; }
-.status-tag.refund { background: rgba(239,68,68,.15); color: #ef4444; }
-.status-tag.expired { background: rgba(148,163,184,.2); color: #64748b; }
-.ops { display: flex; gap: 8px; }
-.link { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 13px; padding: 0; }
-.link.danger { color: #ef4444; }
-.empty { text-align: center; color: var(--text-secondary); padding: 30px; }
 .pager { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin-top: 14px; color: var(--text-secondary); }
-.btn { background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);
-  border-radius: var(--border-radius-sm); padding: 8px 14px; cursor: pointer; font-size: 13px; }
-.btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 50; }
-.modal { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); width: 460px; max-width: 92vw; }
-.modal.ticket { width: 380px; }
-.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px; border-bottom: 1px solid var(--border-color); }
-.modal-header h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
-.modal-close { background: none; border: none; color: var(--text-secondary); font-size: 22px; cursor: pointer; }
-.modal-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
-.modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px; border-top: 1px solid var(--border-color); }
-.ticket-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+/* 状态徽标：6 态可区分配色（EP tag type 不足，用自定义主题色区分） */
+.el-tag.reserved { background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-color: var(--el-color-primary-light-7); }
+.el-tag.called { background: var(--el-color-warning-light-9); color: var(--el-color-warning); border-color: var(--el-color-warning-light-7); }
+.el-tag.treated { background: var(--el-color-success-light-9); color: var(--el-color-success); border-color: var(--el-color-success-light-7); }
+.el-tag.cancel { background: var(--el-fill-color); color: var(--el-text-color-secondary); border-color: var(--el-border-color); }
+.el-tag.refund { background: var(--el-color-danger-light-9); color: var(--el-color-danger); border-color: var(--el-color-danger-light-7); }
+.el-tag.expired { background: var(--el-fill-color); color: var(--el-text-color-secondary); border-color: var(--el-border-color); }
+.ticket-body { padding: 8px 0; display: flex; flex-direction: column; gap: 10px; }
 .ticket-row { display: flex; justify-content: space-between; font-size: 14px; color: var(--text-secondary); }
 .ticket-row b { color: var(--text-primary); }
 .ticket-row .seq { color: var(--primary); font-size: 18px; }
