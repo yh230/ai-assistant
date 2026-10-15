@@ -9,95 +9,90 @@
 
     <!-- 筛选 -->
     <div class="toolbar">
-      <select v-model="sessionType" class="search-input type-select" @change="reload">
-        <option value="">全部类型</option>
-        <option value="TRIAGE">AI 导诊</option>
-        <option value="RAG">知识库问答</option>
-      </select>
-      <button class="ghost-btn" @click="reload">刷新</button>
+      <el-select v-model="sessionType" placeholder="全部类型" clearable style="width: 180px" @change="reload">
+        <el-option label="AI 导诊" value="TRIAGE" />
+        <el-option label="知识库问答" value="RAG" />
+      </el-select>
+      <el-button @click="reload">刷新</el-button>
     </div>
 
     <!-- 表格 -->
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th>会话标题</th>
-            <th style="width: 110px">类型</th>
-            <th style="width: 120px">患者姓名</th>
-            <th style="width: 130px">患者手机号</th>
-            <th style="width: 170px">更新时间</th>
-            <th style="width: 90px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in list" :key="s.sessionId">
-            <td :title="s.title || ''">{{ s.title || '—' }}</td>
-            <td>
-              <span class="type-tag" :class="s.sessionType">{{ typeLabel(s.sessionType) }}</span>
-            </td>
-            <td :title="s.patientName || ''">{{ s.patientName || '—' }}</td>
-            <td :title="s.patientPhone || ''">{{ s.patientPhone || '—' }}</td>
-            <td class="time-cell" :title="formatTime(s.updatedAt)">{{ formatTime(s.updatedAt) }}</td>
-            <td>
-              <button class="link-btn" @click="openDetail(s)">查看</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-tip">{{ loading ? '加载中…' : '暂无问诊记录' }}</div>
+      <el-table :data="list" stripe>
+        <el-table-column label="会话标题" show-overflow-tooltip>
+          <template #default="{ row }"><span :title="row.title || ''">{{ row.title || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">
+            <el-tag :type="tagType(row.sessionType)" effect="light">{{ typeLabel(row.sessionType) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="患者姓名" width="120" show-overflow-tooltip>
+          <template #default="{ row }"><span :title="row.patientName || ''">{{ row.patientName || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column label="患者手机号" width="130" show-overflow-tooltip>
+          <template #default="{ row }"><span :title="row.patientPhone || ''">{{ row.patientPhone || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column label="更新时间" width="170">
+          <template #default="{ row }"><span class="time-cell" :title="formatTime(row.updatedAt)">{{ formatTime(row.updatedAt) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openDetail(row)">查看</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>{{ loading ? '加载中…' : '暂无问诊记录' }}</template>
+      </el-table>
     </div>
 
     <!-- 分页 -->
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="changePage(pageNum - 1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum >= totalPages" @click="changePage(pageNum + 1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
 
     <!-- 会话详情弹层 -->
-    <div class="modal-mask" v-if="showDetail" @click.self="closeDetail">
-      <div class="modal detail-modal">
-        <div class="modal-header">
-          <h3>会话详情 · {{ detailSession?.title || '未命名会话' }}</h3>
-          <button class="modal-close" @click="closeDetail">✕</button>
-        </div>
-        <div class="detail-meta" v-if="detailSession">
-          <span class="type-tag" :class="detailSession.sessionType">{{ typeLabel(detailSession.sessionType) }}</span>
-          <span>患者：{{ detailSession.patientName || '—' }}</span>
-          <span>手机号：{{ detailSession.patientPhone || '—' }}</span>
-          <span class="time-cell">更新：{{ formatTime(detailSession.updatedAt) }}</span>
-        </div>
-        <div class="modal-body message-body">
-          <div v-if="detailLoading" class="empty-tip">加载中…</div>
-          <template v-else>
-            <template v-for="(m, index) in messages" :key="index">
-              <div v-if="m.role === 'system'" class="record-item system">
-                <div class="system-msg">{{ m.content }}</div>
-              </div>
-              <div v-else class="record-item" :class="m.role">
-                <div class="record-avatar">{{ m.role === 'user' ? '患' : '医' }}</div>
-                <div class="record-bubble">
-                  <div class="markdown-body" v-html="renderMarkdownSafe(m.content)"></div>
-                  <div v-if="m.references && m.references.length" class="reference-block">
-                    <div class="reference-title">参考来源</div>
-                    <div v-for="(ref, ri) in m.references" :key="ri" class="reference-item">
-                      <span class="reference-name">{{ ref.name }}</span>
-                      <span class="reference-snippet">{{ ref.snippet }}</span>
-                    </div>
-                  </div>
-                  <div class="record-time" v-if="m.createdAt">{{ formatTime(m.createdAt) }}</div>
-                </div>
-              </div>
-            </template>
-            <div v-if="messages.length === 0" class="empty-tip">暂无消息</div>
-          </template>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="closeDetail">关闭</button>
-        </div>
+    <el-dialog v-model="showDetail" :title="`会话详情 · ${detailSession?.title || '未命名会话'}`" width="680px" @close="closeDetail">
+      <div class="detail-meta" v-if="detailSession">
+        <el-tag :type="tagType(detailSession.sessionType)" effect="light">{{ typeLabel(detailSession.sessionType) }}</el-tag>
+        <span>患者：{{ detailSession.patientName || '—' }}</span>
+        <span>手机号：{{ detailSession.patientPhone || '—' }}</span>
+        <span class="time-cell">更新：{{ formatTime(detailSession.updatedAt) }}</span>
       </div>
-    </div>
+      <div class="message-body">
+        <div v-if="detailLoading" class="empty-tip">加载中…</div>
+        <template v-else>
+          <template v-for="(m, index) in messages" :key="index">
+            <div v-if="m.role === 'system'" class="record-item system">
+              <div class="system-msg">{{ m.content }}</div>
+            </div>
+            <div v-else class="record-item" :class="m.role">
+              <div class="record-avatar">{{ m.role === 'user' ? '患' : '医' }}</div>
+              <div class="record-bubble">
+                <div class="markdown-body" v-html="renderMarkdownSafe(m.content)"></div>
+                <div v-if="m.references && m.references.length" class="reference-block">
+                  <div class="reference-title">参考来源</div>
+                  <div v-for="(ref, ri) in m.references" :key="ri" class="reference-item">
+                    <span class="reference-name">{{ ref.name }}</span>
+                    <span class="reference-snippet">{{ ref.snippet }}</span>
+                  </div>
+                </div>
+                <div class="record-time" v-if="m.createdAt">{{ formatTime(m.createdAt) }}</div>
+              </div>
+            </div>
+          </template>
+          <div v-if="messages.length === 0" class="empty-tip">暂无消息</div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="closeDetail">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -126,6 +121,13 @@ const messages = ref([])
 
 function typeLabel(type) {
   return TYPE_LABELS[type] || type || '—'
+}
+
+// 类型三色：闲聊=info / 导诊=danger（红线）/ 知识库=success
+function tagType(type) {
+  if (type === 'TRIAGE') return 'danger'
+  if (type === 'RAG') return 'success'
+  return 'info'
 }
 
 async function loadData() {
@@ -197,29 +199,30 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.type-select {
-  width: 180px;
+.empty-tip {
+  text-align: center;
+  padding: 32px 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 /* 会话详情弹层（消息冒泡） */
-.detail-modal {
-  width: 680px;
-}
-
 .detail-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 14px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--el-text-color-secondary);
 }
 
 .message-body {
   min-height: 200px;
   max-height: 56vh;
+  overflow-y: auto;
+  padding-top: 12px;
 }
 
 .record-item {
@@ -242,8 +245,8 @@ onMounted(loadData)
 
 .system-msg {
   padding: 6px 14px;
-  background: var(--bg-hover);
-  color: var(--text-secondary);
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
   border-radius: 14px;
   font-size: 12px;
   text-align: center;
@@ -262,12 +265,12 @@ onMounted(loadData)
 }
 
 .record-item.user .record-avatar {
-  background: var(--primary);
+  background: var(--el-color-primary);
   color: white;
 }
 
 .record-item.assistant .record-avatar {
-  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  background: linear-gradient(135deg, var(--el-color-primary-light-3), var(--el-color-primary-light-5));
   color: white;
 }
 
@@ -280,15 +283,15 @@ onMounted(loadData)
 }
 
 .record-item.user .record-bubble {
-  background: var(--primary);
+  background: var(--el-color-primary);
   color: white;
 }
 
 .record-item.assistant .record-bubble {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
   border-top-left-radius: 4px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--el-box-shadow-light);
 }
 
 .record-time {
@@ -297,37 +300,18 @@ onMounted(loadData)
   opacity: 0.65;
 }
 
-.type-tag {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  background: var(--bg-hover);
-  color: var(--text-tertiary);
-}
-
-.type-tag.TRIAGE {
-  background: var(--primary-bg);
-  color: var(--primary-dark);
-}
-
-.type-tag.RAG {
-  background: rgba(16, 185, 129, 0.12);
-  color: var(--success);
-}
-
 .reference-block {
   margin-top: 10px;
   padding: 8px 10px;
-  border-left: 3px solid #3b82f6;
-  background: rgba(59, 130, 246, 0.06);
+  border-left: 3px solid var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
   border-radius: 6px;
   font-size: 12px;
 }
 
 .reference-title {
   font-weight: 600;
-  color: #475569;
+  color: var(--el-text-color-primary);
   margin-bottom: 4px;
 }
 
@@ -335,11 +319,11 @@ onMounted(loadData)
   display: flex;
   gap: 6px;
   margin-top: 2px;
-  color: #64748b;
+  color: var(--el-text-color-secondary);
 }
 
 .reference-name {
-  color: #2563eb;
+  color: var(--el-color-primary);
   flex-shrink: 0;
 }
 
