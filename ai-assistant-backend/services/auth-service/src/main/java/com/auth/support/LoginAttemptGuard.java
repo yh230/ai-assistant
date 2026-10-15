@@ -1,6 +1,7 @@
 package com.auth.support;
 
 import com.common.exception.BusinessException;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -22,6 +23,7 @@ import java.util.List;
 @Component
 public class LoginAttemptGuard {
 
+    private final MeterRegistry meterRegistry;
     private final StringRedisTemplate stringRedisTemplate;
     private final int maxFailures;
     private final long windowMinutes;
@@ -34,15 +36,18 @@ public class LoginAttemptGuard {
      * @param maxFailures 触发锁定的连续失败次数
      * @param windowMinutes 失败计数窗口（分钟）
      * @param lockMinutes 锁定时长（分钟）
+     * @param meterRegistry 指标注册表
      */
     public LoginAttemptGuard(StringRedisTemplate stringRedisTemplate,
                              @Value("${security.login.max-failures:5}") int maxFailures,
                              @Value("${security.login.window-minutes:15}") long windowMinutes,
-                             @Value("${security.login.lock-minutes:15}") long lockMinutes) {
+                             @Value("${security.login.lock-minutes:15}") long lockMinutes,
+                             MeterRegistry meterRegistry) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.maxFailures = maxFailures;
         this.windowMinutes = windowMinutes;
         this.lockMinutes = lockMinutes;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -74,6 +79,7 @@ public class LoginAttemptGuard {
             stringRedisTemplate.opsForValue().set(lockKey(identity, username), "1", Duration.ofMinutes(lockMinutes));
             log.warn("账号连续登录失败 {} 次，已锁定 {} 分钟: {}:{}", count, lockMinutes, identity, username);
         }
+        meterRegistry.counter("ai.login.total", "identity", identity, "result", "failure").increment();
     }
 
     /**
@@ -84,6 +90,7 @@ public class LoginAttemptGuard {
      */
     public void reset(String identity, String username) {
         stringRedisTemplate.delete(List.of(failKey(identity, username), lockKey(identity, username)));
+        meterRegistry.counter("ai.login.total", "identity", identity, "result", "success").increment();
     }
 
     private String failKey(String identity, String username) {

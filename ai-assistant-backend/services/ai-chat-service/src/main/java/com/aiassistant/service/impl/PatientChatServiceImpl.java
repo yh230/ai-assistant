@@ -25,6 +25,8 @@ import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.security.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -53,6 +55,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -111,6 +114,18 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final ObjectMapper objectMapper;
     private final KnowledgeVectorStore knowledgeVectorStore;
     private final KnowledgeReferencesBuilder knowledgeReferencesBuilder;
+    private final MeterRegistry meterRegistry;
+
+    /** 当前活跃患者 SSE 流数（Gauge 底层数据源） */
+    private final AtomicInteger patientSseActive = new AtomicInteger();
+
+    /**
+     * 注册患者 SSE 活跃流 Gauge（容器就绪后执行一次）
+     */
+    @PostConstruct
+    void registerSseActiveGauge() {
+        meterRegistry.gauge("ai.patient.sse.active", patientSseActive);
+    }
 
     // ==================== 流式对话（核心链路） ====================
 
@@ -143,6 +158,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         if (safetyFilter.emergencyHit(request.getMessage())) {
             String emergencyMessage = safetyFilter.emergencyMessage();
             saveMessage(session.getSessionId(), "assistant", emergencyMessage);
+            meterRegistry.counter("ai.emergency.total").increment();
             log.info("输入侧命中急症红线，短路返回就医指引 sessionId={}", session.getSessionId());
             return new PatientChatContext(session, user, List.of(), "", request.getMessage(), "", emergencyMessage);
         }
@@ -190,6 +206,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                 .build();
 
         // 急症红线短路：单条消息 + 结束（落库已在 prepare 完成，不调模型、不追加免责、不装配工具、不检查待确认）
+        patientSseActive.incrementAndGet();
         if (ctx.emergencyReply() != null) {
             ServerSentEvent<String> emergencyEvent = ServerSentEvent.builder(ctx.emergencyReply())
                     .event(ChatConstants.EVENT_TOKEN)
@@ -197,7 +214,8 @@ public class PatientChatServiceImpl implements PatientChatService {
             ServerSentEvent<String> emergencyDone = ServerSentEvent.builder(toJson(Map.of("localFallback", false)))
                     .event(ChatConstants.EVENT_DONE)
                     .build();
-            return Flux.concat(Mono.just(sessionEvent), Mono.just(emergencyEvent), Mono.just(emergencyDone));
+            return Flux.concat(Mono.just(sessionEvent), Mono.just(emergencyEvent), Mono.just(emergencyDone))
+                    .doFinally(signal -> patientSseActive.decrementAndGet());
         }
 
         boolean aiEnabled = chatModelRegistry.isActive(assistantProperties.resolveModelId(null));
@@ -218,15 +236,19 @@ public class PatientChatServiceImpl implements PatientChatService {
         Mono<ServerSentEvent<String>> referencesEvent = Mono.defer(() ->
                 (blocked.get() || fallback.get() || ctx.referenceJson().isEmpty())
                         ? Mono.empty()
-                        : Mono.just(ServerSentEvent.builder(ctx.referenceJson())
-                                .event(ChatConstants.EVENT_REFERENCES)
-                                .build()));
+                        : Mono.defer(() -> {
+                            meterRegistry.counter("ai.rag.references.total").increment();
+                            return Mono.just(ServerSentEvent.builder(ctx.referenceJson())
+                                    .event(ChatConstants.EVENT_REFERENCES)
+                                    .build());
+                        }));
 
         return Flux.concat(Mono.just(sessionEvent), contentFlux,
                 outputSafetyGuard(ctx, sessionId, full, persisted, fallback, blocked),
                 referencesEvent,
                 buildConfirmRequiredEvent(sessionId), doneEvent)
-                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted));
+                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted))
+                .doFinally(signal -> patientSseActive.decrementAndGet());
     }
 
     /**
