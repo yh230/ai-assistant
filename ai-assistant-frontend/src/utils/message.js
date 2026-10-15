@@ -1,19 +1,14 @@
-// 全局消息工具：
+// 全局消息工具（Element Plus 实现；导出 API 与语义不变）：
 // 1. 提供 toast / 异步 confirm API（必须 await！）
-// 2. 启动时拦截 window.alert；window.confirm 被替换为页面内弹窗，
-//    业务代码须 await confirm(...)（window.confirm 调用改为抛错提示迁移）
-import { ref } from 'vue'
+// 2. 启动时拦截 window.alert；window.confirm 被替换为抛错提示迁移
+import { ElMessage, ElMessageBox } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
 
-const queue = ref([])
-let nextId = 1
+const TYPE_MAP = { info: 'info', success: 'success', error: 'error', warn: 'warning' }
 
 function push(text, type = 'info', duration = 2200) {
-  const id = nextId++
-  queue.value.push({ id, text, type })
-  setTimeout(() => {
-    const i = queue.value.findIndex((x) => x.id === id)
-    if (i >= 0) queue.value.splice(i, 1)
-  }, duration)
+  ElMessage({ message: text == null ? '' : String(text), type: TYPE_MAP[type] || 'info', duration })
 }
 
 /**
@@ -22,19 +17,18 @@ function push(text, type = 'info', duration = 2200) {
  */
 function confirmDialog(text, opts = {}) {
   return new Promise((resolve) => {
-    const id = nextId++
-    queue.value.push({
-      id,
-      text,
-      type: 'confirm',
-      okText: opts.okText || '确定',
-      cancelText: opts.cancelText || '取消',
-      resolve
+    ElMessageBox.confirm(text, '', {
+      confirmButtonText: opts.okText || '确定',
+      cancelButtonText: opts.cancelText || '取消',
+      showClose: false,
+      closeOnClickModal: false,
+      closeOnPressEscape: false
     })
+      .then(() => resolve(true))
+      .catch(() => resolve(false))
   })
 }
 
-export const toastQueue = queue
 export function showToast(text, type = 'info', duration = 2200) {
   push(text, type, duration)
 }
@@ -75,7 +69,6 @@ if (typeof window !== 'undefined') {
     // 浏览器原生 confirm 是同步阻塞函数，无法被替换为异步 Promise 同时保持同步语义。
     // 这里采用"业务代码必须 await confirm(...)"的策略，window.confirm 抛错以提醒迁移。
     window.confirm = () => {
-      // 抛出明确错误指引开发者改为 await confirm(...)
       throw new Error(
         '[message] 禁止使用 window.confirm，请改用: const ok = await confirm(...)'
       )
