@@ -109,6 +109,8 @@ security:
     expiration-seconds: 3600
 
 management:
+  server:
+    port: ${GATEWAY_MANAGEMENT_PORT:9290}
   endpoints:
     web:
       exposure:

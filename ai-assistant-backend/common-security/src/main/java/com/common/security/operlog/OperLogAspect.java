@@ -53,6 +53,7 @@ public class OperLogAspect {
             error = t;
             throw t;
         } finally {
+            // buildDto 须在调用线程完成（消费 RequestContextHolder/SecurityContext），异步任务体内仅做上报
             OperLogDTO dto = buildDto(joinPoint, operLog, error, (System.nanoTime() - start) / 1_000_000);
             operLogReportExecutor.execute(() -> {
                 try {
