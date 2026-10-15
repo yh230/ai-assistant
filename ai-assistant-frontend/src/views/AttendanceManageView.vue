@@ -7,130 +7,119 @@
           记录员工每日出勤。院长看全院、科室主任看本科室、普通员工仅看本人（后端自动过滤，前端无需传权限参数）。
         </p>
       </div>
-      <button v-if="canEdit" class="primary-btn" @click="openCreate">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        登记出勤
-      </button>
+      <el-button v-if="canEdit" type="primary" :icon="Plus" @click="openCreate">登记出勤</el-button>
     </div>
 
     <div class="toolbar" v-if="canViewAll">
-      <select v-model="filterHospital" class="search-input" @change="onHospitalChange">
-        <option :value="null">全部医院</option>
-        <option v-for="h in hospitalOptions" :key="h.id" :value="h.id">{{ h.name }}</option>
-      </select>
-      <select v-model="filterDept" class="search-input">
-        <option :value="null">全部科室</option>
-        <option v-for="d in deptOptions" :key="d.id" :value="d.id">{{ d.name }}</option>
-      </select>
-      <input v-model="dateStart" type="date" class="search-input" />
+      <el-select v-model="filterHospital" placeholder="全部医院" clearable style="width: 160px" @change="onHospitalChange">
+        <el-option v-for="h in hospitalOptions" :key="h.id" :label="h.name" :value="h.id" />
+      </el-select>
+      <el-select v-model="filterDept" placeholder="全部科室" clearable style="width: 160px">
+        <el-option v-for="d in deptOptions" :key="d.id" :label="d.name" :value="d.id" />
+      </el-select>
+      <el-date-picker v-model="dateStart" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
       <span class="til">至</span>
-      <input v-model="dateEnd" type="date" class="search-input" />
-      <select v-model="filterStatus" class="search-input">
-        <option :value="null">全部状态</option>
-        <option :value="1">出勤</option>
-        <option :value="2">缺勤</option>
-        <option :value="3">请假</option>
-        <option :value="4">迟到</option>
-      </select>
-      <button class="ghost-btn" @click="reload">查询</button>
+      <el-date-picker v-model="dateEnd" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
+      <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 160px">
+        <el-option label="出勤" :value="1" />
+        <el-option label="缺勤" :value="2" />
+        <el-option label="请假" :value="3" />
+        <el-option label="迟到" :value="4" />
+      </el-select>
+      <el-button @click="reload">查询</el-button>
     </div>
 
     <div class="table-card">
-      <table class="data-table" v-if="list.length > 0">
-        <thead>
-          <tr>
-            <th style="width: 70px">ID</th>
-            <th>员工</th>
-            <th v-if="canViewAll">医院</th>
-            <th v-if="canViewAll">科室</th>
-            <th>日期</th>
-            <th>状态</th>
-            <th>上班</th>
-            <th>下班</th>
-            <th>备注</th>
-            <th style="width: 140px" v-if="canEdit">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="a in list" :key="a.id">
-            <td><code class="id-cell">{{ a.id }}</code></td>
-            <td>{{ a.userName || '—' }}</td>
-            <td v-if="canViewAll">{{ a.hospitalName || '—' }}</td>
-            <td v-if="canViewAll">{{ a.departmentName || '—' }}</td>
-            <td>{{ a.attendDate }}</td>
-            <td><span class="status-tag" :class="'s' + a.status">{{ a.statusText }}</span></td>
-            <td>{{ a.checkIn || '—' }}</td>
-            <td>{{ a.checkOut || '—' }}</td>
-            <td class="remark-cell">{{ a.remark || '—' }}</td>
-            <td v-if="canEdit">
-              <button class="link-btn" @click="openEdit(a)">编辑</button>
-              <button class="link-btn danger" @click="remove(a)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-tip">暂无出勤记录</div>
+      <el-table v-if="list.length > 0" :data="list" stripe>
+        <el-table-column label="ID" width="70">
+          <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
+        </el-table-column>
+        <el-table-column label="员工">
+          <template #default="{ row }">{{ row.userName || '—' }}</template>
+        </el-table-column>
+        <el-table-column v-if="canViewAll" label="医院">
+          <template #default="{ row }">{{ row.hospitalName || '—' }}</template>
+        </el-table-column>
+        <el-table-column v-if="canViewAll" label="科室">
+          <template #default="{ row }">{{ row.departmentName || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="日期">
+          <template #default="{ row }">{{ row.attendDate }}</template>
+        </el-table-column>
+        <el-table-column label="状态">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)" effect="light">{{ row.statusText }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="上班">
+          <template #default="{ row }">{{ row.checkIn || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="下班">
+          <template #default="{ row }">{{ row.checkOut || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="备注">
+          <template #default="{ row }"><span class="remark-cell">{{ row.remark || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column v-if="canEdit" label="操作" width="140">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无出勤记录" :image-size="96" />
     </div>
 
     <div class="pager" v-if="total > 0">
-      <button class="ghost-btn" :disabled="pageNum <= 1" @click="changePage(pageNum - 1)">上一页</button>
-      <span class="pager-info">第 {{ pageNum }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="ghost-btn" :disabled="pageNum >= totalPages" @click="changePage(pageNum + 1)">下一页</button>
+      <el-pagination
+        layout="prev, pager, next, total"
+        :total="total"
+        :current-page="pageNum"
+        :page-size="pageSize"
+        @current-change="changePage"
+      />
     </div>
 
-    <div class="modal-mask" v-if="showModal" @click.self="closeModal">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>{{ isEdit ? '编辑出勤' : '登记出勤' }}</h3>
-          <button class="modal-close" @click="closeModal">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-row">
-            <label>员工 <span class="req">*</span></label>
-            <select v-model.number="form.userId" class="form-input">
-              <option :value="null" disabled>请选择员工</option>
-              <option v-for="u in employeeOptions" :key="u.id" :value="u.id">{{ u.name }}（{{ u.username }}）</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>出勤日期 <span class="req">*</span></label>
-            <input v-model="form.attendDate" type="date" class="form-input" />
-          </div>
-          <div class="form-row">
-            <label>状态</label>
-            <select v-model.number="form.status" class="form-input">
-              <option :value="1">出勤</option>
-              <option :value="2">缺勤</option>
-              <option :value="3">请假</option>
-              <option :value="4">迟到</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>上班打卡</label>
-            <input v-model="form.checkIn" class="form-input" placeholder="HH:mm，如 08:30" />
-          </div>
-          <div class="form-row">
-            <label>下班打卡</label>
-            <input v-model="form.checkOut" class="form-input" placeholder="HH:mm，如 17:30" />
-          </div>
-          <div class="form-row">
-            <label>备注</label>
-            <input v-model="form.remark" class="form-input" placeholder="选填" />
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" @click="closeModal">取消</button>
-          <button class="primary-btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-        </div>
-      </div>
-    </div>
+    <el-dialog v-model="showModal" :title="isEdit ? '编辑出勤' : '登记出勤'" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="员工" required>
+          <el-select v-model="form.userId" placeholder="请选择员工" style="width: 100%">
+            <el-option label="请选择员工" :value="null" disabled />
+            <el-option v-for="u in employeeOptions" :key="u.id" :label="`${u.name}（${u.username}）`" :value="u.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="出勤日期" required>
+          <el-date-picker v-model="form.attendDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="form.status" style="width: 100%">
+            <el-option label="出勤" :value="1" />
+            <el-option label="缺勤" :value="2" />
+            <el-option label="请假" :value="3" />
+            <el-option label="迟到" :value="4" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="上班打卡">
+          <el-input v-model="form.checkIn" placeholder="HH:mm，如 08:30" />
+        </el-form-item>
+        <el-form-item label="下班打卡">
+          <el-input v-model="form.checkOut" placeholder="HH:mm，如 17:30" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark" placeholder="选填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="closeModal">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { Plus } from '@element-plus/icons-vue'
 import { pageAttendance, createAttendance, updateAttendance, deleteAttendance, listHospitals, listDepartments, pageEmployees } from '../api/hospital'
 import { useCrudPage } from '../composables/useCrudPage'
 import { useAuth } from '../store/auth'
@@ -184,6 +173,11 @@ const {
   removeConfirm: () => '确定删除该出勤记录吗？'
 })
 
+// 出勤状态 1-4 对应 el-tag 语义色：出勤/缺勤/请假/迟到
+function statusTagType(status) {
+  return ({ 1: 'success', 2: 'danger', 3: 'primary', 4: 'warning' })[status] || 'info'
+}
+
 // 页面特有：权限视角（普通员工仅看本人数据，隐藏筛选与操作按钮）
 async function ensureOptions() {
   if (canViewAll.value) {
@@ -200,17 +194,6 @@ onMounted(async () => { await ensureOptions(); await loadData() })
 </script>
 
 <style scoped>
-.toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
 .til { color: var(--text-tertiary); font-size: 13px; }
-.search-input { width: 160px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px; outline: none; }
-.remark-cell { color: var(--text-secondary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-tag.s1 { background: rgba(34, 197, 94, 0.15); color: var(--success); }
-.status-tag.s2 { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
-.status-tag.s3 { background: rgba(99, 102, 241, 0.15); color: var(--primary); }
-.status-tag.s4 { background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
-
-/* ===== 修复轮 1：作用域化恢复（本页位于 .manage-page 内，全局新增项按基线差集恢复） =====
-   基线与本页无 .ghost-btn:disabled 规则，全局版使翻页按钮禁用态（第 78/80 行）呈现 50% 透明度/禁用光标。
-   恢复为「无该规则」等价表现：opacity 取初始值 1；光标取基线值 pointer（全局 button{cursor:pointer} 继承）。 */
-.ghost-btn:disabled { opacity: 1; cursor: pointer; }
+.remark-cell { color: var(--text-secondary); display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
