@@ -11,7 +11,7 @@
       </div>
       <div class="topbar-user">
         <span class="user-phone">{{ displayPhone }}</span>
-        <button class="logout-btn" @click="handleLogout">退出</button>
+        <el-button size="small" round plain class="logout-btn" @click="handleLogout">退出</el-button>
       </div>
     </header>
 
@@ -19,13 +19,7 @@
       <!-- 会话侧边栏 -->
       <div class="session-panel">
         <div class="session-header">
-          <button class="new-chat-btn" @click="toggleTypeMenu">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            新对话
-          </button>
+          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu">新对话</el-button>
           <div v-if="showTypeMenu" class="type-menu">
             <div v-for="t in SESSION_TYPES" :key="t.value" class="type-item" @click="createSession(t.value)">
               <span class="type-name">{{ t.label }}</span>
@@ -41,15 +35,11 @@
             :class="{ active: currentSessionId === s.sessionId }"
             @click="loadSession(s)"
           >
-            <svg class="session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
+            <el-icon class="session-icon" :size="16"><ChatDotRound /></el-icon>
             <span class="session-title">{{ s.title || '新对话' }}</span>
-            <span class="session-type-tag" :class="s.sessionType">{{ typeLabel(s.sessionType) }}</span>
+            <el-tag size="small" class="session-type-tag" :type="tagType(s.sessionType)" effect="light">{{ typeLabel(s.sessionType) }}</el-tag>
             <span class="session-delete" @click.stop="removeSession(s.sessionId)">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
+              <el-icon :size="14"><Close /></el-icon>
             </span>
           </div>
           <div v-if="sessions.length === 0" class="empty-sessions">
@@ -108,27 +98,24 @@
         <!-- 输入区域 -->
         <div class="input-area">
           <div class="input-wrapper">
-            <textarea
+            <el-input
               ref="inputRef"
               v-model="inputText"
+              type="textarea"
               class="input-textarea"
+              :autosize="{ minRows: 1, maxRows: 6 }"
               placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
-              rows="1"
               @keydown="handleKeydown"
-              @input="autoResize"
-            ></textarea>
-            <button v-if="loading" class="stop-btn" title="停止生成" @click="stopGeneration">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2"/>
-              </svg>
-              停止
-            </button>
-            <button v-else class="send-btn" :disabled="!inputText.trim()" @click="sendMessage">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="22" y1="2" x2="11" y2="13"/>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-              </svg>
-            </button>
+            />
+            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" :icon="VideoPause" @click="stopGeneration">停止</el-button>
+            <el-button
+              v-else
+              type="primary"
+              class="send-btn"
+              :disabled="!inputText.trim()"
+              :icon="Position"
+              @click="sendMessage"
+            />
           </div>
           <p class="input-hint">AI 内容仅供参考，不能替代执业医师诊断 · 挂号等写操作会先与您确认</p>
         </div>
@@ -136,28 +123,30 @@
     </div>
 
     <!-- 二次确认弹窗（AI 写操作：预约/取消预约等） -->
-    <div v-if="pendingConfirm" class="modal-mask">
-      <div class="confirm-modal">
-        <div class="modal-header">
-          <h3>操作确认</h3>
-        </div>
-        <div class="modal-body">
-          <p class="confirm-tool">即将执行：{{ confirmToolLabel }}</p>
-          <p class="confirm-summary">{{ pendingConfirm.summary }}</p>
-          <p class="confirm-tip">确认后 AI 将为您执行该操作，请核对信息无误</p>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost-btn" :disabled="confirmLoading" @click="cancelConfirm">取消</button>
-          <button class="primary-btn" :disabled="confirmLoading" @click="submitConfirm">确认</button>
-        </div>
-      </div>
-    </div>
+    <el-dialog
+      v-model="pendingConfirm"
+      title="操作确认"
+      width="420px"
+      class="confirm-dialog"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+    >
+      <p class="confirm-tool">即将执行：{{ confirmToolLabel }}</p>
+      <p class="confirm-summary">{{ pendingConfirm && pendingConfirm.summary }}</p>
+      <p class="confirm-tip">确认后 AI 将为您执行该操作，请核对信息无误</p>
+      <template #footer>
+        <el-button :disabled="confirmLoading" @click="cancelConfirm">取消</el-button>
+        <el-button type="primary" :disabled="confirmLoading" @click="submitConfirm">确认</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import { Plus, Close, ChatDotRound, Position, VideoPause } from '@element-plus/icons-vue'
 import { patientAuth, clearPatientAuth } from '../../store/patientAuth'
 import {
   patientSessions,
@@ -180,6 +169,8 @@ const SESSION_TYPES = [
 ]
 
 const TYPE_LABELS = { CHAT: '闲聊', TRIAGE: '导诊', RAG: '知识库' }
+
+const TAG_TYPES = { TRIAGE: 'primary', RAG: 'success', CHAT: 'info' }
 
 const CONFIRM_TOOL_LABELS = { bookAppointment: '预约挂号', cancelAppointment: '取消预约' }
 
@@ -239,6 +230,10 @@ const showTypingDots = computed(() => {
 
 function typeLabel(type) {
   return TYPE_LABELS[type] || '闲聊'
+}
+
+function tagType(type) {
+  return TAG_TYPES[type] || 'info'
 }
 
 // 加载会话列表
@@ -335,7 +330,6 @@ function sendMessage() {
 
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
-  autoResize()
 
   // 预先创建一条空的 assistant 消息，用于流式追加内容
   messages.value.push({ role: 'assistant', content: '', streaming: true, references: [] })
@@ -497,14 +491,6 @@ function handleKeydown(e) {
   }
 }
 
-// 自动调整高度
-function autoResize() {
-  const el = inputRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
-}
-
 // 滚动到底部
 function scrollToBottom() {
   const el = messageListRef.value
@@ -559,16 +545,18 @@ onBeforeUnmount(() => {
   justify-content: center;
   font-size: 16px;
   font-weight: 700;
+  color: white;
 }
 
 .brand-name {
   font-size: 14px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .brand-sub {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-tertiary);
 }
 
 .topbar-user {
@@ -579,22 +567,7 @@ onBeforeUnmount(() => {
 
 .user-phone {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.logout-btn {
-  padding: 5px 12px;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: white;
-  border-radius: 14px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.logout-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
 }
 
 .chat-body {
@@ -621,20 +594,6 @@ onBeforeUnmount(() => {
 
 .new-chat-btn {
   width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
-  background: var(--primary);
-  color: white;
-  border-radius: var(--border-radius-sm);
-  font-size: 14px;
-  transition: var(--transition);
-}
-
-.new-chat-btn:hover {
-  background: var(--primary-dark);
 }
 
 /* 类型选择菜单（仅新建会话时出现） */
@@ -713,23 +672,10 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-.session-type-tag {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 8px;
-  font-size: 11px;
-  background: var(--bg-hover);
-  color: var(--text-tertiary);
-}
-
-.session-type-tag.TRIAGE {
-  background: var(--primary-bg);
-  color: var(--primary-dark);
-}
-
-.session-type-tag.RAG {
-  background: rgba(16, 185, 129, 0.12);
-  color: var(--success);
+.session-item.active .session-type-tag {
+  --el-tag-bg-color: var(--primary-bg);
+  --el-tag-border-color: transparent;
+  --el-tag-text-color: var(--primary-dark);
 }
 
 .session-delete {
@@ -878,7 +824,7 @@ onBeforeUnmount(() => {
 }
 
 .message-item.assistant .message-avatar {
-  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
   color: white;
 }
 
@@ -966,67 +912,27 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
   border-radius: 16px;
-  padding: 8px 8px 8px 16px;
+}
+
+.input-wrapper :deep(.el-textarea__inner) {
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px var(--border-color) inset;
   transition: var(--transition);
 }
 
-.input-wrapper:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-bg);
+.input-wrapper :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px var(--primary) inset;
 }
 
-.input-textarea {
-  flex: 1;
-  border: none;
-  background: transparent;
-  font-size: 14px;
-  line-height: 1.6;
-  resize: none;
-  color: var(--text-primary);
-  max-height: 120px;
+.stop-btn {
+  flex-shrink: 0;
 }
 
 .send-btn {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  background: var(--primary);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  transition: var(--transition);
-}
-
-.send-btn:hover:not(:disabled) {
-  background: var(--primary-dark);
-  transform: scale(1.05);
-}
-
-.send-btn:disabled {
-  background: var(--text-tertiary);
-  cursor: not-allowed;
-}
-
-.stop-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 14px;
-  border-radius: 10px;
-  background: var(--danger);
-  color: white;
-  font-size: 13px;
-  flex-shrink: 0;
-  transition: var(--transition);
-}
-
-.stop-btn:hover {
-  opacity: 0.9;
 }
 
 .input-hint {
@@ -1037,47 +943,13 @@ onBeforeUnmount(() => {
 }
 
 /* 二次确认弹窗 */
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.confirm-modal {
-  width: 420px;
-  max-width: 92vw;
-  background: var(--bg-card);
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow-xl);
-  overflow: hidden;
-}
-
-.modal-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.modal-header h3 {
-  margin: 0;
-  font-size: 16px;
-  color: var(--text-primary);
-}
-
-.modal-body {
-  padding: 20px;
-}
-
-.confirm-tool {
+.confirm-dialog .confirm-tool {
   font-size: 13px;
   color: var(--text-secondary);
-  margin-bottom: 8px;
+  margin: 0 0 8px;
 }
 
-.confirm-summary {
+.confirm-dialog .confirm-summary {
   font-size: 14px;
   color: var(--text-primary);
   line-height: 1.7;
@@ -1085,73 +957,27 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: var(--border-radius-sm);
   padding: 12px 14px;
+  margin: 0;
 }
 
-.confirm-tip {
-  margin-top: 10px;
+.confirm-dialog .confirm-tip {
+  margin: 10px 0 0;
   font-size: 12px;
   color: var(--text-tertiary);
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--border-color);
-}
-
-.ghost-btn {
-  padding: 9px 18px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.ghost-btn:hover:not(:disabled) {
-  background: var(--bg-input);
-}
-
-.ghost-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.primary-btn {
-  padding: 9px 18px;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--border-radius-sm);
-  font-size: 14px;
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.primary-btn:hover:not(:disabled) {
-  background: var(--primary-dark);
-}
-
-.primary-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .reference-block {
   margin-top: 10px;
   padding: 8px 10px;
-  border-left: 3px solid #3b82f6;
-  background: rgba(59, 130, 246, 0.06);
+  border-left: 3px solid var(--primary);
+  background: rgba(13, 148, 136, 0.06);
   border-radius: 6px;
   font-size: 12px;
 }
 
 .reference-title {
   font-weight: 600;
-  color: #475569;
+  color: var(--text-secondary);
   margin-bottom: 4px;
 }
 
@@ -1159,11 +985,11 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 6px;
   margin-top: 2px;
-  color: #64748b;
+  color: var(--text-tertiary);
 }
 
 .reference-name {
-  color: #2563eb;
+  color: var(--primary);
   flex-shrink: 0;
 }
 
