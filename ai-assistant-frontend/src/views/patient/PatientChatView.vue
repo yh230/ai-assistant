@@ -483,6 +483,7 @@ function submitConfirm() {
     },
     onDone: () => {
       finishStreaming(index)
+      loadUnread()
     },
     onError: (m) => {
       failStreaming(index, m)
