@@ -66,7 +66,7 @@
 
     <div class="pager" v-if="total > pageSize">
       <el-pagination
-        layout="prev, pager, next"
+        layout="prev, pager, next, total"
         :total="total"
         :current-page="pageNum"
         :page-size="pageSize"
