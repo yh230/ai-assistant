@@ -56,6 +56,7 @@
 - 门诊挂号：排班号源、预约取号、退号就诊、多维度统计（含公开的患者预约入口）
 - RBAC 员工权限：Spring Security + JWT（双令牌续期）+ 角色/菜单/按钮权限、个人中心、踢下线
 - 安全加固：登录失败锁定（默认 5 次锁 15 分钟）、公开接口限流、关键操作审计（`sys_oper_log`）
+- 可观测性：全链路追踪（Zipkin）+ Prometheus 指标 + traceId 日志
 
 ## 系统架构
 
@@ -87,7 +88,7 @@
 | ORM | MyBatis-Plus 3.5（RBAC / 医院 / 挂号）· Spring Data JPA（chat 模块） |
 | 服务间调用 | OpenFeign（`api` 模块，统一内部令牌） |
 | 数据 | MySQL 8（四库分治）· Redis（≥ 6.2，刷新令牌消费用 GETDEL） |
-| 前端 | Vue 3 + Vite 5 + vue-router 4 + axios（无 UI 组件库，手写 scoped CSS） |
+| 前端 | Vue 3 + Vite 5 + Element Plus 2.14（按需自动引入）+ 青绿主题（#0D9488）+ vue-router 4 + axios |
 | 测试 | JUnit（后端单测）· Python + pytest + httpx（API 级 E2E）|
 
 ## 项目结构
@@ -100,7 +101,7 @@ aidaima/
 │   ├── common-security/      # 安全公共组件：JWT、内部调用校验、Security 配置
 │   ├── api/                  # 服务间 Feign 接口与 DTO
 │   └── services/             # auth / system / hospital / registration / ai-chat
-├── ai-assistant-frontend/    # 前端：Vue 3 + Vite（员工端 + 患者端）
+├── ai-assistant-frontend/    # 前端：Vue 3 + Vite + Element Plus（员工端 + 患者端）
 ├── ai-assistant-e2e/         # API 级 E2E 自动化测试（Python + pytest + httpx）
 ├── scripts/                  # 一键脚本：Nacos / 服务 / E2E（含共享配置样例）
 ```
