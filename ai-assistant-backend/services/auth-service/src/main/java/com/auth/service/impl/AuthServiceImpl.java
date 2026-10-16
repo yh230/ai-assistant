@@ -6,8 +6,11 @@ import com.api.dto.AuthInfoDTO;
 import com.api.dto.AuthRequest;
 import com.api.dto.ChangePasswordDTO;
 import com.api.dto.ProfileUpdateDTO;
+import com.api.dto.SmsLoginRequest;
 import com.auth.dto.LoginRequest;
+import com.auth.login.LoginIssuer;
 import com.auth.service.AuthService;
+import com.auth.sms.SmsCodeService;
 import com.auth.snapshot.SnapshotManager;
 import com.auth.support.LoginAttemptGuard;
 import com.auth.vo.LoginVO;
@@ -52,6 +55,8 @@ public class AuthServiceImpl implements AuthService {
     private final SnapshotManager snapshotManager;
     private final LoginAttemptGuard loginAttemptGuard;
     private final RefreshTokenStore refreshTokenStore;
+    private final SmsCodeService smsCodeService;
+    private final LoginIssuer loginIssuer;
 
     /**
      * 登录认证（账号密码校验经 Feign 下沉用户中心，通过后签发 JWT 与刷新令牌并写快照）
@@ -107,6 +112,57 @@ public class AuthServiceImpl implements AuthService {
         vo.setToken(token);
         vo.setRefreshToken(refreshTokenStore.issue(SecurityConstants.IDENTITY_PATIENT, info.getUser().getId()));
         return vo;
+    }
+
+    /**
+     * 发送手机号验证码（校验身份后按节流规则下发）
+     *
+     * @param identity 身份（staff/patient）
+     * @param phone 手机号
+     */
+    @Override
+    public void sendSmsCode(String identity, String phone) {
+        validateIdentity(identity);
+        smsCodeService.sendCode(identity, phone);
+    }
+
+    /**
+     * 手机号验证码登录（校验验证码 → Feign 按手机号解析账号 → 签发令牌并写快照）
+     * <p>
+     * 校验失败或手机号未绑定账号均计入 {@link LoginAttemptGuard}
+     *
+     * @param request 登录入参（身份/手机号/验证码）
+     * @return 登录结果（令牌对）
+     */
+    @Override
+    public LoginVO smsLogin(SmsLoginRequest request) {
+        String identity = request.getIdentity();
+        validateIdentity(identity);
+        String phone = request.getPhone();
+        loginAttemptGuard.assertNotLocked(identity, phone);
+        try {
+            smsCodeService.verify(identity, phone, request.getCode());
+        } catch (BusinessException e) {
+            loginAttemptGuard.recordFailure(identity, phone);
+            throw e;
+        }
+        Result<AuthInfoDTO> result = SecurityConstants.IDENTITY_PATIENT.equals(identity)
+                ? patientClient.byPhone(phone) : userClient.byPhone(phone);
+        if (result == null || result.getCode() != 200 || result.getData() == null
+                || result.getData().getUser() == null) {
+            loginAttemptGuard.recordFailure(identity, phone);
+            throw new BusinessException("手机号未绑定账号，请联系管理员");
+        }
+        Long userId = result.getData().getUser().getId();
+        loginAttemptGuard.reset(identity, phone);
+        return loginIssuer.issue(identity, userId);
+    }
+
+    private void validateIdentity(String identity) {
+        if (!SecurityConstants.IDENTITY_STAFF.equals(identity)
+                && !SecurityConstants.IDENTITY_PATIENT.equals(identity)) {
+            throw new BusinessException("非法身份类型");
+        }
     }
 
     /**

@@ -2,6 +2,7 @@ package com.auth.service;
 
 import com.api.dto.ChangePasswordDTO;
 import com.api.dto.ProfileUpdateDTO;
+import com.api.dto.SmsLoginRequest;
 import com.auth.dto.LoginRequest;
 import com.auth.vo.LoginVO;
 import com.auth.vo.UserInfoVO;
@@ -29,6 +30,22 @@ public interface AuthService {
      * @return 登录结果（JWT 令牌）
      */
     LoginVO patientLogin(LoginRequest request);
+
+    /**
+     * 发送手机号验证码（校验身份后按节流规则下发）
+     *
+     * @param identity 身份（staff/patient）
+     * @param phone 手机号
+     */
+    void sendSmsCode(String identity, String phone);
+
+    /**
+     * 手机号验证码登录
+     *
+     * @param request 登录入参（身份/手机号/验证码）
+     * @return 登录结果（令牌对）
+     */
+    LoginVO smsLogin(SmsLoginRequest request);
 
     /**
      * 登出：撤销当前令牌，refreshToken 可空，携带则一并撤销

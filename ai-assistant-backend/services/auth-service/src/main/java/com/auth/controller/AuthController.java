@@ -2,8 +2,10 @@ package com.auth.controller;
 
 import com.api.dto.ChangePasswordDTO;
 import com.api.dto.ProfileUpdateDTO;
+import com.api.dto.SmsLoginRequest;
 import com.auth.dto.LoginRequest;
 import com.auth.dto.RefreshTokenRequest;
+import com.auth.dto.SmsCodeRequest;
 import com.auth.service.AuthService;
 import com.auth.vo.LoginVO;
 import com.auth.vo.UserInfoVO;
@@ -47,6 +49,29 @@ public class AuthController {
     @PostMapping("/patient/login")
     public Result<LoginVO> patientLogin(@Valid @RequestBody LoginRequest request) {
         return Result.success(authService.patientLogin(request));
+    }
+
+    /**
+     * 发送手机号验证码（网关白名单免登录）
+     *
+     * @param request 发码入参（身份/手机号）
+     * @return 空结果
+     */
+    @PostMapping("/login/sms/code")
+    public Result<Void> sendSmsCode(@Valid @RequestBody SmsCodeRequest request) {
+        authService.sendSmsCode(request.getIdentity(), request.getPhone());
+        return Result.success();
+    }
+
+    /**
+     * 手机号验证码登录（网关白名单免登录）
+     *
+     * @param request 登录入参（身份/手机号/验证码）
+     * @return 登录结果（令牌对）
+     */
+    @PostMapping("/login/sms")
+    public Result<LoginVO> smsLogin(@Valid @RequestBody SmsLoginRequest request) {
+        return Result.success(authService.smsLogin(request));
     }
 
     @PostMapping("/logout")

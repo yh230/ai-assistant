@@ -1,7 +1,9 @@
 package com.auth;
 
+import com.auth.sms.SmsProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.openfeign.EnableFeignClients;
 
 /**
@@ -11,6 +13,7 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
  * @date 2026-10-12
  */
 @SpringBootApplication(scanBasePackages = {"com.auth", "com.common", "com.api"})
+@EnableConfigurationProperties(SmsProperties.class)
 @EnableFeignClients("com.api.client")
 public class AuthServiceApplication {
 
