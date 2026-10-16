@@ -23,6 +23,16 @@ spring:
                 redis-rate-limiter.replenishRate: ${security.ratelimit.login.replenish-rate:10}
                 redis-rate-limiter.burstCapacity: ${security.ratelimit.login.burst-capacity:20}
                 key-resolver: "#{@ipKeyResolver}"
+        - id: sms-code-ratelimited
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/login/sms/code
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 3
+                key-resolver: "#{@ipKeyResolver}"
         - id: patient-register-ratelimited
           uri: lb://system-service
           predicates:
@@ -57,7 +67,7 @@ spring:
         - id: auth-service
           uri: lb://auth-service
           predicates:
-            - Path=/api/login,/api/logout,/api/getInfo,/api/profile,/api/profile/password,/api/patient/login,/api/refresh,/api/refresh/revoke
+            - Path=/api/login,/api/login/sms,/api/logout,/api/getInfo,/api/profile,/api/profile/password,/api/patient/login,/api/refresh,/api/refresh/revoke,/api/qr/create,/api/qr/poll,/api/qr/confirm
         - id: system-service
           uri: lb://system-service
           predicates:
@@ -102,6 +112,10 @@ gateway:
     - /api/hospital/public/**
     - /api/refresh
     - /api/refresh/revoke
+    - /api/login/sms/code
+    - /api/login/sms
+    - /api/qr/create
+    - /api/qr/poll
 
 security:
   jwt:

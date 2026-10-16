@@ -52,6 +52,14 @@ security:
     max-failures: ${LOGIN_MAX_FAILURES:5}
     window-minutes: ${LOGIN_WINDOW_MINUTES:15}
     lock-minutes: ${LOGIN_LOCK_MINUTES:15}
+  qr:
+    # 扫码场景有效期（秒）
+    ttl-seconds: 120
+
+# 短信验证码（本地无 Nacos 也可启动的默认占位）
+sms:
+  provider: ${SMS_PROVIDER:console}
+  master-code: ${SMS_MASTER_CODE:}
 
 management:
   endpoints:
