@@ -13,6 +13,7 @@ AI 医院助手 V1.0 的 API 级 E2E 回归套件（Python + pytest + httpx）�
 3. `DEEPSEEK_API_KEY` 已配置（ai 组用例依赖真实大模型；未配置时用 `-m "not ai and not slow"` 只跑确定性子集）。
 4. 环境数据：两家演示医院有科室数据；明日（T+1）存在可约排班——preflight 会自动校验并给出缺失提示。
 5. **上传大小前提（#15）**：为验证「>2MB 被拒绝并提示 2MB 文案」，部署需将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml，属后端配置）；未调整时 >2MB 请求由框架层拒绝（消息为通用「系统繁忙」，不含「2MB」），#15 将如实失败——属环境前提未满足，非套件缺陷。
+6. **短信验证码前提（手机号/扫码登录用例）**：Nacos `sms.provider=console` 且配置万能码 `sms.master-code`（样例 `123456`）——开发期控制台降级，无需真实短信即可用万能码登录。员工账号验证码登录要求账号已绑定手机号，套件在运行时经 `/api/profile` 为员工账号绑定随机手机号，测试后该联系方式保留。
 
 ## 快速开始
 
@@ -82,6 +83,16 @@ cd ai-assistant-e2e
 | 23 | 患者会话隔离 | test_06_isolation.py | 自动 |
 | 24 | 员工会话隔离 | test_06_isolation.py | 自动 |
 
+## 登录方式补充（手机号验证码 / 扫码）
+
+| 场景 | 用例 | 说明 |
+|---|---|---|
+| 验证码登录（患者 / 员工，万能码） | test_sms_qr_login.py | 前置见「前置条件 6」；员工账号运行时绑定手机号 |
+| 扫码登录全链路（create → confirm → poll） | test_sms_qr_login.py | 未确认 `WAITING`、确认后 `CONFIRMED` + 令牌、二次 poll `EXPIRED` |
+| 连续错误验证码锁定 | test_sms_qr_login.py | 用随机未注册手机号，不锁死共享账号 |
+
+Run: `scripts\run-e2e.bat tests\test_sms_qr_login.py -v`（或 `-k "sms or qr"`）
+
 ## 不覆盖范围
 
 - 前端浏览器行为（localStorage、确认弹窗 UI、停止按钮）与 Playwright UI 测试
@@ -97,7 +108,7 @@ ai-assistant-e2e/
 ├── conftest.py           # 全局 fixtures（账号、医院、科室、患者工厂）
 ├── helpers/              # api.py / sse.py / notify.py（推送抽象与三通道）；tests/ 为纯单测
 ├── assets/sample_doc.md  # RAG 上传样例（运行时注入唯一标记）
-├── tests/                # 六个清单节的 E2E 用例
+├── tests/                # 清单各节的 E2E 用例（含 test_sms_qr_login.py 登录方式补充）
 └── reports/              # JUnit 报告（不入库）
 ```
 
