@@ -79,7 +79,7 @@ public class PatientTools {
     }
 
     /**
-     * 查询某科室指定日期的号源余量（仅返回余量大于 0 的号源）
+     * 查询某科室指定日期的号源余量（仅返回余量大于 0 的号源，按患者所属医院约束）
      *
      * @param departmentId 科室ID（取自科室列表）
      * @param date 出诊日期（yyyy-MM-dd）
@@ -90,11 +90,12 @@ public class PatientTools {
      */
     @Tool(description = "查询某科室指定日期的号源余量。参数：departmentId=科室ID（取自科室列表），date=日期（yyyy-MM-dd），period=时段（1=上午 2=下午，可空表示全天）")
     public List<SourceInfoDTO> queryNumberSources(Long departmentId, String date, Integer period, ToolContext context) {
+        Long hospitalId = (Long) context.getContext().get("hospitalId");
         log.info("AI 工具调用：查询号源 departmentId={} date={} period={} hospitalId={}",
-                departmentId, date, period, context.getContext().get("hospitalId"));
+                departmentId, date, period, hospitalId);
         Result<List<SourceInfoDTO>> result;
         try {
-            result = registrationClient.sources(departmentId, date, period);
+            result = registrationClient.sources(departmentId, date, period, hospitalId);
         } catch (Exception e) {
             log.warn("号源查询服务调用失败: departmentId={}, {}", departmentId, e.getMessage());
             throw new RuntimeException("号源查询服务暂时不可用，请稍后重试");

@@ -47,6 +47,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
     /**
      * 查询号源池列表（按当前登录人数据范围过滤）
      *
+     * @param hospitalId 医院 ID（可空；内部调用按院约束）
      * @param doctorUserId 医生用户 ID（可空）
      * @param departmentId 科室 ID（可空）
      * @param date 出诊日期（可空）
@@ -54,10 +55,11 @@ public class NumberSourceServiceImpl implements NumberSourceService {
      * @return 号源池列表
      */
     @Override
-    public List<NumberSourceVO> listPools(Long doctorUserId, Long departmentId, LocalDate date, Integer period) {
+    public List<NumberSourceVO> listPools(Long hospitalId, Long doctorUserId, Long departmentId, LocalDate date, Integer period) {
         DataScope scope = dataScopeResolver.resolve();
         LambdaQueryWrapper<DoctorSchedule> qw = new LambdaQueryWrapper<>();
         scope.applyTo(qw, DoctorSchedule::getHospitalId, DoctorSchedule::getDepartmentId, DoctorSchedule::getDoctorUserId);
+        if (hospitalId != null) qw.eq(DoctorSchedule::getHospitalId, hospitalId);
         if (scope.isAll() && departmentId != null) qw.eq(DoctorSchedule::getDepartmentId, departmentId);
         if (doctorUserId != null) qw.eq(DoctorSchedule::getDoctorUserId, doctorUserId);
         if (date != null) qw.eq(DoctorSchedule::getScheduleDate, date);
