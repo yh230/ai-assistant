@@ -1,7 +1,9 @@
 package com.registration.service.impl;
 
 import com.api.client.OrgClient;
+import com.api.client.PatientClient;
 import com.api.client.UserClient;
+import com.api.dto.AuthInfoDTO;
 import com.api.dto.OrgBriefDTO;
 import com.api.dto.UserBriefDTO;
 import com.common.exception.BusinessException;
@@ -101,6 +103,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final DoctorScheduleMapper scheduleMapper;
     private final UserClient userClient;
     private final OrgClient orgClient;
+    private final PatientClient patientClient;
     private final DataScopeResolver dataScopeResolver;
     private final RedissonClient redissonClient;
     private final TransactionTemplate txTemplate;
@@ -117,6 +120,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     public RegistrationVO createAppointment(AppointmentCreateDTO dto) {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
+        assertPatientInScheduleHospital(dto.getPatientId(), schedule.getHospitalId());
         Registration reg;
         if (dto.getPatientId() != null) {
             String patientKey = PATIENT_DAY_LOCK_PREFIX + dto.getPatientId() + ":" + dto.getScheduleDate();
@@ -129,6 +133,35 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
         eventPublisher.publishCreated(reg, vo);
         return vo;
+    }
+
+    /**
+     * 校验患者所属医院与排班所属医院一致（AI 写工具租户强校验）
+     * <p>
+     * 匿名路径（patientId 为空）不校验；患者医院经内部接口权威查询，不信任调用方传参。
+     *
+     * @param patientId 患者账号 ID（可空=匿名预约）
+     * @param scheduleHospitalId 排班所属医院 ID
+     * @throws BusinessException 患者医院查询失败或与排班医院不一致
+     */
+    void assertPatientInScheduleHospital(Long patientId, Long scheduleHospitalId) {
+        if (patientId == null) {
+            return;
+        }
+        Result<AuthInfoDTO> result;
+        try {
+            result = patientClient.authInfo(patientId);
+        } catch (Exception e) {
+            log.warn("患者归属医院查询失败: patientId={}, {}", patientId, e.getMessage());
+            throw new BusinessException("无法确认患者归属医院，请稍后重试");
+        }
+        if (result == null || result.getCode() != 200 || result.getData() == null
+                || result.getData().getHospitalId() == null) {
+            throw new BusinessException("无法确认患者归属医院，请稍后重试");
+        }
+        if (!result.getData().getHospitalId().equals(scheduleHospitalId)) {
+            throw new BusinessException("该医生不属于您所属医院，无法预约");
+        }
     }
 
     /**
