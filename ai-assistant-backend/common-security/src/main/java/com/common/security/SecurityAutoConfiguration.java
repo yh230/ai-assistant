@@ -29,7 +29,7 @@ import java.io.IOException;
 /**
  * Spring Security 自动配置（无状态 JWT + 内部令牌）
  * <p>
- * 过滤器链承担路由鉴权（放行清单：login/health/error、患者注册/登录、OPTIONS 预检、挂号公开端点、内部接口），
+ * 过滤器链承担路由鉴权（放行清单：login/health/error、患者注册/登录、手机号验证码/扫码登录、OPTIONS 预检、挂号公开端点、内部接口），
  * 细粒度权限由 {@code @PreAuthorize}（@EnableMethodSecurity）承担；
  * 401/403 由 EntryPoint/DeniedHandler 输出与 {@code Result} 一致的 JSON；
  * 登录校验已下沉 system-service，本模块不注册 AuthenticationManager
@@ -85,6 +85,9 @@ public class SecurityAutoConfiguration {
                 .requestMatchers("/api/registration/appointments",
                         "/api/registration/appointments/**").permitAll()
                 .requestMatchers("/api/registration/schedule/public/**").permitAll()
+                // 手机号验证码登录与扫码登录公开端点（/api/qr/confirm 需登录，不放行）
+                .requestMatchers("/api/login/sms/code", "/api/login/sms",
+                        "/api/qr/create", "/api/qr/poll").permitAll()
                 // 内部接口（安全由 InternalAuthFilter 校验内部令牌承担）
                 .requestMatchers("/inner/**").permitAll()
                 .requestMatchers("/api/**").authenticated()

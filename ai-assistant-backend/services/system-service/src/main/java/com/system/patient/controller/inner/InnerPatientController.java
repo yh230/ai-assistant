@@ -52,6 +52,17 @@ public class InnerPatientController {
     }
 
     /**
+     * 按手机号查患者权限快照（未绑定返回 data=null）
+     *
+     * @param phone 手机号
+     * @return 权限快照数据
+     */
+    @GetMapping("/by-phone")
+    public Result<AuthInfoDTO> byPhone(@RequestParam("phone") String phone) {
+        return Result.success(patientService.authInfoByPhone(phone));
+    }
+
+    /**
      * 按 ID 批量查询患者简要信息
      *
      * @param ids 患者 ID 集合

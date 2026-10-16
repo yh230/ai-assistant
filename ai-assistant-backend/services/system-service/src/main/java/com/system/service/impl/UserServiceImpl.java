@@ -131,6 +131,24 @@ public class UserServiceImpl implements UserService {
     }
 
     /**
+     * 按手机号组装权限快照数据（未绑定或未启用返回 null）
+     *
+     * @param phone 手机号
+     * @return 权限快照数据或 null
+     */
+    @Override
+    public AuthInfoDTO authInfoByPhone(String phone) {
+        if (!StringUtils.hasText(phone)) {
+            return null;
+        }
+        SysUser user = userMapper.selectByPhone(phone);
+        if (user == null || user.getStatus() == null || !StatusConstants.ENABLED.equals(user.getStatus())) {
+            return null;
+        }
+        return buildAuthInfo(user.getId());
+    }
+
+    /**
      * 按 ID 批量查询用户简要信息（结果按入参顺序，不存在的 ID 跳过）
      *
      * @param ids 用户 ID 集合

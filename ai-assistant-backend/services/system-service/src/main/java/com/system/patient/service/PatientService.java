@@ -40,6 +40,14 @@ public interface PatientService {
     AuthInfoDTO authInfo(Long id);
 
     /**
+     * 按手机号组装快照数据（未绑定或未启用返回 null）
+     *
+     * @param phone 手机号
+     * @return 权限快照数据或 null
+     */
+    AuthInfoDTO authInfoByPhone(String phone);
+
+    /**
      * 按 ID 批量查询患者简要信息
      *
      * @param ids 患者 ID 集合

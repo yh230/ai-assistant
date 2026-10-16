@@ -31,6 +31,14 @@ public interface UserService {
     /** 按用户 ID 组装权限快照数据（不存在或停用抛业务异常） */
     AuthInfoDTO buildAuthInfo(Long userId);
 
+    /**
+     * 按手机号组装权限快照数据（未绑定或未启用返回 null）
+     *
+     * @param phone 手机号
+     * @return 权限快照数据或 null
+     */
+    AuthInfoDTO authInfoByPhone(String phone);
+
     /** 按 ID 批量查询用户简要信息 */
     List<UserBriefDTO> batchBrief(List<Long> ids);
 

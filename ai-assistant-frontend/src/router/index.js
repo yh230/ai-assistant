@@ -24,6 +24,12 @@ const routes = [
     meta: { requiresPatient: true, title: 'AI 就诊助手' }
   },
   {
+    path: '/qr-confirm',
+    name: 'QrConfirm',
+    component: () => import('../views/QrConfirmView.vue'),
+    meta: { public: true, title: '扫码登录确认' }
+  },
+  {
     path: '/',
     component: MainLayout,
     // 未登录用户会被守卫改写到 /login；此处 redirect 仅对已登录生效

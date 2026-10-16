@@ -6,6 +6,32 @@ security:
     expiration-seconds: 3600
   internal:
     token: aidaima-internal-token-please-override
+  qr:
+    # 扫码场景有效期（秒）
+    ttl-seconds: 120
+  # ===== 网关限流阈值（IP 令牌桶）=====
+  ratelimit:
+    sms-code:
+      replenish-rate: 1
+      burst-capacity: 3
+    qr-create:
+      replenish-rate: 1
+      burst-capacity: 3
+    qr-poll:
+      replenish-rate: 10
+      burst-capacity: 20
+
+# ===== 短信验证码 =====
+sms:
+  # 短信通道实现：console=控制台降级；接第三方时新增 SmsSender 实现
+  provider: console
+  # 万能测试码，仅 provider=console 生效；生产置空
+  master-code: "123456"
+  code-length: 6
+  code-ttl-seconds: 300
+  send-cooldown-seconds: 60
+  daily-limit: 10
+  max-verify-failures: 5
 spring:
   ai:
     model:

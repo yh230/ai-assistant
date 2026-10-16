@@ -77,6 +77,36 @@ def kickout(client: httpx.Client, admin_token: str, user_id: int) -> None:
     unwrap(client.post(f"/api/system/user/{user_id}/kickout", headers=_auth(admin_token)))
 
 
+def send_sms_code(client: httpx.Client, identity: str, phone: str) -> None:
+    """发送手机号验证码（identity: staff/patient，网关免登录）"""
+    unwrap(client.post("/api/login/sms/code", json={"identity": identity, "phone": phone}))
+
+
+def sms_login(client: httpx.Client, identity: str, phone: str, code: str) -> dict:
+    """手机号验证码登录，返回登录结果（含 token/refreshToken）"""
+    return unwrap(client.post("/api/login/sms", json={"identity": identity, "phone": phone, "code": code}))
+
+
+def update_profile_phone(client: httpx.Client, token: str, phone: str) -> None:
+    """绑定当前登录人的手机号（员工验证码登录前置，仅改联系方式）"""
+    unwrap(client.post("/api/profile", json={"phone": phone}, headers=_auth(token)))
+
+
+def qr_create(client: httpx.Client) -> dict:
+    """创建扫码登录场景（匿名），返回 {sceneId, expireSeconds}"""
+    return unwrap(client.post("/api/qr/create"))
+
+
+def qr_poll(client: httpx.Client, scene_id: str) -> dict:
+    """轮询扫码结果（匿名），返回 {status, token?, refreshToken?}"""
+    return unwrap(client.get("/api/qr/poll", params={"sceneId": scene_id}))
+
+
+def qr_confirm(client: httpx.Client, token: str, scene_id: str) -> None:
+    """手机端确认扫码登录（需登录，身份决定 PC 最终登录身份）"""
+    unwrap(client.post("/api/qr/confirm", json={"sceneId": scene_id}, headers=_auth(token)))
+
+
 def public_hospitals(client: httpx.Client) -> list[dict]:
     """公开医院列表（匿名）"""
     return unwrap(client.get("/api/hospital/public/list"))
