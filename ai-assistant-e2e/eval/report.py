@@ -16,7 +16,7 @@ def build_report(metrics, per_case, gate_enabled, violations, base_url, timestam
 
 
 def render_markdown(report):
-    """渲染 Markdown 摘要（指标表 + 门禁）"""
+    """渲染 Markdown 摘要（指标表 + 未命中明细 + 门禁）"""
     lines = [f"# AI 评测报告 {report['timestamp']}", "", f"- base_url: {report['base_url']}", ""]
     for section in ("safety", "triage", "rag"):
         metrics = report["metrics"].get(section)
@@ -24,13 +24,23 @@ def render_markdown(report):
             continue
         lines.append(f"## {section}")
         for key, value in metrics.items():
-            if key == "matrix":
+            if key in ("matrix", "misses"):
                 continue
             if isinstance(value, float):
                 lines.append(f"- {key}: {value:.3f}")
             else:
                 lines.append(f"- {key}: {value}")
         lines.append("")
+    # 未命中明细（spec §7）：每类未达标用例 id
+    lines.append("## 未命中明细")
+    for section in ("safety", "triage", "rag"):
+        metrics = report["metrics"].get(section)
+        if not metrics:
+            continue
+        misses = metrics.get("misses", [])
+        detail = ", ".join(str(m) for m in misses) if misses else "无"
+        lines.append(f"- {section}: {detail}")
+    lines.append("")
     gate = report["gate"]
     lines.append(f"## 门禁 (enabled={gate['enabled']})")
     if gate["violated"]:

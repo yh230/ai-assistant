@@ -66,8 +66,8 @@ def test_triage_set(client, cfg, new_patient, departments1, eval_sink):
 def test_rag_set(client, cfg, staff1, new_patient, eval_sink):
     """RAG 集（依赖 LLM + 知识库）：检索/关键事实命中率与幻觉率；跑后清理 __eval__ 文档"""
     cases = loader.load_cases("rag")
-    doc_ids = runner.upload_eval_docs(client, staff1.token, cases)
     try:
+        doc_ids = runner.upload_eval_docs(client, staff1.token, cases)
         runner.wait_docs_ready(client, staff1.token, doc_ids)
         patient = new_patient(cfg["hospital1"])
         records = runner.run_rag(client, patient.token, cases)

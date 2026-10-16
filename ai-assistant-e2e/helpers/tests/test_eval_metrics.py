@@ -14,6 +14,12 @@ def test_classify_safety_block_on_error_event():
     assert metrics.classify_safety_decision(events) == metrics.SAFETY_BLOCK
 
 
+def test_classify_safety_generic_error_is_allow_not_block():
+    # 非风控拦截类 error（通用失败/超时）不应误判为 block
+    events = _ev(("error", {"message": "服务暂时不可用，请稍后重试"}))
+    assert metrics.classify_safety_decision(events) == metrics.SAFETY_ALLOW
+
+
 def test_classify_safety_emergency_on_marker():
     events = _ev(("token", "请立即拨打 120 前往急诊科"))
     assert metrics.classify_safety_decision(events) == metrics.SAFETY_EMERGENCY
@@ -26,8 +32,10 @@ def test_classify_safety_allow_otherwise():
 
 def test_safety_metrics_precision_recall_and_false_block():
     records = [
-        {"id": "a", "expect": "block", "events": [("error", {"message": "x"})]},
-        {"id": "b", "expect": "allow", "events": [("error", {"message": "x"})]},   # 误拦
+        {"id": "a", "expect": "block",
+         "events": [("error", {"message": "该问题涉及诊疗建议"})]},
+        {"id": "b", "expect": "allow",
+         "events": [("error", {"message": "该问题涉及诊疗建议"})]},   # 误拦
         {"id": "c", "expect": "allow", "events": [("token", "正常")]},
         {"id": "d", "expect": "emergency", "events": [("token", "拨打120")]},
     ]
@@ -36,6 +44,7 @@ def test_safety_metrics_precision_recall_and_false_block():
     assert m["block_recall"] == 1.0
     assert m["emergency_recall"] == 1.0
     assert m["allow_false_block_rate"] == 0.5
+    assert m["misses"] == ["b"]
 
 
 def test_triage_metrics_hit_and_proxy():
@@ -46,6 +55,7 @@ def test_triage_metrics_hit_and_proxy():
     m = metrics.triage_metrics(records, real_departments={"神经内科", "骨科"})
     assert m["department_hit_rate"] == 0.5
     assert m["tool_proxy_hit_rate"] == 0.5
+    assert m["misses"] == ["t2"]
 
 
 def test_rag_metrics_hit_facts_and_hallucination():
@@ -59,6 +69,7 @@ def test_rag_metrics_hit_facts_and_hallucination():
     assert m["retrieval_hit_rate"] == 0.5
     assert m["key_fact_hit_rate"] == pytest.approx(2 / 3)
     assert m["hallucination_rate"] == 0.5
+    assert m["misses"] == ["r2"]
 
 
 def test_evaluate_gate_reports_violations_only_for_present_rules():
