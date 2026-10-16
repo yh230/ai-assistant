@@ -19,12 +19,12 @@ import java.util.List;
 @FeignClient(name = "registration-service", path = "/inner", contextId = "registrationClient")
 public interface RegistrationClient {
 
-    /** 按科室+日期查询号源池（含余量；hospitalId 非空时按院约束） */
+    /** 按科室+日期查询号源池（含余量；hospitalId 必填按院约束） */
     @GetMapping("/sources")
     Result<List<SourceInfoDTO>> sources(@RequestParam("departmentId") Long departmentId,
                                         @RequestParam("date") String date,
                                         @RequestParam(value = "period", required = false) Integer period,
-                                        @RequestParam(value = "hospitalId", required = false) Long hospitalId);
+                                        @RequestParam("hospitalId") Long hospitalId);
 
     /** AI 预约挂号（写操作，调用方已做用户确认） */
     @PostMapping("/book")

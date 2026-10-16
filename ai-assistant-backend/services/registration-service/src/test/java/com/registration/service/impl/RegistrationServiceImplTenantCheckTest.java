@@ -4,11 +4,19 @@ import com.api.client.PatientClient;
 import com.api.dto.AuthInfoDTO;
 import com.common.exception.BusinessException;
 import com.common.result.Result;
+import com.registration.dto.AppointmentCreateDTO;
+import com.registration.entity.DoctorSchedule;
+import com.registration.entity.Registration;
+import com.registration.mapper.DoctorScheduleMapper;
+import com.registration.mapper.RegistrationMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RedissonClient;
+
+import java.time.LocalDate;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -16,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -29,6 +38,12 @@ class RegistrationServiceImplTenantCheckTest {
 
     @Mock
     private PatientClient patientClient;
+    @Mock
+    private DoctorScheduleMapper scheduleMapper;
+    @Mock
+    private RegistrationMapper registrationMapper;
+    @Mock
+    private RedissonClient redissonClient;
 
     @InjectMocks
     private RegistrationServiceImpl registrationService;
@@ -74,5 +89,30 @@ class RegistrationServiceImplTenantCheckTest {
     void skipsCheckForAnonymous() {
         assertDoesNotThrow(() -> registrationService.assertPatientInScheduleHospital(null, 1L));
         verify(patientClient, never()).authInfo(any());
+    }
+
+    /**
+     * 端到端：createAppointment 在医院不匹配时于锁外拒绝，不得获取 Redisson 锁或落库
+     */
+    @Test
+    void createAppointmentRejectsMismatchedHospitalBeforeLock() {
+        DoctorSchedule schedule = new DoctorSchedule();
+        schedule.setId(1L);
+        schedule.setStatus(1);
+        schedule.setHospitalId(1L);
+        when(scheduleMapper.selectOne(any())).thenReturn(schedule);
+        when(patientClient.authInfo(7L)).thenReturn(ok(2L));
+
+        AppointmentCreateDTO dto = new AppointmentCreateDTO();
+        dto.setPatientId(7L);
+        dto.setDoctorUserId(10L);
+        dto.setScheduleDate(LocalDate.of(2026, 10, 20));
+        dto.setPeriod(1);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> registrationService.createAppointment(dto));
+        assertEquals("该医生不属于您所属医院，无法预约", ex.getMessage());
+        verifyNoInteractions(redissonClient);
+        verify(registrationMapper, never()).insert(any(Registration.class));
     }
 }

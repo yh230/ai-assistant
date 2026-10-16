@@ -37,19 +37,19 @@ public class InnerRegistrationController {
     private final RegistrationService registrationService;
 
     /**
-     * 按科室与日期查询号源池（含余量，period 为空表示全部时段，hospitalId 非空时按院约束）
+     * 按科室与日期查询号源池（含余量，period 为空表示全部时段，hospitalId 必填按院约束）
      *
      * @param departmentId 科室 ID
      * @param date 出诊日期（yyyy-MM-dd）
      * @param period 时段：1-上午，2-下午（可空）
-     * @param hospitalId 医院 ID（可空；调用方传入以按院约束）
+     * @param hospitalId 医院 ID（必填；调用方传入以按院约束，缺失则接口拒绝）
      * @return 号源池简要信息列表
      */
     @GetMapping("/sources")
     public Result<List<SourceInfoDTO>> sources(@RequestParam("departmentId") Long departmentId,
                                                @RequestParam("date") String date,
                                                @RequestParam(value = "period", required = false) Integer period,
-                                               @RequestParam(value = "hospitalId", required = false) Long hospitalId) {
+                                               @RequestParam("hospitalId") Long hospitalId) {
         List<NumberSourceVO> pools = numberSourceService.listPools(hospitalId, null, departmentId, LocalDate.parse(date), period);
         return Result.success(toSourceInfoList(pools));
     }
