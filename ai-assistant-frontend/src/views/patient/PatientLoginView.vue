@@ -80,6 +80,25 @@
           </form>
         </el-tab-pane>
 
+        <!-- 扫码登录 -->
+        <el-tab-pane label="扫码登录" name="qr">
+          <div class="qr-box">
+            <canvas ref="qrCanvas" class="qr-canvas"></canvas>
+            <p class="qr-tip" v-if="qrStatus === 'loading'">二维码生成中…</p>
+            <p class="qr-tip" v-else-if="qrStatus === 'waiting'">请使用手机端扫码并确认登录</p>
+            <p class="qr-tip" v-else-if="qrStatus === 'expired'">二维码已过期</p>
+            <p class="qr-tip error" v-else-if="qrStatus === 'error'">{{ errorMsg || '二维码生成失败' }}</p>
+            <el-button
+              v-if="qrStatus === 'expired' || qrStatus === 'error'"
+              class="login-btn"
+              type="primary"
+              @click="startQr"
+            >
+              刷新二维码
+            </el-button>
+          </div>
+        </el-tab-pane>
+
         <!-- 注册 -->
         <el-tab-pane label="注册" name="register">
           <form class="login-form" @submit.prevent="handleRegister">
@@ -140,10 +159,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { patientLogin, patientRegister, publicHospitals, sendSmsCode, loginBySms } from '../../api/patient'
-import { setPatientAuth } from '../../store/patientAuth'
+import QRCode from 'qrcode'
+import { patientLogin, patientRegister, publicHospitals, sendSmsCode, loginBySms, qrCreate, qrPoll } from '../../api/patient'
+import { setPatientAuth, patientAuth } from '../../store/patientAuth'
 import { msg } from '../../utils/message'
 
 const route = useRoute()
@@ -156,6 +176,14 @@ const hospitalsLoading = ref(false)
 const sending = ref(false)
 const countdown = ref(0)
 let countdownTimer = null
+
+// 扫码登录状态：loading / waiting / expired / error
+const qrCanvas = ref(null)
+const qrSceneId = ref('')
+const qrStatus = ref('loading')
+let qrTimer = null
+// 扫码生成代次：每次 startQr/stopQrTimer 递增，用于丢弃过期异步结果
+let qrSeq = 0
 
 const loginForm = reactive({ phone: '', password: '' })
 const smsForm = reactive({ phone: '', code: '' })
@@ -274,9 +302,74 @@ async function handleRegister() {
   }
 }
 
+function stopQrTimer() {
+  qrSeq += 1
+  if (qrTimer) {
+    clearInterval(qrTimer)
+    qrTimer = null
+  }
+}
+
+async function pollQr() {
+  let res
+  try {
+    res = await qrPoll(qrSceneId.value)
+  } catch {
+    // 单次轮询失败忽略，等待下一轮
+    return
+  }
+  if (res.status === 'EXPIRED') {
+    stopQrTimer()
+    qrStatus.value = 'expired'
+    return
+  }
+  if (res.status !== 'CONFIRMED') return
+
+  stopQrTimer()
+  try {
+    setPatientAuth(res.token, patientAuth.user || {}, res.refreshToken)
+    router.replace(route.query.redirect || '/patient/chat')
+  } catch (e) {
+    errorMsg.value = e.message || '登录失败'
+    qrStatus.value = 'error'
+  }
+}
+
+async function startQr() {
+  stopQrTimer()
+  const seq = ++qrSeq
+  errorMsg.value = ''
+  qrStatus.value = 'loading'
+  try {
+    const { sceneId } = await qrCreate()
+    // 生成期间又切页签/重开则丢弃本次结果，避免遗留轮询
+    if (seq !== qrSeq || tab.value !== 'qr') return
+    qrSceneId.value = sceneId
+    const url = `${location.origin}/qr-confirm?scene=${sceneId}`
+    await QRCode.toCanvas(qrCanvas.value, url, { width: 200 })
+    if (seq !== qrSeq || tab.value !== 'qr') return
+    qrStatus.value = 'waiting'
+    qrTimer = setInterval(pollQr, 2000)
+  } catch (e) {
+    if (seq !== qrSeq) return
+    qrStatus.value = 'error'
+    errorMsg.value = e.message || '二维码生成失败'
+  }
+}
+
+// 切到扫码页签时创建二维码，离开时清理轮询
+watch(tab, (t) => {
+  if (t === 'qr') {
+    nextTick(() => startQr())
+  } else {
+    stopQrTimer()
+  }
+})
+
 onMounted(loadHospitals)
 
 onBeforeUnmount(() => {
+  stopQrTimer()
   if (countdownTimer) {
     clearInterval(countdownTimer)
     countdownTimer = null
@@ -360,6 +453,30 @@ onBeforeUnmount(() => {
 .login-btn {
   width: 100%;
   font-size: 15px;
+}
+
+.qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+  min-height: 240px;
+}
+
+.qr-canvas {
+  width: 200px;
+  height: 200px;
+}
+
+.qr-tip {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.qr-tip.error {
+  color: var(--danger);
 }
 
 .login-tip {

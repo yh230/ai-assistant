@@ -5,6 +5,7 @@ import com.api.dto.AuthInfoDTO;
 import com.auth.snapshot.SnapshotManager;
 import com.auth.vo.LoginVO;
 import com.common.constant.SecurityConstants;
+import com.common.exception.BusinessException;
 import com.common.jwt.JwtTokenService;
 import com.common.jwt.RefreshTokenStore;
 import com.common.result.Result;
@@ -36,7 +37,10 @@ public class LoginIssuer {
     public LoginVO issue(String identity, Long userId) {
         if (SecurityConstants.IDENTITY_PATIENT.equals(identity)) {
             Result<AuthInfoDTO> result = patientClient.authInfo(userId);
-            snapshotManager.saveFromPatientLogin(userId, result == null ? null : result.getData());
+            if (result == null || result.getCode() != 200 || result.getData() == null) {
+                throw new BusinessException("账号不可用，请重新登录");
+            }
+            snapshotManager.saveFromPatientLogin(userId, result.getData());
         } else {
             snapshotManager.refresh(userId);
         }

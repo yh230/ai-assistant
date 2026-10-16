@@ -19,6 +19,7 @@ import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 网关鉴权过滤器：验签 + 黑名单/踢下线校验 + 放行清单 + /inner 外部阻断 + 按身份拦截患者/员工路径
@@ -32,6 +33,9 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
 
     private static final String UNAUTHORIZED_MSG = "未登录或登录已过期，请重新登录";
     private static final String FORBIDDEN_MSG = "权限不足，禁止访问";
+
+    /** 身份中立路径：任意已认证身份均可访问（仍需登录，不放开匿名） */
+    private static final Set<String> IDENTITY_NEUTRAL_PATHS = Set.of("/api/qr/confirm");
 
     private final JwtTokenService jwtTokenService;
     private final TokenRevocationService tokenRevocationService;
@@ -63,7 +67,7 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
             String identity = payload.identity();
             boolean patient = SecurityConstants.IDENTITY_PATIENT.equals(identity);
             boolean patientPath = isPatientPath(path);
-            if (patient != patientPath) {
+            if (!IDENTITY_NEUTRAL_PATHS.contains(path) && patient != patientPath) {
                 return writeResult(exchange, HttpStatus.FORBIDDEN, FORBIDDEN_MSG);
             }
         } catch (Exception e) {

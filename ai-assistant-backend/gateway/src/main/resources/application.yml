@@ -30,8 +30,28 @@ spring:
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 1
-                redis-rate-limiter.burstCapacity: 3
+                redis-rate-limiter.replenishRate: ${security.ratelimit.sms-code.replenish-rate:1}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.sms-code.burst-capacity:3}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: qr-create-ratelimited
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/qr/create
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.qr-create.replenish-rate:1}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.qr-create.burst-capacity:3}
+                key-resolver: "#{@ipKeyResolver}"
+        - id: qr-poll-ratelimited
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/qr/poll
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.qr-poll.replenish-rate:10}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.qr-poll.burst-capacity:20}
                 key-resolver: "#{@ipKeyResolver}"
         - id: patient-register-ratelimited
           uri: lb://system-service
