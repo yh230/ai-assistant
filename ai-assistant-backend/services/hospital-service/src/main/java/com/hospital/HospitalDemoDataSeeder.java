@@ -34,7 +34,7 @@ import java.util.Map;
  * 实现 CommandLineRunner，首次启动时将医院 / 科室 / 院长 / 科室主任 / 医生 / 护士 / 护工及近 30 天出勤数据灌入数据库，
  * 供前端数据权限验证。演示员工经用户中心 Feign 创建（BCrypt 加密在用户中心完成）。
  * 幂等：以哨兵用户名 {@code demo_root_h1} 是否存在为标记，已存在则跳过，避免重复播种。
- * 表结构无需改动（建表与扩列见 sql/hospital_schema.sql，库内表已就绪）。
+ * 表结构无需改动（建表见 sql/init.sql，库内表已就绪）。
  *
  * @author yh
  * @date 2026-10-10

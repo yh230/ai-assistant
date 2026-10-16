@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 /**
  * RBAC 初始数据播种：首次启动时创建默认管理员账号、管理员角色与基础菜单权限
  * <p>
- * 表结构需提前执行 {@code src/main/resources/sql/rbac_schema.sql} 创建。
+ * 表结构需提前执行 {@code sql/init.sql} 创建。
  * 若数据已存在则跳过，保证幂等。
  *
  * @author yh

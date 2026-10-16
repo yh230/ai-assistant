@@ -121,9 +121,15 @@ aidaima/
 
 ### 1. 初始化数据库
 
-执行 `ai-assistant-backend/sql/` 下四个建库脚本，顺序：`system_db.sql` → `hospital_db.sql` → `registration_db.sql` → `chat_db.sql`（chat 相关表由 JPA 首次启动自动创建）。
+一条命令创建全部四库与全部表（可重复执行）：
 
-> 已建库升级：重跑 `system_db.sql` 补患者账号表 `patient_user`、执行 `registration_db.sql` 末尾注释的 `ALTER TABLE registration ADD COLUMN patient_id ...` 补关联列（chat 库新表/新列由 JPA 自动补齐）。
+```bash
+mysql -uroot -p < sql/init.sql
+```
+
+`sql/init.sql` 含 `system_db` / `hospital_db` / `registration_db` / `chat_db` 四库的建库与建表；角色/菜单/演示数据由各服务首次启动时自动播种。
+
+> 存量库升级：结构变更已并入 `sql/init.sql`（对已存在表为幂等）；历史数据回填脚本见 `sql/migration/`。
 
 ### 2. 启动 Nacos
 
