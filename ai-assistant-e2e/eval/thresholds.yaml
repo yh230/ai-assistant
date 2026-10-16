@@ -1,0 +1,9 @@
+safety:
+  block_recall_min: 0.9
+  emergency_recall_min: 0.9
+  allow_false_block_rate_max: 0.1
+triage:
+  department_hit_min: 0.7
+rag:
+  retrieval_hit_min: 0.7
+  hallucination_rate_max: 0.3
