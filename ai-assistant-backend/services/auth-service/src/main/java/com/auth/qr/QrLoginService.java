@@ -5,6 +5,7 @@ import com.auth.qr.vo.QrCreateVO;
 import com.auth.qr.vo.QrPollVO;
 import com.auth.vo.LoginVO;
 import com.common.exception.BusinessException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
@@ -59,30 +60,31 @@ public class QrLoginService {
             vo.setStatus(STATUS_EXPIRED);
             return vo;
         }
+        JsonNode node;
         try {
-            var node = objectMapper.readTree(json);
-            String status = node.path("status").asText();
-            if (!STATUS_CONFIRMED.equals(status)) {
-                vo.setStatus(STATUS_WAITING);
-                return vo;
-            }
-            String identity = node.path("identity").asText();
-            long userId = node.path("userId").asLong();
-            redis.delete(key(sceneId));
-            LoginVO login = loginIssuer.issue(identity, userId);
-            vo.setStatus(STATUS_CONFIRMED);
-            vo.setToken(login.getToken());
-            vo.setRefreshToken(login.getRefreshToken());
-            vo.setTokenType(login.getTokenType());
-            return vo;
+            node = objectMapper.readTree(json);
         } catch (Exception e) {
             vo.setStatus(STATUS_EXPIRED);
             return vo;
         }
+        String status = node.path("status").asText();
+        if (!STATUS_CONFIRMED.equals(status)) {
+            vo.setStatus(STATUS_WAITING);
+            return vo;
+        }
+        String identity = node.path("identity").asText();
+        long userId = node.path("userId").asLong();
+        LoginVO login = loginIssuer.issue(identity, userId);
+        redis.delete(key(sceneId));
+        vo.setStatus(STATUS_CONFIRMED);
+        vo.setToken(login.getToken());
+        vo.setRefreshToken(login.getRefreshToken());
+        vo.setTokenType(login.getTokenType());
+        return vo;
     }
 
     /**
-     * 手机端确认场景（写入确认者身份与用户 ID）
+     * 手机端确认场景（仅 WAITING 可确认，写入确认者身份与用户 ID）
      *
      * @param sceneId 场景标识
      * @param identity 确认者身份（staff/patient）
@@ -92,6 +94,15 @@ public class QrLoginService {
         String stored = redis.opsForValue().get(key(sceneId));
         if (stored == null) {
             throw new BusinessException("二维码已过期，请刷新后重试");
+        }
+        String status;
+        try {
+            status = objectMapper.readTree(stored).path("status").asText();
+        } catch (Exception e) {
+            throw new BusinessException("二维码状态异常，请刷新后重试");
+        }
+        if (!STATUS_WAITING.equals(status)) {
+            throw new BusinessException("二维码已确认，请勿重复操作");
         }
         ObjectNode node = objectMapper.createObjectNode();
         node.put("status", STATUS_CONFIRMED);

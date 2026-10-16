@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
@@ -64,5 +66,38 @@ class QrLoginServiceTest {
         when(ops.get(anyString())).thenReturn(null);
         assertThatThrownBy(() -> service.confirm("nope", "staff", 1L))
                 .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void 重复确认已确认场景被拒绝且不覆盖() {
+        when(ops.get(anyString())).thenReturn("{\"status\":\"CONFIRMED\",\"identity\":\"staff\",\"userId\":7}");
+
+        assertThatThrownBy(() -> service.confirm("scene1", "patient", 8L))
+                .isInstanceOf(BusinessException.class);
+        verify(ops, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void 确认后轮询签发令牌并消费场景() {
+        when(ops.get(anyString())).thenReturn("{\"status\":\"CONFIRMED\",\"identity\":\"staff\",\"userId\":7}");
+        LoginVO vo = new LoginVO();
+        vo.setToken("t");
+        vo.setRefreshToken("r");
+        when(issuer.issue("staff", 7L)).thenReturn(vo);
+
+        QrPollVO poll = service.poll("scene1");
+        assertThat(poll.getStatus()).isEqualTo("CONFIRMED");
+        assertThat(poll.getToken()).isEqualTo("t");
+        verify(redis).delete("qr:scene:scene1");
+    }
+
+    @Test
+    void 签发失败不返回过期且不删除场景() {
+        when(ops.get(anyString())).thenReturn("{\"status\":\"CONFIRMED\",\"identity\":\"staff\",\"userId\":7}");
+        when(issuer.issue("staff", 7L)).thenThrow(new IllegalStateException("issue failed"));
+
+        assertThatThrownBy(() -> service.poll("scene1"))
+                .isInstanceOf(IllegalStateException.class);
+        verify(redis, never()).delete(anyString());
     }
 }
