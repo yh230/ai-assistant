@@ -106,3 +106,9 @@ def new_patient(client, hospitals):
         return Account(username=phone, password=password, token=token, user_id=user_id)
 
     return _create
+
+
+def pytest_addoption(parser):
+    """注册评测阈值门禁开关"""
+    parser.addoption("--eval-gate", action="store_true", default=False,
+                     help="评测阈值门禁：低于 thresholds.yaml 时 fail")
