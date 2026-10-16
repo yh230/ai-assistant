@@ -25,6 +25,10 @@ public interface UserClient {
     @GetMapping("/{userId}/auth-info")
     Result<AuthInfoDTO> authInfo(@PathVariable("userId") Long userId);
 
+    /** 按手机号查账号权限快照（员工手机号登录用，未绑定返回 data=null） */
+    @GetMapping("/by-phone")
+    Result<AuthInfoDTO> byPhone(@RequestParam("phone") String phone);
+
     /** 按 ID 批量查询用户简要信息 */
     @GetMapping("/batch")
     Result<List<UserBriefDTO>> batch(@RequestParam("ids") List<Long> ids);

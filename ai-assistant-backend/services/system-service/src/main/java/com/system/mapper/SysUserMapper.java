@@ -17,6 +17,9 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     @Select("SELECT * FROM sys_user WHERE username = #{username}")
     SysUser selectByUsername(@Param("username") String username);
 
+    @Select("SELECT * FROM sys_user WHERE phone = #{phone} LIMIT 1")
+    SysUser selectByPhone(@Param("phone") String phone);
+
     /**
      * 查询指定角色码且启用的用户（按医院/科室可选过滤，供排班选择医生）
      */

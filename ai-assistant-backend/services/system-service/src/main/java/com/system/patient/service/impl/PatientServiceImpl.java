@@ -111,6 +111,25 @@ public class PatientServiceImpl implements PatientService {
     }
 
     /**
+     * 按手机号组装快照数据（未绑定或未启用返回 null）
+     *
+     * @param phone 手机号
+     * @return 权限快照数据或 null
+     */
+    @Override
+    public AuthInfoDTO authInfoByPhone(String phone) {
+        if (phone == null || phone.isBlank()) {
+            return null;
+        }
+        PatientUser user = patientUserMapper.selectOne(
+                new LambdaQueryWrapper<PatientUser>().eq(PatientUser::getPhone, phone));
+        if (user == null || !StatusConstants.ENABLED.equals(user.getStatus())) {
+            return null;
+        }
+        return buildAuthInfo(user);
+    }
+
+    /**
      * 按 ID 批量查询患者简要信息（结果按入参顺序，不存在的 ID 跳过）
      *
      * @param ids 患者 ID 集合

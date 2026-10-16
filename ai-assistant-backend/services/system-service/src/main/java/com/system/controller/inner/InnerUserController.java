@@ -38,6 +38,12 @@ public class InnerUserController {
         return Result.success(userService.buildAuthInfo(userId));
     }
 
+    /** 按手机号查账号权限快照（未绑定返回 data=null） */
+    @GetMapping("/by-phone")
+    public Result<AuthInfoDTO> byPhone(@RequestParam("phone") String phone) {
+        return Result.success(userService.authInfoByPhone(phone));
+    }
+
     /** 按 ID 批量查询用户简要信息 */
     @GetMapping("/batch")
     public Result<List<UserBriefDTO>> batch(@RequestParam("ids") List<Long> ids) {
