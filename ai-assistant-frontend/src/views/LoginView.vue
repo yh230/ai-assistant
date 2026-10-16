@@ -145,6 +145,8 @@ const qrSceneId = ref('')
 const qrStatus = ref('loading')
 let qrTimer = null
 let countdownTimer = null
+// 扫码生成代次：每次 startQr/stopQrTimer 递增，用于丢弃过期异步结果
+let qrSeq = 0
 
 function redirectAfterLogin() {
   router.replace(route.query.redirect || '/chat')
@@ -226,6 +228,7 @@ async function handleSmsLogin() {
 }
 
 function stopQrTimer() {
+  qrSeq += 1
   if (qrTimer) {
     clearInterval(qrTimer)
     qrTimer = null
@@ -261,16 +264,21 @@ async function pollQr() {
 
 async function startQr() {
   stopQrTimer()
+  const seq = ++qrSeq
   errorMsg.value = ''
   qrStatus.value = 'loading'
   try {
     const { sceneId } = await qrCreate()
+    // 生成期间又切页签/重开则丢弃本次结果，避免遗留轮询
+    if (seq !== qrSeq || activeTab.value !== 'qr') return
     qrSceneId.value = sceneId
     const url = `${location.origin}/qr-confirm?scene=${sceneId}`
     await QRCode.toCanvas(qrCanvas.value, url, { width: 200 })
+    if (seq !== qrSeq || activeTab.value !== 'qr') return
     qrStatus.value = 'waiting'
     qrTimer = setInterval(pollQr, 2000)
   } catch (e) {
+    if (seq !== qrSeq) return
     qrStatus.value = 'error'
     errorMsg.value = e.message || '二维码生成失败'
   }
