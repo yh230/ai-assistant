@@ -145,7 +145,6 @@ public class SystemDataSeeder implements CommandLineRunner {
         user.setUsername(ADMIN_USERNAME);
         user.setPassword(passwordEncoder.encode(ADMIN_PASSWORD));
         user.setName("超级管理员");
-        user.setPhone("");
         user.setStatus(1);
         user.setCreateTime(LocalDateTime.now());
         user.setUpdateTime(LocalDateTime.now());
