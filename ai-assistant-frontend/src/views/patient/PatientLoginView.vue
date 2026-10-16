@@ -39,6 +39,47 @@
           </form>
         </el-tab-pane>
 
+        <!-- 手机号验证码 -->
+        <el-tab-pane label="手机号验证码" name="sms">
+          <form class="login-form" @submit.prevent="handleSmsLogin">
+            <div class="field">
+              <label>手机号</label>
+              <el-input
+                v-model="smsForm.phone"
+                type="text"
+                placeholder="请输入手机号"
+                autocomplete="username"
+              />
+            </div>
+
+            <div class="field">
+              <label>验证码</label>
+              <div class="code-row">
+                <el-input
+                  v-model="smsForm.code"
+                  type="text"
+                  placeholder="请输入验证码"
+                  autocomplete="one-time-code"
+                />
+                <el-button
+                  class="code-btn"
+                  :disabled="countdown > 0"
+                  :loading="sending"
+                  @click="handleSendCode"
+                >
+                  {{ countdown > 0 ? `${countdown}s 后重发` : '获取验证码' }}
+                </el-button>
+              </div>
+            </div>
+
+            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+
+            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">
+              {{ loading ? '登录中…' : '登 录' }}
+            </el-button>
+          </form>
+        </el-tab-pane>
+
         <!-- 注册 -->
         <el-tab-pane label="注册" name="register">
           <form class="login-form" @submit.prevent="handleRegister">
@@ -99,20 +140,25 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { patientLogin, patientRegister, publicHospitals } from '../../api/patient'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { patientLogin, patientRegister, publicHospitals, sendSmsCode, loginBySms } from '../../api/patient'
 import { setPatientAuth } from '../../store/patientAuth'
 import { msg } from '../../utils/message'
 
+const route = useRoute()
 const router = useRouter()
 const tab = ref('login')
 const loading = ref(false)
 const errorMsg = ref('')
 const hospitals = ref([])
 const hospitalsLoading = ref(false)
+const sending = ref(false)
+const countdown = ref(0)
+let countdownTimer = null
 
 const loginForm = reactive({ phone: '', password: '' })
+const smsForm = reactive({ phone: '', code: '' })
 const registerForm = reactive({ name: '', phone: '', password: '', hospitalId: null })
 
 function switchTab(t) {
@@ -143,7 +189,54 @@ async function handleLogin() {
   try {
     const res = await patientLogin({ username: phone, password: loginForm.password })
     setPatientAuth(res.token, { phone }, res.refreshToken)
-    router.replace('/patient/chat')
+    router.replace(route.query.redirect || '/patient/chat')
+  } catch (e) {
+    errorMsg.value = e.message || '登录失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function startCountdown() {
+  countdown.value = 60
+  countdownTimer = setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) {
+      clearInterval(countdownTimer)
+      countdownTimer = null
+      countdown.value = 0
+    }
+  }, 1000)
+}
+
+async function handleSendCode() {
+  errorMsg.value = ''
+  const phone = smsForm.phone.trim()
+  if (!/^1\d{10}$/.test(phone)) return (errorMsg.value = '请输入正确的手机号')
+
+  sending.value = true
+  try {
+    await sendSmsCode({ identity: 'patient', phone })
+    msg('验证码已发送')
+    startCountdown()
+  } catch (e) {
+    errorMsg.value = e.message || '验证码发送失败'
+  } finally {
+    sending.value = false
+  }
+}
+
+async function handleSmsLogin() {
+  errorMsg.value = ''
+  const phone = smsForm.phone.trim()
+  if (!/^1\d{10}$/.test(phone)) return (errorMsg.value = '请输入正确的手机号')
+  if (!smsForm.code) return (errorMsg.value = '请输入验证码')
+
+  loading.value = true
+  try {
+    const res = await loginBySms({ identity: 'patient', phone, code: smsForm.code.trim() })
+    setPatientAuth(res.token, { phone }, res.refreshToken)
+    router.replace(route.query.redirect || '/patient/chat')
   } catch (e) {
     errorMsg.value = e.message || '登录失败'
   } finally {
@@ -182,6 +275,13 @@ async function handleRegister() {
 }
 
 onMounted(loadHospitals)
+
+onBeforeUnmount(() => {
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+})
 </script>
 
 <style scoped>
@@ -239,6 +339,16 @@ onMounted(loadHospitals)
 
 .hospital-select {
   width: 100%;
+}
+
+.code-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.code-btn {
+  flex-shrink: 0;
 }
 
 .form-error {

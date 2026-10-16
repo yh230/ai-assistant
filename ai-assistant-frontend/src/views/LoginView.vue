@@ -7,40 +7,112 @@
         <p class="brand-sub">后台管理系统</p>
       </div>
 
-      <el-form
-        class="login-form"
-        label-position="top"
-        @submit.prevent="handleLogin"
-      >
-        <el-form-item label="账号">
-          <el-input
-            v-model="form.username"
-            type="text"
-            placeholder="请输入账号"
-            autocomplete="username"
-          />
-        </el-form-item>
+      <el-tabs v-model="activeTab" class="login-tabs">
+        <!-- 账号密码 -->
+        <el-tab-pane label="账号密码" name="account">
+          <el-form
+            class="login-form"
+            label-position="top"
+            @submit.prevent="handleLogin"
+          >
+            <el-form-item label="账号">
+              <el-input
+                v-model="form.username"
+                type="text"
+                placeholder="请输入账号"
+                autocomplete="username"
+              />
+            </el-form-item>
 
-        <el-form-item label="密码">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="请输入密码"
-            autocomplete="current-password"
-          />
-        </el-form-item>
+            <el-form-item label="密码">
+              <el-input
+                v-model="form.password"
+                type="password"
+                placeholder="请输入密码"
+                autocomplete="current-password"
+              />
+            </el-form-item>
 
-        <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
 
-        <el-button
-          class="login-btn"
-          type="primary"
-          native-type="submit"
-          :loading="loading"
-        >
-          {{ loading ? '登录中…' : '登 录' }}
-        </el-button>
-      </el-form>
+            <el-button
+              class="login-btn"
+              type="primary"
+              native-type="submit"
+              :loading="loading"
+            >
+              {{ loading ? '登录中…' : '登 录' }}
+            </el-button>
+          </el-form>
+        </el-tab-pane>
+
+        <!-- 手机号验证码 -->
+        <el-tab-pane label="手机号登录" name="sms">
+          <el-form
+            class="login-form"
+            label-position="top"
+            @submit.prevent="handleSmsLogin"
+          >
+            <el-form-item label="手机号">
+              <el-input
+                v-model="smsForm.phone"
+                type="text"
+                placeholder="请输入手机号"
+                autocomplete="username"
+              />
+            </el-form-item>
+
+            <el-form-item label="验证码">
+              <div class="code-row">
+                <el-input
+                  v-model="smsForm.code"
+                  type="text"
+                  placeholder="请输入验证码"
+                  autocomplete="one-time-code"
+                />
+                <el-button
+                  class="code-btn"
+                  :disabled="countdown > 0"
+                  :loading="sending"
+                  @click="handleSendCode"
+                >
+                  {{ countdown > 0 ? `${countdown}s 后重发` : '获取验证码' }}
+                </el-button>
+              </div>
+            </el-form-item>
+
+            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+
+            <el-button
+              class="login-btn"
+              type="primary"
+              native-type="submit"
+              :loading="loading"
+            >
+              {{ loading ? '登录中…' : '登 录' }}
+            </el-button>
+          </el-form>
+        </el-tab-pane>
+
+        <!-- 扫码登录 -->
+        <el-tab-pane label="扫码登录" name="qr">
+          <div class="qr-box">
+            <canvas ref="qrCanvas" class="qr-canvas"></canvas>
+            <p class="qr-tip" v-if="qrStatus === 'loading'">二维码生成中…</p>
+            <p class="qr-tip" v-else-if="qrStatus === 'waiting'">请使用手机端扫码并确认登录</p>
+            <p class="qr-tip" v-else-if="qrStatus === 'expired'">二维码已过期</p>
+            <p class="qr-tip error" v-else-if="qrStatus === 'error'">{{ errorMsg || '二维码生成失败' }}</p>
+            <el-button
+              v-if="qrStatus === 'expired' || qrStatus === 'error'"
+              class="login-btn"
+              type="primary"
+              @click="startQr"
+            >
+              刷新二维码
+            </el-button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
 
       <p class="login-tip">默认管理员：admin / admin123</p>
     </div>
@@ -48,18 +120,47 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import QRCode from 'qrcode'
 import { useAuth } from '../store/auth'
-import { login } from '../api/auth'
+import { login, sendSmsCode, loginBySms, qrCreate, qrPoll } from '../api/auth'
+import { msg } from '../utils/message'
 
 const route = useRoute()
 const router = useRouter()
 const { setToken, setUser, loadUserInfo, setRefreshToken } = useAuth()
 
+const activeTab = ref('account')
 const form = ref({ username: '', password: '' })
+const smsForm = reactive({ phone: '', code: '' })
 const loading = ref(false)
+const sending = ref(false)
 const errorMsg = ref('')
+const countdown = ref(0)
+
+// 扫码登录状态：loading / waiting / expired / error
+const qrCanvas = ref(null)
+const qrSceneId = ref('')
+const qrStatus = ref('loading')
+let qrTimer = null
+let countdownTimer = null
+
+function redirectAfterLogin() {
+  router.replace(route.query.redirect || '/chat')
+}
+
+function startCountdown() {
+  countdown.value = 60
+  countdownTimer = setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) {
+      clearInterval(countdownTimer)
+      countdownTimer = null
+      countdown.value = 0
+    }
+  }, 1000)
+}
 
 async function handleLogin() {
   errorMsg.value = ''
@@ -76,14 +177,121 @@ async function handleLogin() {
     setToken(res.token)
     setRefreshToken(res.refreshToken)
     await loadUserInfo()
-    const redirect = route.query.redirect || '/chat'
-    router.replace(redirect)
+    redirectAfterLogin()
   } catch (e) {
     errorMsg.value = e.message || '登录失败'
   } finally {
     loading.value = false
   }
 }
+
+async function handleSendCode() {
+  errorMsg.value = ''
+  const phone = smsForm.phone.trim()
+  if (!/^1\d{10}$/.test(phone)) return (errorMsg.value = '请输入正确的手机号')
+
+  sending.value = true
+  try {
+    await sendSmsCode({ identity: 'staff', phone })
+    msg('验证码已发送')
+    startCountdown()
+  } catch (e) {
+    errorMsg.value = e.message || '验证码发送失败'
+  } finally {
+    sending.value = false
+  }
+}
+
+async function handleSmsLogin() {
+  errorMsg.value = ''
+  const phone = smsForm.phone.trim()
+  if (!/^1\d{10}$/.test(phone)) return (errorMsg.value = '请输入正确的手机号')
+  if (!smsForm.code) return (errorMsg.value = '请输入验证码')
+
+  loading.value = true
+  try {
+    setUser(null)
+    setToken('')
+    setRefreshToken('')
+    const res = await loginBySms({ identity: 'staff', phone, code: smsForm.code.trim() })
+    setToken(res.token)
+    setRefreshToken(res.refreshToken)
+    await loadUserInfo()
+    redirectAfterLogin()
+  } catch (e) {
+    errorMsg.value = e.message || '登录失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function stopQrTimer() {
+  if (qrTimer) {
+    clearInterval(qrTimer)
+    qrTimer = null
+  }
+}
+
+async function pollQr() {
+  let res
+  try {
+    res = await qrPoll(qrSceneId.value)
+  } catch {
+    // 单次轮询失败忽略，等待下一轮
+    return
+  }
+  if (res.status === 'EXPIRED') {
+    stopQrTimer()
+    qrStatus.value = 'expired'
+    return
+  }
+  if (res.status !== 'CONFIRMED') return
+
+  stopQrTimer()
+  try {
+    setToken(res.token)
+    setRefreshToken(res.refreshToken)
+    await loadUserInfo()
+    redirectAfterLogin()
+  } catch (e) {
+    errorMsg.value = e.message || '登录失败'
+    qrStatus.value = 'error'
+  }
+}
+
+async function startQr() {
+  stopQrTimer()
+  errorMsg.value = ''
+  qrStatus.value = 'loading'
+  try {
+    const { sceneId } = await qrCreate()
+    qrSceneId.value = sceneId
+    const url = `${location.origin}/qr-confirm?scene=${sceneId}`
+    await QRCode.toCanvas(qrCanvas.value, url, { width: 200 })
+    qrStatus.value = 'waiting'
+    qrTimer = setInterval(pollQr, 2000)
+  } catch (e) {
+    qrStatus.value = 'error'
+    errorMsg.value = e.message || '二维码生成失败'
+  }
+}
+
+// 切到扫码页签时创建二维码，离开时清理轮询
+watch(activeTab, (tab) => {
+  if (tab === 'qr') {
+    nextTick(() => startQr())
+  } else {
+    stopQrTimer()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopQrTimer()
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+})
 </script>
 
 <style scoped>
@@ -135,6 +343,10 @@ async function handleLogin() {
   color: var(--text-tertiary);
 }
 
+.login-tabs :deep(.el-tabs__item) {
+  font-size: 14px;
+}
+
 .login-form :deep(.el-form-item) {
   margin-bottom: 16px;
 }
@@ -149,6 +361,16 @@ async function handleLogin() {
   background: var(--bg-input);
 }
 
+.code-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.code-btn {
+  flex-shrink: 0;
+}
+
 .form-error {
   color: var(--danger);
   font-size: 13px;
@@ -158,6 +380,30 @@ async function handleLogin() {
 .login-btn {
   width: 100%;
   font-size: 15px;
+}
+
+.qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+  min-height: 240px;
+}
+
+.qr-canvas {
+  width: 200px;
+  height: 200px;
+}
+
+.qr-tip {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.qr-tip.error {
+  color: var(--danger);
 }
 
 .login-tip {

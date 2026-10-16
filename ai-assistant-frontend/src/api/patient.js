@@ -120,6 +120,41 @@ export function patientLogin(data) {
 }
 
 /**
+ * 发送手机号验证码（identity: patient）
+ */
+export function sendSmsCode(data) {
+  return patientApi.post('/login/sms/code', data)
+}
+
+/**
+ * 手机号验证码登录（identity: patient）
+ */
+export function loginBySms(data) {
+  return patientApi.post('/login/sms', data)
+}
+
+/**
+ * 创建扫码登录场景（患者端入口）
+ */
+export function qrCreate() {
+  return patientApi.post('/qr/create')
+}
+
+/**
+ * 轮询扫码结果
+ */
+export function qrPoll(sceneId) {
+  return patientApi.get('/qr/poll', { params: { sceneId } })
+}
+
+/**
+ * 手机端确认扫码登录（患者实例）
+ */
+export function qrConfirm(data) {
+  return patientApi.post('/qr/confirm', data)
+}
+
+/**
  * 公开医院列表（注册选院）
  */
 export function publicHospitals() {
