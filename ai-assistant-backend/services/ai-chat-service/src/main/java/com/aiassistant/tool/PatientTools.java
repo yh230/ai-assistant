@@ -86,11 +86,15 @@ public class PatientTools {
      * @param period 时段（1=上午 2=下午，可空表示全天）
      * @param context 工具上下文，hospitalId 由调用方经 ToolContext 注入
      * @return 有余量的号源列表
-     * @throws RuntimeException 号源查询服务不可用时抛出友好文案
+     * @throws RuntimeException 所属医院未知或号源查询服务不可用时抛出友好文案
      */
     @Tool(description = "查询某科室指定日期的号源余量。参数：departmentId=科室ID（取自科室列表），date=日期（yyyy-MM-dd），period=时段（1=上午 2=下午，可空表示全天）")
     public List<SourceInfoDTO> queryNumberSources(Long departmentId, String date, Integer period, ToolContext context) {
         Long hospitalId = (Long) context.getContext().get("hospitalId");
+        if (hospitalId == null) {
+            log.warn("AI 工具调用：查询号源缺少所属医院");
+            throw new RuntimeException("暂时无法确定所属医院，请稍后重试");
+        }
         log.info("AI 工具调用：查询号源 departmentId={} date={} period={} hospitalId={}",
                 departmentId, date, period, hospitalId);
         Result<List<SourceInfoDTO>> result;
