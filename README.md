@@ -129,7 +129,7 @@ mysql -uroot -p < sql/init.sql
 
 `sql/init.sql` 含 `system_db` / `hospital_db` / `registration_db` / `chat_db` 四库的建库与建表；角色/菜单/演示数据由各服务首次启动时自动播种。
 
-> 存量库升级：结构变更已并入 `sql/init.sql`（对已存在表为幂等）；历史数据回填脚本见 `sql/migration/`。
+> 存量库升级：结构变更已并入 `sql/init.sql`（对已存在表为幂等）。
 
 ### 2. 启动 Nacos
 
