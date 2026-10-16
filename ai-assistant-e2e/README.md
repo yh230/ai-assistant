@@ -93,6 +93,14 @@ cd ai-assistant-e2e
 
 Run: `scripts\run-e2e.bat tests\test_sms_qr_login.py -v`（或 `-k "sms or qr"`）
 
+## 租户校验（P0-A）
+
+AI 发起的预约挂号由挂号服务端做租户强校验：排班所属医院必须等于患者所属医院。
+
+- **无法通过产品界面构造跨院预约**：导诊工具（科室/号源）按登录患者医院作用域返回，模型不会得到他院 `doctorUserId`；因此跨院拒绝以**单元测试**覆盖（`RegistrationServiceImplTenantCheckTest`）。
+- **回归**：既有 `test_03_registration.py`（导诊→预约→确认）必须保持通过，验证同院正常链路未受影响。
+- 匿名自助预约（`/api/registration/appointments`）不校验，行为不变。
+
 ## 不覆盖范围
 
 - 前端浏览器行为（localStorage、确认弹窗 UI、停止按钮）与 Playwright UI 测试
