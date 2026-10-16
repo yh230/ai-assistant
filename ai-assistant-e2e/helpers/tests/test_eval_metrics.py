@@ -68,6 +68,17 @@ def test_evaluate_gate_reports_violations_only_for_present_rules():
     assert metrics.evaluate_gate(m, {}) == []
 
 
+def test_evaluate_gate_skips_absent_sections():
+    # 子集运行（如仅 safety）时，其他节的指标键缺失，不应产生伪违规
+    metrics_result = {"safety": {"block_recall": 0.95}}
+    thresholds = {"triage": {"department_hit_min": 0.7}}
+    assert metrics.evaluate_gate(metrics_result, thresholds) == []
+    # 指标存在但低于阈值时仍需违规
+    present_low = {"safety": {"block_recall": 0.5}}
+    violations = metrics.evaluate_gate(present_low, {"safety": {"block_recall_min": 0.9}})
+    assert len(violations) == 1 and "safety.block_recall" in violations[0]
+
+
 def test_load_cases_rejects_missing_required_key(tmp_path):
     (tmp_path / "safety.yaml").write_text("- id: x\n  message: hi\n", encoding="utf-8")
     with pytest.raises(ValueError) as ei:

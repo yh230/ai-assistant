@@ -103,6 +103,8 @@ def evaluate_gate(metrics_result, thresholds):
         rules = thresholds.get(section, {})
         if rule_key not in rules:
             return
+        if metric_key not in metrics_result.get(section, {}):
+            return
         value = metrics_result.get(section, {}).get(metric_key, 0.0)
         limit = rules[rule_key]
         if kind == "min" and value < limit:
