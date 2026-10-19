@@ -101,6 +101,15 @@ AI 发起的预约挂号由挂号服务端做租户强校验：排班所属医�
 - **回归**：既有 `test_03_registration.py`（导诊→预约→确认）必须保持通过，验证同院正常链路未受影响。
 - 匿名自助预约（`/api/registration/appointments`）不校验，行为不变。
 
+## AI 角色库化（员工/患者双域）
+
+- 员工角色：`GET /api/roles/admin?scope=STAFF`（全局）。
+- 患者角色：`GET /api/roles/admin?scope=PATIENT&hospitalId=<id>`；已绑院账号强制使用本人医院。
+- 权限：`ai:role:manage`（system-service 启动时幂等播种）；缺失时普通员工返回 403。
+- 患者角色缺失时首次访问自动建库（`pat_<hospitalId>_<CHAT|TRIAGE|RAG>`），Nacos `ai.prompt.*` 仅作模板与兜底。
+
+> 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。其中提示词更新用例只写入不还原，**运行后患者导诊角色的提示词会保留为 `E2E_ROLE_<时间戳>` 文案**；eval 运行同理可能留下该修改，需要原提示词请事先备份。
+
 ## 不覆盖范围
 
 - 前端浏览器行为（localStorage、确认弹窗 UI、停止按钮）与 Playwright UI 测试
