@@ -95,12 +95,55 @@ class OutputSafetyFilterTest {
         AiProperties props = new AiProperties();
         props.getSafety().setEmergencyKeywords(List.of("胸痛"));
         OutputSafetyFilter filter = new OutputSafetyFilter(props);
-        assertFalse(filter.emergencyHit("不胸痛"));
         assertFalse(filter.emergencyHit("无胸痛"));
         assertFalse(filter.emergencyHit("未胸痛"));
         assertFalse(filter.emergencyHit("否认胸痛"));
         assertFalse(filter.emergencyHit("不伴胸痛"));
         assertFalse(filter.emergencyHit("没有胸痛"));
+        assertFalse(filter.emergencyHit("未见明显胸痛"));
+        assertFalse(filter.emergencyHit("并无胸痛"));
+        assertFalse(filter.emergencyHit("无明显胸痛"));
+    }
+
+    @Test
+    void emergencyIgnoresFullNegationPhrases() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        OutputSafetyFilter filter = new OutputSafetyFilter(props);
+        assertFalse(filter.emergencyHit("我没有胸痛"));
+        assertFalse(filter.emergencyHit("否认胸痛"));
+        assertFalse(filter.emergencyHit("无明显胸痛"));
+    }
+
+    @Test
+    void emergencyHitsWhenNegationIsExcluded() {
+        // "不排除" 是排除标记，不能当作否定，否则会漏报急症
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("心梗"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("不排除心梗"));
+    }
+
+    @Test
+    void emergencyHitsWithoutObviousTrigger() {
+        // "无诱因" 中"诱因"为例外标记，取消"无"的否定作用
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("无诱因胸痛"));
+    }
+
+    @Test
+    void emergencyHitsChestDiscomfortWithPain() {
+        // 裸"不"不再是否定词，"不适"不应吞掉"胸痛"
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("胸部不适伴胸痛"));
+    }
+
+    @Test
+    void emergencyHitsWhenNegationIsInAnotherClause() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("无发烧，胸痛"));
     }
 
     @Test

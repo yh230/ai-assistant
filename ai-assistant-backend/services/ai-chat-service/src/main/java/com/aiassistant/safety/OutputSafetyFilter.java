@@ -14,6 +14,8 @@ import java.util.regex.Pattern;
  * <p>
  * 输入侧命中：不调用大模型，直接返回标准提示文案；输出侧命中：丢弃生成内容，持久化标准文案。
  * 文本统一经 NFKC + 去空白归一后再比对，避免全角字符/空格拆分绕过；急症词命中若紧邻否定词（如"没有胸痛"）则视为否定描述而不拦截。
+ * 否定词仅统计同一分句内、紧邻关键词的前置片段，且"排除/除外/诱因"等例外标记会取消否定
+ * （"不排除心梗""无诱因胸痛"仍按急症处理）。
  *
  * @author yh
  * @date 2026-10-13
@@ -22,8 +24,21 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class OutputSafetyFilter {
 
-    /** 急症词前置否定词（命中位置前 3 个字符内出现即视为否定描述） */
-    private static final List<String> NEGATIONS = List.of("不", "没", "无", "未", "否认", "没有", "不伴");
+    /**
+     * 急症词前置否定词（命中位置前的同一分句窗口内出现即视为否定描述）。
+     * 注意：不包含裸"不"，否则"胸部不适伴胸痛"会被误判为否定。
+     */
+    private static final List<String> NEGATIONS = List.of(
+            "没有", "没", "无", "未", "否认", "不伴", "未见", "无明显", "并无");
+
+    /** 取消否定的例外标记（存在这些词时仍按急症处理，如"不排除心梗""无诱因胸痛"） */
+    private static final List<String> NEGATION_EXCEPTIONS = List.of("排除", "除外", "诱因");
+
+    /** 前置否定词扫描窗口（字符数，归一后） */
+    private static final int NEGATION_WINDOW = 5;
+
+    /** 分句标点：否定作用域不跨分句 */
+    private static final String CLAUSE_DELIMITERS = "，。；：！？、,.!?;:\n\r";
 
     /** 文本归一：NFKC（全角转半角）+ 去除所有空白 */
     private static final Pattern WHITESPACE = Pattern.compile("[\\s\\u3000]+");
@@ -107,14 +122,29 @@ public class OutputSafetyFilter {
     }
 
     /**
-     * 判断命中位置前 3 个字符内是否出现否定词
+     * 判断命中位置前的同一分句窗口内是否出现否定词。
+     * <p>
+     * 例外标记（排除/除外/诱因）会取消否定："不排除心梗""无诱因胸痛"仍视为急症。
      *
      * @param text  归一后文本
      * @param index 关键词起始下标
      * @return true=属于否定描述
      */
     private boolean negated(String text, int index) {
-        String prefix = text.substring(Math.max(0, index - 3), index);
+        String prefix = text.substring(Math.max(0, index - NEGATION_WINDOW), index);
+        int delimiter = -1;
+        for (int i = prefix.length() - 1; i >= 0; i--) {
+            if (CLAUSE_DELIMITERS.indexOf(prefix.charAt(i)) >= 0) {
+                delimiter = i;
+                break;
+            }
+        }
+        if (delimiter >= 0) {
+            prefix = prefix.substring(delimiter + 1);
+        }
+        if (NEGATION_EXCEPTIONS.stream().anyMatch(prefix::contains)) {
+            return false;
+        }
         return NEGATIONS.stream().anyMatch(prefix::contains);
     }
 }
