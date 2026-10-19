@@ -6,6 +6,7 @@ import reactor.core.publisher.Flux;
 import java.text.Normalizer;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
@@ -84,55 +85,66 @@ public class StreamingSafetyGuard {
         AtomicBoolean blocked = new AtomicBoolean(false);
         // 文案为 null 时下发空串，避免把字面量 "null" 推给客户端
         String fallback = blockedMessage == null ? "" : blockedMessage;
+        // 状态锁：上报线程（concatMap）与取消线程（flushPending）可能并发访问缓冲
+        Object lock = new Object();
 
         Flux<String> tokens = upstream
                 // 仅丢弃 null/空串，空白 token 也要原样下发
                 .filter(token -> token != null && !token.isEmpty())
                 .concatMap(token -> {
-                    if (blocked.get()) {
-                        return Flux.empty();
+                    String emit;
+                    synchronized (lock) {
+                        if (blocked.get()) {
+                            return Flux.empty();
+                        }
+                        pending.append(token);
+                        if (hit(pending.toString())) {
+                            blocked.set(true);
+                            pending.setLength(0);
+                            return Flux.error(new SafetyBlockedException());
+                        }
+                        int safe = safePrefixLength(pending.toString());
+                        if (safe <= 0) {
+                            return Flux.empty();
+                        }
+                        emit = pending.substring(0, safe);
+                        pending.delete(0, safe);
+                        delivered.append(emit);
                     }
-                    pending.append(token);
-                    if (hit(pending.toString())) {
-                        blocked.set(true);
-                        pending.setLength(0);
-                        return Flux.error(new SafetyBlockedException());
-                    }
-                    int safe = safePrefixLength(pending.toString());
-                    if (safe <= 0) {
-                        return Flux.empty();
-                    }
-                    String emit = pending.substring(0, safe);
-                    pending.delete(0, safe);
-                    delivered.append(emit);
                     return Flux.just(emit);
                 })
                 .concatWith(Flux.defer(() -> {
-                    if (blocked.get()) {
-                        return Flux.empty();
+                    String emit;
+                    synchronized (lock) {
+                        if (blocked.get()) {
+                            return Flux.empty();
+                        }
+                        String tail = pending.toString();
+                        pending.setLength(0);
+                        if (hit(tail)) {
+                            // 命中发生在最后一个 token 的滞留区：同样只下发标准文案，且不回扫该文案
+                            blocked.set(true);
+                            delivered.setLength(0);
+                            delivered.append(fallback);
+                            return Flux.just(fallback);
+                        }
+                        if (tail.isEmpty()) {
+                            return Flux.empty();
+                        }
+                        delivered.append(tail);
+                        emit = tail;
                     }
-                    String tail = pending.toString();
-                    pending.setLength(0);
-                    if (hit(tail)) {
-                        // 命中发生在最后一个 token 的滞留区：同样只下发标准文案，且不回扫该文案
-                        blocked.set(true);
-                        delivered.setLength(0);
-                        delivered.append(fallback);
-                        return Flux.just(fallback);
-                    }
-                    if (tail.isEmpty()) {
-                        return Flux.empty();
-                    }
-                    delivered.append(tail);
-                    return Flux.just(tail);
+                    return Flux.just(emit);
                 }))
                 .onErrorResume(SafetyBlockedException.class, e -> {
-                    delivered.setLength(0);
-                    delivered.append(fallback);
+                    synchronized (lock) {
+                        delivered.setLength(0);
+                        delivered.append(fallback);
+                    }
                     return Flux.just(fallback);
                 });
 
-        return new Guarded(tokens, blocked, delivered);
+        return new Guarded(tokens, blocked, delivered, pending, fallback, lock, this::hit);
     }
 
     /**
@@ -180,11 +192,87 @@ public class StreamingSafetyGuard {
 
     /**
      * 守卫结果
-     *
-     * @param tokens    脱敏后的 token 流（命中时仅含一次标准文案）
-     * @param blocked   是否已命中的标志（流执行后有效）
-     * @param delivered 实际下发内容累积（流执行后有效）
+     * <p>
+     * 持有本次流的下发累积与未放行尾部。上游被取消（客户端断开、下游 {@code take} 截断）时
+     * 完成信号不会到达，尾部会滞留在缓冲区；调用 {@link #flushPending()} 可把该尾部补入
+     * {@code delivered}，供落库使用（SSE 可能已截断，但数据库不丢已生成内容）。
      */
-    public record Guarded(Flux<String> tokens, AtomicBoolean blocked, StringBuilder delivered) {
+    public static final class Guarded {
+
+        private final Flux<String> tokens;
+
+        private final AtomicBoolean blocked;
+
+        private final StringBuilder delivered;
+
+        /** 尚未放行的原始尾部 */
+        private final StringBuilder pending;
+
+        /** 命中后下发的标准文案（null 配置时为空串） */
+        private final String fallback;
+
+        /** 上报线程与取消线程共享的状态锁 */
+        private final Object lock;
+
+        /** 命中判定（复用守卫的归一化匹配） */
+        private final Predicate<String> hitTest;
+
+        private Guarded(Flux<String> tokens, AtomicBoolean blocked, StringBuilder delivered,
+                        StringBuilder pending, String fallback, Object lock, Predicate<String> hitTest) {
+            this.tokens = tokens;
+            this.blocked = blocked;
+            this.delivered = delivered;
+            this.pending = pending;
+            this.fallback = fallback;
+            this.lock = lock;
+            this.hitTest = hitTest;
+        }
+
+        /**
+         * @return 脱敏后的 token 流（命中时仅含一次标准文案）
+         */
+        public Flux<String> tokens() {
+            return tokens;
+        }
+
+        /**
+         * @return 是否已命中的标志（流执行后有效）
+         */
+        public AtomicBoolean blocked() {
+            return blocked;
+        }
+
+        /**
+         * @return 实际下发内容累积（流执行后有效）
+         */
+        public StringBuilder delivered() {
+            return delivered;
+        }
+
+        /**
+         * 冲刷滞留尾部：正常结束/取消时把未放行的原始尾部补入 {@code delivered}。
+         * <p>
+         * 尾部仍可能包含被拆分的敏感词，因此冲刷前再做一次命中判定：命中则丢弃原始尾部，
+         * 只保留标准文案并置位 {@code blocked}。重复调用安全（尾部为空时返回空串）。
+         *
+         * @return 本次补入的文本（命中时为标准文案；无可补内容为空串）
+         */
+        public String flushPending() {
+            synchronized (lock) {
+                if (pending.length() == 0) {
+                    return "";
+                }
+                String tail = pending.toString();
+                pending.setLength(0);
+                if (hitTest.test(tail)) {
+                    blocked.set(true);
+                    delivered.setLength(0);
+                    delivered.append(fallback);
+                    return fallback;
+                }
+                delivered.append(tail);
+                return tail;
+            }
+        }
     }
 }

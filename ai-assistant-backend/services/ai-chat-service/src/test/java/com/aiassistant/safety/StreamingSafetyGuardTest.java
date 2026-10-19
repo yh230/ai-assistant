@@ -151,4 +151,29 @@ class StreamingSafetyGuardTest {
         assertThrows(IllegalStateException.class, () -> guarded.tokens().collectList().block());
         assertFalse(guarded.blocked().get());
     }
+
+    @Test
+    void flushPendingAppendsHeldBackTailAfterCancel() {
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(List.of("用药建议"), "不能提供用药建议");
+        StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("建议您先休息", "，多喝水"));
+        // take(1) 取消上游：仅放行前缀 "建议"，尾部仍滞留在守卫缓冲区
+        assertEquals(List.of("建议"), guarded.tokens().take(1).collectList().block());
+        assertFalse(guarded.blocked().get());
+        assertEquals("您先休息，多喝水", guarded.flushPending());
+        // 冲刷后 delivered 为完整原始文本（落库不丢尾部）
+        assertEquals("建议您先休息，多喝水", guarded.delivered().toString());
+        // 重复冲刷安全：无可补内容时返回空串，不重复追加
+        assertEquals("", guarded.flushPending());
+        assertEquals("建议您先休息，多喝水", guarded.delivered().toString());
+    }
+
+    @Test
+    void flushPendingIsNoOpWhenTailAlreadyDelivered() {
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(List.of("胸痛"), "请立即就医");
+        StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("建议", "多休息"));
+        assertEquals("建议多休息", String.join("", guarded.tokens().collectList().block()));
+        // 正常完成时尾部已由 concatWith 补发，再冲刷不得重复
+        assertEquals("", guarded.flushPending());
+        assertEquals("建议多休息", guarded.delivered().toString());
+    }
 }

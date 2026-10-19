@@ -21,6 +21,7 @@ import com.aiassistant.rag.KnowledgeStore;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.safety.OutputSafetyFilter;
+import com.aiassistant.safety.StreamingSafetyGuard;
 import com.aiassistant.service.ActionExecutor;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.PatientChatService;
@@ -67,6 +68,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -277,15 +279,17 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuffer full = new StringBuffer();
+        // 守卫实例引用：取消时先冲刷滞留尾部再落库（取消信号自下游向上游传播，外层 doOnCancel 先于守卫自身执行）
+        AtomicReference<StreamingSafetyGuard.Guarded> guardRef = new AtomicReference<>();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
                 ? buildAiContentFlux(ctx, full, fallback, truncated, blocked,
-                        resolvePatientToolCallbacks(ctx, true))
-                : Flux.concat(buildLocalChunkFlux(ctx, full, blocked), disclaimerTokenFlux());
+                        resolvePatientToolCallbacks(ctx, true), guardRef)
+                : Flux.concat(buildLocalChunkFlux(ctx, full, blocked, guardRef), disclaimerTokenFlux());
 
         Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
-                buildDoneEvent(fallback.get(), truncated.get(), resolveGrounded(ctx, full)));
+                buildDoneEvent(fallback.get(), truncated.get(), resolveGrounded(ctx, full, blocked, fallback)));
 
         // 引用来源：仅在模型作答、未降级、未被输出风控拦截且有命中时下发（降级/拦截时展示来源会误导）
         Mono<ServerSentEvent<String>> referencesEvent = Mono.defer(() ->
@@ -303,7 +307,11 @@ public class PatientChatServiceImpl implements PatientChatService {
                         persist.then(Mono.<ServerSentEvent<String>>empty()),
                         referencesEvent,
                         buildConfirmRequiredEvent(sessionId), doneEvent)
-                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted, blocked))
+                .doOnCancel(() -> {
+                    // 先冲刷守卫滞留尾部再落库，避免客户端断开时丢失最后一段已生成内容
+                    GuardedSse.flush(guardRef.get(), full, blocked);
+                    handleClientCancel(sessionId, full, persisted, blocked);
+                })
                 .doFinally(signal -> patientSseActive.decrementAndGet());
     }
 
@@ -428,11 +436,13 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param truncated 总超时截断标记（流在总超时点结束置为 true，供结束事件上报）
      * @param blocked   输出侧流式风控拦截标记（守卫命中时置位）
      * @param tools     本次请求装配的工具回调列表
+     * @param guardRef  守卫实例引用（取消/落库前冲刷滞留尾部）
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuffer full,
                                                              AtomicBoolean fallback, AtomicBoolean truncated,
-                                                             AtomicBoolean blocked, List<ToolCallback> tools) {
+                                                             AtomicBoolean blocked, List<ToolCallback> tools,
+                                                             AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
         String modelId = assistantProperties.resolveModelId(null);
         List<String> candidateChain = chatModelRegistry.getFallbackChain(modelId);
         String scene = resolveScene(ctx);
@@ -474,7 +484,8 @@ public class PatientChatServiceImpl implements PatientChatService {
 
         Flux<ServerSentEvent<String>> content =
                 GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
-                                aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage())
+                                aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
+                                guardRef::set)
                         .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
                         .take(overallTimeout)
                         .doOnComplete(() -> {
@@ -503,7 +514,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                             }
                             log.warn("患者侧 AI 流式异常，降级本地引擎: {}", ex.getMessage());
                             fallback.set(true);
-                            return buildLocalChunkFlux(ctx, full, blocked);
+                            return buildLocalChunkFlux(ctx, full, blocked, guardRef);
                         });
 
         // 免责强制追加：token 流结束后补一个 token 事件（AI 与本地降级分支同款）
@@ -567,28 +578,26 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 计算 RAG 回答的 groundedness 校验结果：仅 RAG 会话且有检索命中时下发，
-     * 未通过时递增 {@code ai.rag.groundedness.false} 指标。
+     * 计算 RAG 回答的 groundedness 校验结果：仅「RAG 会话 + 检索命中 + 模型正常作答」时下发。
      * <p>
-     * 校验正文排除流尾免责声明，避免固定文案稀释覆盖率。
+     * 风控拦截（正文为标准文案）与本地降级（固定话术）都不代表模型基于检索片段作答，
+     * 这两类结果既不下发 {@code grounded}，也不计入 {@code ai.rag.groundedness.false}，
+     * 避免指标被拦截/降级流量污染。校验正文直接使用实际生成内容：流尾免责声明由独立的
+     * token 事件注入、不进入累积器，因此无需剥离（此前的剥离逻辑为死代码）。
      *
-     * @param ctx  患者聊天上下文
-     * @param full 回复正文累积器
-     * @return true/false 表示校验结果；非 RAG 或无命中返回 null（done 事件不下发该字段）
+     * @param ctx     患者聊天上下文
+     * @param full    回复正文累积器
+     * @param blocked 输出侧流式风控拦截标记
+     * @param fallback 本地降级标记
+     * @return true/false 表示校验结果；非 RAG、无命中、被拦截或降级时返回 null（done 事件不下发该字段）
      */
-    private Boolean resolveGrounded(PatientChatContext ctx, StringBuffer full) {
-        if (!TYPE_RAG.equals(ctx.session().getSessionType()) || ctx.hits().isEmpty()) {
+    private Boolean resolveGrounded(PatientChatContext ctx, StringBuffer full, AtomicBoolean blocked,
+                                    AtomicBoolean fallback) {
+        if (!TYPE_RAG.equals(ctx.session().getSessionType()) || ctx.hits().isEmpty()
+                || blocked.get() || fallback.get()) {
             return null;
         }
-        String answer = full.toString();
-        String disclaimer = aiProperties.getDisclaimer();
-        if (disclaimer != null && !disclaimer.isEmpty()) {
-            int index = answer.lastIndexOf(disclaimer);
-            if (index >= 0) {
-                answer = answer.substring(0, index);
-            }
-        }
-        boolean grounded = groundednessChecker.isGrounded(answer, ctx.hits(),
+        boolean grounded = groundednessChecker.isGrounded(full.toString(), ctx.hits(),
                 aiProperties.getRag().getGroundednessThreshold());
         if (!grounded) {
             meterRegistry.counter("ai.rag.groundedness.false").increment();
@@ -662,18 +671,21 @@ public class PatientChatServiceImpl implements PatientChatService {
      * 构建本地降级 token 流（按字符切片模拟打字机效果）：token 先经流式风控守卫，
      * 再映射为 SSE 并累积正文，与 AI 分支共用同一拦截标记。
      *
-     * @param ctx     患者聊天上下文
-     * @param full    完整回复内容累积器
-     * @param blocked 输出侧流式风控拦截标记
+     * @param ctx      患者聊天上下文
+     * @param full     完整回复内容累积器
+     * @param blocked  输出侧流式风控拦截标记
+     * @param guardRef 守卫实例引用（取消/落库前冲刷滞留尾部，可为 null）
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildLocalChunkFlux(PatientChatContext ctx, StringBuffer full,
-                                                              AtomicBoolean blocked) {
+                                                              AtomicBoolean blocked,
+                                                              AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
         String localReply = generateLocalResponse(ctx.userMessage());
         List<String> chunks = splitIntoChunks(localReply, ChatConstants.LOCAL_CHUNK_SIZE);
         return GuardedSse.guardedSse(
                 Flux.fromIterable(chunks).delayElements(Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
-                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage());
+                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
+                guardRef == null ? null : guardRef::set);
     }
 
     /**
@@ -818,10 +830,11 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuffer full = new StringBuffer();
+        AtomicReference<StreamingSafetyGuard.Guarded> guardRef = new AtomicReference<>();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
                 ? buildAiContentFlux(ctx, full, fallback, truncated, blocked,
-                        resolvePatientToolCallbacks(ctx, false))
-                : Flux.concat(buildLocalChunkFlux(ctx, full, blocked), disclaimerTokenFlux());
+                        resolvePatientToolCallbacks(ctx, false), guardRef)
+                : Flux.concat(buildLocalChunkFlux(ctx, full, blocked, guardRef), disclaimerTokenFlux());
 
         Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
 
@@ -832,7 +845,11 @@ public class PatientChatServiceImpl implements PatientChatService {
                         outputSafetyGuard(full, blocked),
                         persist.then(Mono.<ServerSentEvent<String>>empty()),
                         doneEvent)
-                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted, blocked))
+                .doOnCancel(() -> {
+                    // 先冲刷守卫滞留尾部再落库，避免客户端断开时丢失最后一段已生成内容
+                    GuardedSse.flush(guardRef.get(), full, blocked);
+                    handleClientCancel(sessionId, full, persisted, blocked);
+                })
                 .doFinally(signal -> patientSseActive.decrementAndGet());
     }
 

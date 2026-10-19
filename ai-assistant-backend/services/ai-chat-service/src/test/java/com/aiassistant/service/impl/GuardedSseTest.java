@@ -41,9 +41,13 @@ class GuardedSseTest {
                 .block();
 
         String emitted = events.stream().map(ServerSentEvent::data).collect(Collectors.joining());
-        // 关键词被拆到多个 token，守卫必须在映射为 SSE 前命中，任何已下发前缀都不得拼出完整关键词
+        // 关键词被拆到多个 token，守卫必须在映射为 SSE 前命中
         assertTrue(blocked.get());
-        assertFalse(emitted.contains("用药建议"));
+        // 标准文案自身包含关键词（"不能提供用药建议"），因此不能断言输出不含关键词；
+        // 应断言模型原始不安全内容（前缀与尾部）均未下发，且仅下发了标准文案
+        assertEquals(BLOCKED_MESSAGE, emitted);
+        assertFalse(emitted.contains("建议您先"));
+        assertFalse(emitted.contains("后复查"));
         // 命中后累积器只保留标准文案（已放行前缀被守卫丢弃）
         assertEquals(BLOCKED_MESSAGE, full.toString());
         assertEquals(BLOCKED_MESSAGE,
@@ -64,8 +68,12 @@ class GuardedSseTest {
 
         String emitted = events.stream().map(ServerSentEvent::data).collect(Collectors.joining());
         assertTrue(blocked.get());
-        assertFalse(emitted.replace(" ", "").replace("\u3000", "").contains("用药建议"));
+        // 与上例一致：标准文案含关键词，只断言原始模型内容未下发
+        assertEquals(BLOCKED_MESSAGE, emitted);
+        assertFalse(emitted.replace(" ", "").replace("\u3000", "").contains("请用药建议"));
         assertEquals(BLOCKED_MESSAGE, full.toString());
+        assertEquals(BLOCKED_MESSAGE,
+                ChatPersistContent.body(blocked.get(), BLOCKED_MESSAGE, full.toString(), DISCLAIMER));
     }
 
     @Test
@@ -85,5 +93,41 @@ class GuardedSseTest {
         assertEquals("建议多休息多喝水", full.toString());
         assertEquals("建议多休息多喝水\n\n" + DISCLAIMER,
                 ChatPersistContent.body(blocked.get(), BLOCKED_MESSAGE, full.toString(), DISCLAIMER));
+    }
+
+    @Test
+    void flushOnCancelPersistsHeldBackTail() {
+        StringBuffer full = new StringBuffer();
+        AtomicBoolean blocked = new AtomicBoolean(false);
+
+        // 第一个 token 不足 holdback 无法下发，第二个 token 后仅放行 2 个字符即被 take(1) 取消；
+        // 取消时守卫仍滞留尾部，必须由 doOnCancel 冲刷进 full，落库不丢已生成内容
+        List<ServerSentEvent<String>> events = GuardedSse.guardedSse(
+                        Flux.just("建议您先休息", "，多喝水"),
+                        full, blocked, KEYWORDS, BLOCKED_MESSAGE)
+                .take(1)
+                .collectList()
+                .block();
+
+        assertEquals(List.of("建议"), events.stream().map(ServerSentEvent::data).collect(Collectors.toList()));
+        assertFalse(blocked.get());
+        // SSE 只下发了已放行前缀，但 full 在取消时补入了滞留尾部
+        assertEquals("建议您先休息，多喝水", full.toString());
+        assertEquals("建议您先休息，多喝水\n\n" + DISCLAIMER,
+                ChatPersistContent.body(blocked.get(), BLOCKED_MESSAGE, full.toString(), DISCLAIMER));
+    }
+
+    @Test
+    void normalCompletionDoesNotDuplicateFlushedTail() {
+        StringBuffer full = new StringBuffer();
+        AtomicBoolean blocked = new AtomicBoolean(false);
+
+        // 完成时守卫已在 concatWith 中补发尾部，doOnComplete 的冲刷必须为空操作，避免重复落库
+        GuardedSse.guardedSse(Flux.just("建议您先休息"), full, blocked, KEYWORDS, BLOCKED_MESSAGE)
+                .collectList()
+                .block();
+
+        assertFalse(blocked.get());
+        assertEquals("建议您先休息", full.toString());
     }
 }

@@ -19,6 +19,7 @@ import com.aiassistant.memory.ConversationMemory;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.safety.OutputSafetyFilter;
+import com.aiassistant.safety.StreamingSafetyGuard;
 import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.UserMemoryBuilder;
@@ -57,6 +58,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -202,9 +204,12 @@ public class ChatServiceImpl implements ChatService {
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
         AtomicBoolean truncated = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
+        // 守卫实例引用：取消时先冲刷滞留尾部再落库（取消信号自下游向上游传播，外层 doOnCancel 先于守卫自身执行）
+        AtomicReference<StreamingSafetyGuard.Guarded> guardRef = new AtomicReference<>();
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
-                ? buildAiContentFlux(ctx, full, usedFallback, truncated, blocked)
-                : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full, blocked);
+                ? buildAiContentFlux(ctx, full, usedFallback, truncated, blocked, guardRef)
+                : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full, blocked,
+                        guardRef);
 
         Mono<Void> persist = Mono.defer(() -> {
             if (!persisted.compareAndSet(false, true)) {
@@ -226,6 +231,8 @@ public class ChatServiceImpl implements ChatService {
 
         return Flux.concat(Mono.just(sessionEvent), contentFlux, persist.then(doneEvent))
                 .doOnCancel(() -> {
+                    // 先冲刷守卫滞留尾部再落库，避免客户端断开时丢失最后一段已生成内容
+                    GuardedSse.flush(guardRef.get(), full, blocked);
                     if (persisted.compareAndSet(false, true) && (blocked.get() || full.length() > 0)) {
                         messagePersister.persistBlocking(ctx.sessionId(), persistedBody(full, blocked), null);
                     }
@@ -255,11 +262,13 @@ public class ChatServiceImpl implements ChatService {
      * @param usedFallback 降级标记
      * @param truncated    总超时截断标记（供 done 事件上报）
      * @param blocked      输出侧流式风控拦截标记（守卫命中时置位）
+     * @param guardRef     守卫实例引用（取消/落库前冲刷滞留尾部）
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuffer full,
                                                             AtomicBoolean usedFallback, AtomicBoolean truncated,
-                                                            AtomicBoolean blocked) {
+                                                            AtomicBoolean blocked,
+                                                            AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
         String scene = "chat";
         List<String> chain = chatModelRegistry.getFallbackChain(ctx.modelId());
         boolean emptyChain = chain.isEmpty();
@@ -292,7 +301,8 @@ public class ChatServiceImpl implements ChatService {
         });
 
         return GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
-                        aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage())
+                        aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
+                        guardRef::set)
                 .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
                 .take(overallTimeout)
                 .doOnComplete(() -> {
@@ -314,7 +324,8 @@ public class ChatServiceImpl implements ChatService {
                     }
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
-                    return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full, blocked);
+                    return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()),
+                            full, blocked, guardRef);
                 });
     }
 
@@ -385,17 +396,20 @@ public class ChatServiceImpl implements ChatService {
      * 将文本切片为 SSE token 流（本地降级复用）：token 先经流式风控守卫，
      * 再映射为 SSE 并累积正文，不落库。
      *
-     * @param text    完整文本
-     * @param full    回复内容累积器
-     * @param blocked 输出侧流式风控拦截标记
+     * @param text     完整文本
+     * @param full     回复内容累积器
+     * @param blocked  输出侧流式风控拦截标记
+     * @param guardRef 守卫实例引用（取消/落库前冲刷滞留尾部，可为 null）
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuffer full,
-                                                              AtomicBoolean blocked) {
+                                                              AtomicBoolean blocked,
+                                                              AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
         List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
         return GuardedSse.guardedSse(
                 Flux.fromIterable(chunks).delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
-                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage());
+                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
+                guardRef == null ? null : guardRef::set);
     }
 
     /**
