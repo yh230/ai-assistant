@@ -264,11 +264,15 @@ CREATE TABLE IF NOT EXISTS ai_role (
   avatar        VARCHAR(16)  DEFAULT NULL COMMENT '角色图标（emoji）',
   description   VARCHAR(255) DEFAULT NULL COMMENT '角色简介',
   system_prompt TEXT         NOT NULL COMMENT '系统提示词（人设与行为规范）',
+  scope         VARCHAR(10)  NOT NULL DEFAULT 'STAFF' COMMENT '角色域：STAFF-员工/PATIENT-患者',
+  session_type  VARCHAR(10)  DEFAULT NULL COMMENT '患者会话类型：CHAT/TRIAGE/RAG（员工角色为空）',
+  hospital_id   BIGINT       DEFAULT NULL COMMENT '所属医院ID（患者角色必填；员工角色为空=全局）',
   sort_order    INT          DEFAULT NULL COMMENT '展示排序（越小越靠前）',
   enabled       TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
   created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at    DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_ai_role_scope (scope, hospital_id, session_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 助手角色';
 
 CREATE TABLE IF NOT EXISTS chat_session (
@@ -279,6 +283,7 @@ CREATE TABLE IF NOT EXISTS chat_session (
   identity     VARCHAR(10)  DEFAULT NULL COMMENT '归属身份：staff/patient',
   session_type VARCHAR(10)  DEFAULT NULL COMMENT '会话类型：CHAT=闲聊/TRIAGE=导诊/RAG=知识库',
   hospital_id  BIGINT       DEFAULT NULL COMMENT '归属医院ID（管理端数据权限过滤）',
+  role_id      VARCHAR(32)  DEFAULT NULL COMMENT '会话绑定的人设ID',
   created_at   DATETIME     DEFAULT NULL COMMENT '创建时间',
   updated_at   DATETIME     DEFAULT NULL COMMENT '更新时间',
   PRIMARY KEY (id),

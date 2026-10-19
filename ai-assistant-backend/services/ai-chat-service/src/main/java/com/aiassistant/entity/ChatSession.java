@@ -48,6 +48,10 @@ public class ChatSession {
     @Column(name = "hospital_id")
     private Long hospitalId;
 
+    /** 会话绑定的人设 ID（创建时解析写入；存量会话可能为空） */
+    @Column(name = "role_id", length = 32)
+    private String roleId;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

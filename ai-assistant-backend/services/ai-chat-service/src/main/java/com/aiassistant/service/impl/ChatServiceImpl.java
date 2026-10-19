@@ -122,10 +122,10 @@ public class ChatServiceImpl implements ChatService {
 
         // 登录快照在请求线程捕获，随上下文传入弹性线程池（SecurityContext 为 ThreadLocal）
         UserSnapshot snapshot = currentStaffSnapshot();
-        String roleId = assistantRoleService.resolveRoleId(request.getRoleId());
+        String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
         String modelId = assistantProperties.resolveModelId(request.getModel());
 
-        return Mono.fromCallable(() -> prepareContext(request, roleId, modelId, snapshot))
+        return Mono.fromCallable(() -> prepareContext(request, requestedRoleId, modelId, snapshot))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(this::buildReplyFlux)
                 .onErrorResume(this::buildErrorFlux);
@@ -134,14 +134,20 @@ public class ChatServiceImpl implements ChatService {
     /**
      * 准备流式回复所需的上下文（阻塞型 DB 操作，运行在弹性线程池）。
      *
-     * @param request  聊天请求
-     * @param roleId   解析后的角色ID
-     * @param modelId  解析后的模型ID
-     * @param snapshot 当前登录人快照（请求线程捕获）
+     * @param request         聊天请求
+     * @param requestedRoleId 请求角色ID（已有会话以库中绑定为准）
+     * @param modelId         解析后的模型ID
+     * @param snapshot        当前登录人快照（请求线程捕获）
      * @return 聊天上下文
      */
-    private ChatContext prepareContext(ChatRequest request, String roleId, String modelId, UserSnapshot snapshot) {
-        String sessionId = ensureSession(request, snapshot);
+    private ChatContext prepareContext(ChatRequest request, String requestedRoleId, String modelId, UserSnapshot snapshot) {
+        String sessionId = ensureSession(request, snapshot, requestedRoleId);
+        ChatSession session = requireOwnedSession(sessionId, snapshot);
+        String roleId = resolveEffectiveRoleId(session, requestedRoleId);
+        if (session.getRoleId() == null || session.getRoleId().isBlank()) {
+            session.setRoleId(roleId);
+            sessionRepository.save(session);
+        }
         String title = resolveTitle(request);
         saveUserMessage(sessionId, request.getMessage());
 
@@ -255,11 +261,18 @@ public class ChatServiceImpl implements ChatService {
         Assert.notNull(request, "请求参数不能为空");
         Assert.hasText(request.getMessage(), "消息内容不能为空");
 
-        String roleId = assistantRoleService.resolveRoleId(request.getRoleId());
+        UserSnapshot snapshot = currentStaffSnapshot();
+        String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
         String modelId = assistantProperties.resolveModelId(request.getModel());
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
 
-        String sessionId = ensureSession(request, currentStaffSnapshot());
+        String sessionId = ensureSession(request, snapshot, requestedRoleId);
+        ChatSession session = requireOwnedSession(sessionId, snapshot);
+        String roleId = resolveEffectiveRoleId(session, requestedRoleId);
+        if (session.getRoleId() == null || session.getRoleId().isBlank()) {
+            session.setRoleId(roleId);
+            sessionRepository.save(session);
+        }
+        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
         saveUserMessage(sessionId, request.getMessage());
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
@@ -562,7 +575,7 @@ public class ChatServiceImpl implements ChatService {
         UserSnapshot snapshot = currentStaffSnapshot();
         String sessionId = UUID.randomUUID().toString().replace("-", "");
         String sessionTitle = (title == null || title.trim().isEmpty()) ? "新对话" : title;
-        createSessionEntity(sessionId, sessionTitle, snapshot);
+        createSessionEntity(sessionId, sessionTitle, snapshot, null);
         return ChatResponse.builder()
                 .sessionId(sessionId).timestamp(LocalDateTime.now()).build();
     }
@@ -570,21 +583,36 @@ public class ChatServiceImpl implements ChatService {
     // ==================== DB 辅助 ====================
 
     /**
-     * 确保会话存在且归属当前登录员工：携带 sessionId 时校验归属，否则新建并绑定归属
+     * 确保会话存在且归属当前登录员工：携带 sessionId 时校验归属，否则新建并绑定归属与人设
      *
      * @param request  聊天请求
      * @param snapshot 当前登录人快照
+     * @param roleId   解析后的角色ID（新会话写入）
      * @return 会话标识
      */
-    private String ensureSession(ChatRequest request, UserSnapshot snapshot) {
+    private String ensureSession(ChatRequest request, UserSnapshot snapshot, String roleId) {
         String sessionId = request.getSessionId();
         if (sessionId != null && !sessionId.trim().isEmpty()) {
             requireOwnedSession(sessionId, snapshot);
             return sessionId;
         }
         String newId = UUID.randomUUID().toString().replace("-", "");
-        createSessionEntity(newId, resolveTitle(request), snapshot);
+        createSessionEntity(newId, resolveTitle(request), snapshot, roleId);
         return newId;
+    }
+
+    /**
+     * 解析会话实际人设：已有会话以库中 role_id 为准，缺失时回退请求值
+     *
+     * @param session 会话实体（可为空）
+     * @param requestedRoleId 请求角色 ID（可为空）
+     * @return 实际角色 ID
+     */
+    String resolveEffectiveRoleId(ChatSession session, String requestedRoleId) {
+        if (session != null && session.getRoleId() != null && !session.getRoleId().isBlank()) {
+            return session.getRoleId();
+        }
+        return assistantRoleService.resolveRoleId(requestedRoleId);
     }
 
     /**
@@ -678,8 +706,9 @@ public class ChatServiceImpl implements ChatService {
      * @param sessionId 会话标识
      * @param title     会话标题
      * @param snapshot  当前登录人快照
+     * @param roleId    绑定的人设ID（可为空）
      */
-    private void createSessionEntity(String sessionId, String title, UserSnapshot snapshot) {
+    private void createSessionEntity(String sessionId, String title, UserSnapshot snapshot, String roleId) {
         sessionRepository.save(ChatSession.builder()
                 .sessionId(sessionId)
                 .title(title)
@@ -687,6 +716,7 @@ public class ChatServiceImpl implements ChatService {
                 .identity(SecurityConstants.IDENTITY_STAFF)
                 .sessionType(SESSION_TYPE_CHAT)
                 .hospitalId(snapshot.getHospitalId())
+                .roleId(roleId)
                 .build());
     }
 

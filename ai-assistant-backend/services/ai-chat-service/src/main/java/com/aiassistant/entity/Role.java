@@ -54,6 +54,18 @@ public class Role {
     @Column(nullable = false, columnDefinition = "tinyint(1) default 1")
     private Boolean enabled;
 
+    /** 角色域：STAFF-员工，PATIENT-患者 */
+    @Column(nullable = false, length = 10, columnDefinition = "varchar(10) default 'STAFF'")
+    private String scope = "STAFF";
+
+    /** 患者会话类型：CHAT/TRIAGE/RAG（员工角色为空） */
+    @Column(name = "session_type", length = 10)
+    private String sessionType;
+
+    /** 所属医院 ID（患者角色必填；员工角色为空表示全局） */
+    @Column(name = "hospital_id")
+    private Long hospitalId;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
