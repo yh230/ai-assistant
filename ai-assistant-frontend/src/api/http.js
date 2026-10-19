@@ -24,12 +24,14 @@ const BASE_URL = '/api'
 const REFRESH_PATH = '/api/refresh'
 const TOKEN_TYPE = 'Bearer'
 
-const LOCK_TTL = 8000
 const LOCK_WAIT = 10000
 const LOCK_POLL = 50
 const LOCK_SETTLE_MIN = 40
 const LOCK_SETTLE_MAX = 80
 const REFRESH_TIMEOUT = 15000
+// 租约必须长于「刷新超时 + 观测到的沉降/轮询窗口」，否则慢刷新会在租约过期后被其它 tab 抢占，
+// 导致双写 token / 令牌轮换冲突。30s = 15s 刷新超时 + 15s 余量（沉降、写盘、事件循环延迟）。
+const LOCK_TTL = 30000
 
 // 只匹配 `/api/refresh` 本身（可带 query），不匹配 `/refresh/revoke` 之类的子路径
 const REFRESH_URL_RE = /\/refresh(\?|$)/
@@ -120,6 +122,16 @@ function isRefreshUrl(url) {
 function isAbortError(err) {
   if (!err) return false
   return err.name === 'AbortError' || err.name === 'TimeoutError' || err.code === 'ERR_CANCELED'
+}
+
+/**
+ * 登出已经发生（本地 forceLogin 或其它 tab 广播）导致刷新结果作废时抛出的错误。
+ * 带 superseded 标记：调用方只做 reject，不再重复 forceLogin，避免登出级联广播。
+ */
+function supersededError() {
+  const err = new AuthExpiredError('登录态已变更，本次刷新结果已丢弃')
+  err.superseded = true
+  return err
 }
 
 /**
@@ -262,7 +274,7 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
       }
 
       if (generation !== requestGeneration) {
-        throw new AuthExpiredError('登录态已变更，本次刷新结果已丢弃')
+        throw supersededError()
       }
 
       if (isAuthFailureCode(res.status)) {
@@ -282,7 +294,7 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
 
       // 写盘前再次校验代际：解析响应期间可能收到远端登出
       if (generation !== requestGeneration) {
-        throw new AuthExpiredError('登录态已变更，本次刷新结果已丢弃')
+        throw supersededError()
       }
 
       localStorage.setItem(tokenKey, data.data.token)
@@ -359,7 +371,10 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
           return http(cfg)
         } catch (err) {
           if (err instanceof AuthExpiredError) {
-            forceLogin()
+            // 登出已发生（本地或其它 tab）导致的刷新作废：只 reject，避免再次广播登出级联
+            if (!err.superseded) {
+              forceLogin()
+            }
             return Promise.reject(err)
           }
           if (isAbortError(err)) {
