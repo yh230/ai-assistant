@@ -106,9 +106,9 @@ AI 发起的预约挂号由挂号服务端做租户强校验：排班所属医�
 - 员工角色：`GET /api/roles/admin?scope=STAFF`（全局）。
 - 患者角色：`GET /api/roles/admin?scope=PATIENT&hospitalId=<id>`；已绑院账号强制使用本人医院。
 - 权限：`ai:role:manage`（system-service 启动时幂等播种）；缺失时普通员工返回 403。
-- 患者角色缺失时首次访问自动建库（`pat_<hospitalId>_<CHAT|TRIAGE|RAG>`），Nacos `ai.prompt.*` 仅作模板与兜底。
+- 患者角色缺失时首次患者会话发消息时自动建库（`pat_<hospitalId>_<...>`），Nacos `ai.prompt.*` 仅作模板与兜底；管理端列表接口只读，不会触发建库。
 
-> 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。其中提示词更新用例只写入不还原，**运行后患者导诊角色的提示词会保留为 `E2E_ROLE_<时间戳>` 文案**；eval 运行同理可能留下该修改，需要原提示词请事先备份。
+> 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。患者域用例自足化：列表缺少 TRIAGE 时先经管理端接口补建，不依赖其他用例先行；提示词更新用例写回后会在 `finally` 中还原原提示词。
 
 ## 不覆盖范围
 
