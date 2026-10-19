@@ -236,7 +236,8 @@ public class ChatServiceImpl implements ChatService {
                                                             AtomicBoolean usedFallback, AtomicBoolean truncated) {
         String scene = "chat";
         List<String> chain = chatModelRegistry.getFallbackChain(ctx.modelId());
-        String primaryModel = chain.isEmpty() ? ctx.modelId() : chain.get(0);
+        boolean emptyChain = chain.isEmpty();
+        String primaryModel = emptyChain ? ctx.modelId() : chain.get(0);
         Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
         long startNanos = System.nanoTime();
 
@@ -285,8 +286,9 @@ public class ChatServiceImpl implements ChatService {
                 .onErrorResume(ex -> {
                     if (ex instanceof TimeoutException) {
                         recordFailure(primaryModel, scene, "IdleTimeout");
-                    } else if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException) {
-                        recordFailure(primaryModel, scene, "ChainExhausted");
+                    } else if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
+                        // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
+                        recordFailure(primaryModel, scene, "EmptyChain");
                     }
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);

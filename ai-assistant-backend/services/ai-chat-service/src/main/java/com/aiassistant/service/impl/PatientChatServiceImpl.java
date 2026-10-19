@@ -402,7 +402,8 @@ public class PatientChatServiceImpl implements PatientChatService {
         List<String> chain = hasWriteTools(tools) && !candidateChain.isEmpty()
                 ? List.of(candidateChain.get(0))
                 : candidateChain;
-        String primaryModel = chain.isEmpty() ? modelId : chain.get(0);
+        boolean emptyChain = chain.isEmpty();
+        String primaryModel = emptyChain ? modelId : chain.get(0);
         Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
         long startNanos = System.nanoTime();
 
@@ -460,8 +461,9 @@ public class PatientChatServiceImpl implements PatientChatService {
                                 aiProperties.getChat().getIdleTimeoutSeconds(), ctx.session().getSessionId());
                         return Flux.error(new BusinessException("生成超时，请稍后重试"));
                     }
-                    if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException) {
-                        recordFailure(primaryModel, scene, "ChainExhausted");
+                    if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
+                        // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
+                        recordFailure(primaryModel, scene, "EmptyChain");
                     }
                     log.warn("患者侧 AI 流式异常，降级本地引擎: {}", ex.getMessage());
                     fallback.set(true);
