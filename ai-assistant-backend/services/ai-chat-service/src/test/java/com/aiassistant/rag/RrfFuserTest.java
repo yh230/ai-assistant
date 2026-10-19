@@ -27,8 +27,9 @@ class RrfFuserTest {
         var fused = RrfFuser.fuse(List.of(a, b), List.of(b), 2, 60);
         assertEquals(2, fused.size());
         assertEquals("b.md", fused.get(0).source());
-        assertEquals(1.0 / 61 + 1.0 / 61, fused.get(0).score(), 1e-9);
-        assertEquals(1.0 / 61, fused.get(1).score(), 1e-9);
+        // b: BM25 第 2 名 + kNN 第 1 名；a: 仅 BM25 第 1 名
+        assertEquals(1.0 / (60 + 2) + 1.0 / (60 + 1), fused.get(0).score(), 1e-9);
+        assertEquals(1.0 / (60 + 1), fused.get(1).score(), 1e-9);
     }
 
     @Test
@@ -64,7 +65,11 @@ class RrfFuserTest {
     void keepsFirstSeenOrderOnTie() {
         var a = chunk("a.md", 1L, 0, 0.9);
         var b = chunk("b.md", 2L, 0, 0.8);
-        var fused = RrfFuser.fuse(List.of(a, b), List.of(), 5, 60);
+        // BM25 [a,b] 与 kNN [b,a]：两者均为 1/(rrfK+1) + 1/(rrfK+2)，构成同分
+        var fused = RrfFuser.fuse(List.of(a, b), List.of(b, a), 5, 60);
+        assertEquals(2, fused.size());
+        assertEquals(fused.get(0).score(), fused.get(1).score(), 0.0);
+        assertEquals(1.0 / (60 + 1) + 1.0 / (60 + 2), fused.get(0).score(), 1e-9);
         assertEquals("a.md", fused.get(0).source());
         assertEquals("b.md", fused.get(1).source());
     }

@@ -74,7 +74,8 @@ ai:
     # 切片重叠比例（0~0.5）
     chunk-overlap: ${AI_RAG_CHUNK_OVERLAP:0.15}
     elasticsearch:
-      uri: ${ES_URI:http://localhost:9200}
+      # 连接地址的唯一来源是 spring.elasticsearch.uris（ElasticsearchClient 自动配置读取）；
+      # AiProperties.Rag.Elasticsearch.uri 仅保留字段与默认值以兼容既有引用，此处不再重复配置
       index-name: ${AI_RAG_ES_INDEX:ai_knowledge_chunk_v1}
       analyzer: ${AI_RAG_ES_ANALYZER:cjk_ngram}
   assistant:

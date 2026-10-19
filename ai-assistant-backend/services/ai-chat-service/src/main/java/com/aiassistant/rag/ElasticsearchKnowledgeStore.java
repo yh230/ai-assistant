@@ -5,6 +5,7 @@ import co.elastic.clients.elasticsearch.core.BulkResponse;
 import co.elastic.clients.elasticsearch.core.bulk.BulkOperation;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.indices.GetMappingResponse;
+import co.elastic.clients.json.JsonData;
 import com.aiassistant.config.AiProperties;
 import io.micrometer.core.instrument.Metrics;
 import jakarta.annotation.PostConstruct;
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 知识库向量存储 Elasticsearch 实现：BM25 关键词检索 + kNN 向量检索，RRF 融合
@@ -28,9 +30,10 @@ import java.util.Map;
  * 再由 {@link RrfFuser} 融合为 {@code topK} 条，避免在两路不可比的分值上做加权。
  * 所有查询均带 {@code hospitalId} 过滤，医院级隔离由索引字段保证。
  * <p>
- * 写入使用确定性 ID {@code documentId:chunkIndex}（幂等覆盖），更新流程为“先完成嵌入、
- * 再删除旧切片、最后批量写入”，嵌入失败时旧数据保持完整，不会出现空窗期。删除按
- * {@code hospitalId + documentId} 走 delete-by-query。
+ * 写入使用确定性 ID {@code documentId:chunkIndex}（幂等覆盖），更新流程为“先完成全部嵌入、
+ * 再批量 upsert 新切片、成功后才按 {@code chunkIndex >= 新切片数} 清理越界旧切片”。
+ * 嵌入失败、批量写入 IO 异常或存在失败项时直接抛错，旧切片保持完整，不会出现空窗期或
+ * 半成品文档。删除按 {@code hospitalId + documentId} 走 delete-by-query。
  * <p>
  * 嵌入或 ES 调用失败时记录异常并降级为空结果，保证对话主链路不因检索故障中断；
  * 维度与索引不一致属于部署错误，在初始化时明确失败。
@@ -113,15 +116,23 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
     }
 
     /**
-     * 幂等写入文档切片：删除旧切片后按确定性 ID 批量写入
+     * 幂等写入文档切片：先嵌入、再按确定性 ID 批量 upsert、成功后才清理越界旧切片
      * <p>
-     * 嵌入在删除之前完成：嵌入失败不会破坏已有切片；批量写入失败时旧切片已删除，
-     * 由上层任务重试保证最终一致。
+     * 执行顺序保证“失败不破坏旧数据”：
+     * <ol>
+     *     <li>完成全部切片的嵌入（任一切片嵌入失败直接抛错，索引内容不变）；</li>
+     *     <li>以 {@code documentId:chunkIndex} 为 ID 批量 upsert，同序号旧切片被覆盖；</li>
+     *     <li>bulk 返回 {@code errors()==true} 时抛出 {@link IllegalStateException}（含失败项明细），
+     *         不执行旧切片清理；</li>
+     *     <li>bulk 成功后按 {@code hospitalId + documentId + chunkIndex >= chunks.size()} 删除
+     *         新切片数之外的旧切片（文档变短时生效）；</li>
+     *     <li>写、删均完成后统一刷新一次索引。</li>
+     * </ol>
      *
      * @param hospitalId         医院 ID（null 时按 no-op 处理）
      * @param documentId         文档 ID（null 时按 no-op 处理）
      * @param documentName       文档名
-     * @param previousChunkCount 该文档此前已写入的切片数（ES 按 documentId 全量删除，无需逐个定位）
+     * @param previousChunkCount 该文档此前已写入的切片数（仅保留接口语义，清理边界以本次切片数为准）
      * @param chunks             新切片列表
      */
     @Override
@@ -133,6 +144,7 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             return;
         }
         List<Document> safeChunks = chunks == null ? List.of() : chunks;
+        // 1. 先完成全部嵌入：任一切片失败直接抛出，索引中的旧切片保持不变
         List<BulkOperation> operations = new ArrayList<>(safeChunks.size());
         for (int i = 0; i < safeChunks.size(); i++) {
             Document chunk = safeChunks.get(i);
@@ -157,25 +169,79 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
                     .document(source))));
         }
 
-        deleteDocument(hospitalId, documentId, previousChunkCount);
-        if (operations.isEmpty()) {
-            return;
+        // 2. 批量 upsert 新切片；失败时抛错且不触碰旧切片
+        if (!operations.isEmpty()) {
+            bulkUpsert(hospitalId, documentId, operations);
         }
+
+        // 3. 写入成功后才清理越界旧切片（文档变短时生效）
+        deleteStaleChunks(hospitalId, documentId, safeChunks.size());
+
+        // 4. 写、删完成后统一刷新一次
+        refresh();
+    }
+
+    /**
+     * 批量 upsert 切片：存在失败项时抛错，交由上层重试，旧切片保持完整
+     *
+     * @param hospitalId 医院 ID（仅用于日志/异常信息）
+     * @param documentId 文档 ID（仅用于日志/异常信息）
+     * @param operations bulk 操作列表
+     * @throws IllegalStateException IO 异常或存在失败项
+     */
+    private void bulkUpsert(Long hospitalId, Long documentId, List<BulkOperation> operations) {
+        BulkResponse response;
         try {
-            BulkResponse response = client.bulk(b -> b
+            response = client.bulk(b -> b
                     .index(config.getIndexName())
                     .operations(operations));
-            if (response.errors()) {
-                long failed = response.items().stream()
-                        .filter(item -> item.error() != null)
-                        .count();
-                log.error("知识切片批量写入存在失败项: hospitalId={}, documentId={}, failed={}, total={}",
-                        hospitalId, documentId, failed, operations.size());
-            }
         } catch (IOException e) {
-            throw new IllegalStateException("知识切片批量写入失败: documentId=" + documentId, e);
+            throw new IllegalStateException("知识切片批量写入失败（旧切片保持不变）: hospitalId="
+                    + hospitalId + ", documentId=" + documentId, e);
         }
-        refresh();
+        if (!response.errors()) {
+            return;
+        }
+        long failed = response.items().stream()
+                .filter(item -> item.error() != null)
+                .count();
+        String details = response.items().stream()
+                .filter(item -> item.error() != null)
+                .map(item -> item.id() + "[status=" + item.status() + ", type="
+                        + item.error().type() + ", reason=" + item.error().reason() + "]")
+                .collect(Collectors.joining("; "));
+        String message = "知识切片批量写入存在失败项（旧切片保持不变）: hospitalId=" + hospitalId
+                + ", documentId=" + documentId + ", failed=" + failed + "/" + operations.size()
+                + ", details=" + details;
+        log.error(message);
+        throw new IllegalStateException(message);
+    }
+
+    /**
+     * 删除越界旧切片：{@code hospitalId + documentId + chunkIndex >= newChunkCount}
+     * <p>
+     * 仅在批量写入成功后调用；新切片数以内的旧切片已被确定性 ID 覆盖，因此只需清理尾部。
+     * 不在此处刷新，由调用方统一刷新一次。
+     *
+     * @param hospitalId    医院 ID
+     * @param documentId    文档 ID
+     * @param newChunkCount 本次写入的切片数（新切片的 chunkIndex 应落在 {@code [0, newChunkCount)}）
+     * @throws IllegalStateException 删除请求失败
+     */
+    private void deleteStaleChunks(Long hospitalId, Long documentId, int newChunkCount) {
+        try {
+            client.deleteByQuery(d -> d
+                    .index(config.getIndexName())
+                    .query(q -> q.bool(b -> b
+                            .filter(f -> f.term(t -> t.field("hospitalId").value(hospitalId.longValue())))
+                            .filter(f -> f.term(t -> t.field("documentId").value(documentId.longValue())))
+                            .filter(f -> f.range(r -> r
+                                    .field("chunkIndex")
+                                    .gte(JsonData.of(newChunkCount)))))));
+        } catch (IOException e) {
+            throw new IllegalStateException("清理越界知识切片失败: hospitalId=" + hospitalId
+                    + ", documentId=" + documentId + ", newChunkCount=" + newChunkCount, e);
+        }
     }
 
     /**
@@ -252,6 +318,7 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             var response = client.search(s -> s
                     .index(config.getIndexName())
                     .size(size)
+                    .source(src -> src.excludes("embedding"))
                     .query(q -> q.bool(b -> b
                             .filter(f -> f.term(t -> t.field("hospitalId").value(hospitalId.longValue())))
                             .must(m -> m.multiMatch(mm -> mm
@@ -281,6 +348,7 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             var response = client.search(s -> s
                     .index(config.getIndexName())
                     .size(size)
+                    .source(src -> src.excludes("embedding"))
                     .knn(k -> k
                             .field("embedding")
                             .queryVector(queryVector)
