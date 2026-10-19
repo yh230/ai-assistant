@@ -26,7 +26,7 @@ class KnowledgeReferencesBuilderTest {
 
     @Test
     void shouldDedupeByChunkAndKeepRankOrder() {
-        String json = builder.build(List.of(
+        String json = builder.buildFromChunks(List.of(
                 chunk(1L, 0, "a.md", "门诊", "AAA", 0.9),
                 chunk(2L, 0, "b.md", "挂号", "BBB", 0.8),
                 chunk(1L, 0, "a.md", "门诊", "AAA-duplicate", 0.7)), 3);
@@ -43,7 +43,7 @@ class KnowledgeReferencesBuilderTest {
 
     @Test
     void keepsDifferentChunksOfSameDocument() {
-        String json = builder.build(List.of(
+        String json = builder.buildFromChunks(List.of(
                 chunk(1L, 0, "a.md", "门诊", "AAA", 0.9),
                 chunk(1L, 1, "a.md", "挂号", "BBB", 0.8)), 3);
 
@@ -53,7 +53,7 @@ class KnowledgeReferencesBuilderTest {
 
     @Test
     void shouldCapAtMaxReferences() {
-        String json = builder.build(List.of(
+        String json = builder.buildFromChunks(List.of(
                 chunk(1L, 0, "a.md", "", "1", 0.9),
                 chunk(2L, 0, "b.md", "", "2", 0.8),
                 chunk(3L, 0, "c.md", "", "3", 0.7)), 2);
@@ -66,7 +66,7 @@ class KnowledgeReferencesBuilderTest {
     @Test
     void shouldTruncateSnippetAndCollapseWhitespace() {
         String longText = "x".repeat(80) + "\n第二行";
-        String json = builder.build(List.of(chunk(1L, 0, "a.md", "", longText, 0.5)), 1);
+        String json = builder.buildFromChunks(List.of(chunk(1L, 0, "a.md", "", longText, 0.5)), 1);
 
         assertTrue(json.contains("x".repeat(60) + "…"));
         assertFalse(json.contains("\n"));
@@ -74,15 +74,15 @@ class KnowledgeReferencesBuilderTest {
 
     @Test
     void shouldReturnEmptyForNoHitsOrInvalidLimit() {
-        assertEquals("", builder.build(List.of(), 3));
-        assertEquals("", builder.<KnowledgeStore.ScoredChunk>build(null, 3));
-        assertEquals("", builder.build(List.of(chunk(1L, 0, "a.md", "", "1", 0.9)), 0));
+        assertEquals("", builder.buildFromChunks(List.of(), 3));
+        assertEquals("", builder.buildFromChunks(null, 3));
+        assertEquals("", builder.buildFromChunks(List.of(chunk(1L, 0, "a.md", "", "1", 0.9)), 0));
     }
 
     @Test
     void shouldSkipHitsWithoutSource() {
-        assertEquals("", builder.build(List.of(chunk(1L, 0, null, "", "1", 0.9)), 3));
-        assertEquals("", builder.build(List.of(chunk(1L, 0, "  ", "", "1", 0.9)), 3));
+        assertEquals("", builder.buildFromChunks(List.of(chunk(1L, 0, null, "", "1", 0.9)), 3));
+        assertEquals("", builder.buildFromChunks(List.of(chunk(1L, 0, "  ", "", "1", 0.9)), 3));
     }
 
     @Test

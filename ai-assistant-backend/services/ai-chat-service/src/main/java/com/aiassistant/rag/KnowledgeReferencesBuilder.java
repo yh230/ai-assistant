@@ -17,10 +17,17 @@ import java.util.Set;
  * 知识库引用来源构建器：命中片段按 {@code documentId:chunkIndex} 去重、截取摘要，
  * 产出包含 name/section/snippet/score 的 references 事件 JSON。
  * <p>
- * 兼容过渡：入参既支持 {@link KnowledgeStore.ScoredChunk}（chunk 级引用），
- * 也支持旧的 {@link Document}（按 documentId=0、列表下标作为 chunkIndex 转换）。
- * 由于泛型擦除无法同时声明两个 {@code build(List, int)} 重载，此处使用统一泛型入口
- * 在运行时分派，调用方签名保持不变。
+ * 提供两个静态类型的入口，不做任何运行时类型分派（无需 {@code instanceof}）：
+ * <ul>
+ *   <li>{@link #build(List, int)}：过渡方法，接收旧的 {@link Document} 入参，
+ *       内部转换为 {@link KnowledgeStore.ScoredChunk}（documentId=0、列表下标兜底 chunkIndex、
+ *       score=0.0）后委托给 {@link #buildFromChunks(List, int)}。</li>
+ *   <li>{@link #buildFromChunks(List, int)}：新的 chunk 级方法，直接接收
+ *       {@link KnowledgeStore.ScoredChunk}，保留真实 documentId/chunkIndex/score。</li>
+ * </ul>
+ * <p>
+ * <b>Task 7 迁移要求</b>：消费者（当前为 {@code PatientChatServiceImpl}）必须改用
+ * {@link #buildFromChunks(List, int)}，随后删除过渡方法 {@link #build(List, int)}。
  *
  * @author yh
  * @date 2026-10-14
@@ -36,20 +43,47 @@ public class KnowledgeReferencesBuilder {
     private final ObjectMapper objectMapper;
 
     /**
-     * 构建引用来源 JSON（按 chunk 去重、保留相似度排序、限量）
+     * 构建引用来源 JSON（过渡方法，仅接收旧版 {@link Document}）。
+     * <p>
+     * 内部把每个 Document 转换为 {@link KnowledgeStore.ScoredChunk} 后委托
+     * {@link #buildFromChunks(List, int)}：documentId 固定为 0，chunkIndex 缺失时使用列表下标，
+     * score 固定为 0.0，section/source 取自 metadata。
+     * <p>
+     * <b>Task 7 必须把调用方切换到 {@link #buildFromChunks(List, int)} 并删除本方法。</b>
      *
-     * @param hits          检索命中片段（按相关度降序）；元素为 ScoredChunk 或 Document
+     * @param hits          旧版命中文档（按相关度降序）
      * @param maxReferences 引用条数上限
      * @return JSON 数组字符串；无有效来源返回空串
      */
-    public <T> String build(List<T> hits, int maxReferences) {
+    public String build(List<Document> hits, int maxReferences) {
+        if (hits == null || hits.isEmpty()) {
+            return "";
+        }
+        List<KnowledgeStore.ScoredChunk> chunks = new ArrayList<>(hits.size());
+        for (int i = 0; i < hits.size(); i++) {
+            KnowledgeStore.ScoredChunk chunk = fromDocument(hits.get(i), i);
+            if (chunk != null) {
+                chunks.add(chunk);
+            }
+        }
+        return buildFromChunks(chunks, maxReferences);
+    }
+
+    /**
+     * 构建引用来源 JSON（chunk 级、静态类型入口）：按 {@code documentId:chunkIndex} 去重、
+     * 保留相似度排序、限量。
+     *
+     * @param hits          检索命中片段（按相关度降序）
+     * @param maxReferences 引用条数上限
+     * @return JSON 数组字符串；无有效来源返回空串
+     */
+    public String buildFromChunks(List<KnowledgeStore.ScoredChunk> hits, int maxReferences) {
         if (hits == null || hits.isEmpty() || maxReferences <= 0) {
             return "";
         }
         Set<String> seen = new LinkedHashSet<>();
         List<Map<String, Object>> refs = new ArrayList<>();
-        for (int i = 0; i < hits.size(); i++) {
-            KnowledgeStore.ScoredChunk chunk = toScoredChunk(hits.get(i), i);
+        for (KnowledgeStore.ScoredChunk chunk : hits) {
             if (chunk == null || chunk.source() == null || chunk.source().isBlank()) {
                 continue;
             }
@@ -79,28 +113,25 @@ public class KnowledgeReferencesBuilder {
     }
 
     /**
-     * 将兼容入参转换为命中片段；不支持的类型返回 null
+     * 把旧版 {@link Document} 转换为命中片段；null 入参返回 null
      *
-     * @param hit           ScoredChunk 或旧版 Document
-     * @param fallbackIndex 旧版 Document 缺少 chunkIndex 时使用的列表下标
+     * @param document      旧版命中文档
+     * @param fallbackIndex 缺少 chunkIndex 时使用的列表下标
      * @return 命中片段
      */
-    private KnowledgeStore.ScoredChunk toScoredChunk(Object hit, int fallbackIndex) {
-        if (hit instanceof KnowledgeStore.ScoredChunk chunk) {
-            return chunk;
+    private KnowledgeStore.ScoredChunk fromDocument(Document document, int fallbackIndex) {
+        if (document == null) {
+            return null;
         }
-        if (hit instanceof Document document) {
-            Map<String, Object> metadata = document.getMetadata();
-            Object chunkIndex = metadata.get("chunkIndex");
-            return new KnowledgeStore.ScoredChunk(
-                    stringValue(metadata.get("source")),
-                    longValue(metadata.get("documentId")),
-                    chunkIndex == null ? fallbackIndex : intValue(chunkIndex),
-                    stringValue(metadata.get("section")),
-                    document.getText(),
-                    0.0);
-        }
-        return null;
+        Map<String, Object> metadata = document.getMetadata();
+        Object chunkIndex = metadata.get("chunkIndex");
+        return new KnowledgeStore.ScoredChunk(
+                stringValue(metadata.get("source")),
+                longValue(metadata.get("documentId")),
+                chunkIndex == null ? fallbackIndex : intValue(chunkIndex),
+                stringValue(metadata.get("section")),
+                document.getText(),
+                0.0);
     }
 
     /**
