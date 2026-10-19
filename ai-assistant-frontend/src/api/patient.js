@@ -1,56 +1,22 @@
-import axios from 'axios'
+import { createAuthHttp } from './http'
 
 /**
- * 患者侧独立 axios 实例
+ * 患者侧 HTTP 客户端
  * 与 api/index.js 隔离：只注入患者 token（patient_token），401 清患者态跳患者登录，
- * 不会误带员工 token（ai_token）或跳员工登录
+ * 不会误带员工 token（ai_token）或跳员工登录。
+ * 续期/登出逻辑统一由 createAuthHttp 提供（跨 tab 串行刷新、网络异常不登出）。
  */
-const patientApi = axios.create({
-  baseURL: '/api',
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json'
-  }
+const auth = createAuthHttp({
+  tokenKey: 'patient_token',
+  refreshKey: 'patient_refresh_token',
+  userKey: 'patient_user',
+  loginPath: '/patient/login'
 })
 
-// 防止并发 401 跳登录导致多次 location.href
-let redirecting = false
-const REFRESH_KEY = 'patient_refresh_token'
-function forceToPatientLogin() {
-  if (redirecting) return
-  redirecting = true
-  localStorage.removeItem('patient_token')
-  localStorage.removeItem('patient_user')
-  localStorage.removeItem(REFRESH_KEY)
-  if (!window.location.pathname.includes('/patient/login')) {
-    window.location.href = '/patient/login'
-  }
-  // 给后续可能仍在路上的请求留一次机会重置
-  setTimeout(() => { redirecting = false }, 500)
-}
+const patientApi = auth.http
 
-let refreshPromise = null
-function refreshPatientAccessToken() {
-  if (!refreshPromise) {
-    refreshPromise = (async () => {
-      const refreshToken = localStorage.getItem(REFRESH_KEY)
-      if (!refreshToken) throw new Error('无刷新令牌')
-      const res = await fetch('/api/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken })
-      })
-      const data = await res.json().catch(() => null)
-      if (!res.ok || !data || data.code !== 200 || !data.data) {
-        throw new Error((data && data.msg) || '登录已过期')
-      }
-      localStorage.setItem('patient_token', data.data.token)
-      localStorage.setItem(REFRESH_KEY, data.data.refreshToken)
-      return data.data.token
-    })().finally(() => { refreshPromise = null })
-  }
-  return refreshPromise
-}
+export const refreshPatientAccessToken = auth.refreshAccessToken
+export const forceToPatientLogin = auth.forceLogin
 
 /**
  * 撤销患者刷新令牌（登出时调用，幂等）
@@ -58,52 +24,6 @@ function refreshPatientAccessToken() {
 export function revokePatientRefresh(refreshToken) {
   return patientApi.post('/refresh/revoke', { refreshToken })
 }
-
-// 请求拦截器：自动携带患者 Token
-patientApi.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('patient_token')
-    if (token) {
-      config.headers.Authorization = 'Bearer ' + token
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
-
-// 响应拦截器：约定与员工侧一致（code===200 解包 data；401 跳患者登录）
-patientApi.interceptors.response.use(
-  (response) => {
-    const data = response.data
-    if (data && data.code === 200) {
-      return data.data
-    }
-    const msg = (data && data.msg) || ''
-    return Promise.reject(new Error(msg || '请求失败'))
-  },
-  (error) => {
-    if (error.response) {
-      const { status, data } = error.response
-      const cfg = error.config || {}
-      const isRefreshCall = (cfg.url || '').includes('/refresh')
-      if (status === 401 && !isRefreshCall && !cfg._retry) {
-        cfg._retry = true
-        return refreshPatientAccessToken()
-          .then(() => patientApi(cfg))
-          .catch(() => {
-            forceToPatientLogin()
-            return Promise.reject(new Error('登录已过期，请重新登录'))
-          })
-      }
-      if (status === 401) {
-        forceToPatientLogin()
-      }
-      const msg = status === 429 ? '操作过于频繁，请稍后再试' : ((data && data.msg) || `请求错误 (${status})`)
-      return Promise.reject(new Error(msg))
-    }
-    return Promise.reject(new Error('网络异常或服务不可用'))
-  }
-)
 
 /**
  * 患者注册（手机号+密码+姓名+医院）
