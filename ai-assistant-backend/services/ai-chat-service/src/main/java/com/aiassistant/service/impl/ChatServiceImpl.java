@@ -15,6 +15,7 @@ import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.dto.WeatherResponse;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
+import com.aiassistant.memory.ConversationMemory;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.service.ChatService;
@@ -32,10 +33,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
@@ -52,11 +50,8 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
@@ -73,7 +68,8 @@ import java.util.stream.Collectors;
  *     <li><b>多角色</b>：角色人设来自数据库（ai_role 表，可在「角色管理」页面维护），运行时按 roleId 选择，并注入跨会话的 DB 用户画像。</li>
  *     <li><b>多模型</b>：模型来自配置（ai.assistant.models），运行时按 modelId 选择 ChatClient；
  *         模型不可用时自动降级为本地回复引擎，对话不中断。</li>
- *     <li><b>上下文管理</b>：长对话自动摘要压缩，保留最近 N 条完整消息；用户画像仅从当前登录人自身历史中提取。</li>
+ *     <li><b>上下文管理</b>：按 token 预算组装历史（{@link ConversationMemory}），超预算时保留最近消息并压缩早期消息为摘要；
+ *         用户画像仅从当前登录人自身历史中提取。</li>
  *     <li><b>会话隔离</b>：会话按归属用户 + 身份绑定，员工侧读写一律限定当前登录人（identity=staff）的会话。</li>
  * </ul>
  *
@@ -90,12 +86,6 @@ public class ChatServiceImpl implements ChatService {
     /** 城市提取正则 */
     private static final Pattern CITY_PATTERN =
             Pattern.compile("([\\u4e00-\\u9fa5]{2,8})(?:市|地区)?的?(?:今天|现在|明天|当前)?(?:实时)?(?:的)?天气");
-
-    /** 旧对话摘要前缀 */
-    private static final String SUMMARY_HEADER = "以下是之前对话的摘要信息，帮助你理解上下文：\n";
-
-    /** 最近对话分隔说明 */
-    private static final String RECENT_HEADER = "\n\n--- 以下是最近的对话内容 ---";
 
     /** 用户画像注入分隔符 */
     private static final String MEMORY_SEPARATOR = "\n\n## 你对用户的了解（来自过去的对话记录）\n";
@@ -115,6 +105,7 @@ public class ChatServiceImpl implements ChatService {
     private final MeterRegistry meterRegistry;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
+    private final ConversationMemory conversationMemory;
     private final UserMemoryBuilder userMemoryBuilder;
     private final WeatherService weatherService;
     private final PlatformTransactionManager txManager;
@@ -152,6 +143,7 @@ public class ChatServiceImpl implements ChatService {
      * @return 聊天上下文
      */
     private ChatContext prepareContext(ChatRequest request, String requestedRoleId, String modelId, UserSnapshot snapshot) {
+        validateInput(request.getMessage());
         String sessionId = ensureSession(request, snapshot, requestedRoleId);
         ChatSession session = requireOwnedSession(sessionId, snapshot);
         String roleId = resolveEffectiveRoleId(session, requestedRoleId);
@@ -163,7 +155,7 @@ public class ChatServiceImpl implements ChatService {
         saveUserMessage(sessionId, request.getMessage());
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        List<Message> contextMessages = buildContextMessages(history);
+        List<Message> contextMessages = conversationMemory.build(session, history);
         String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
                 snapshot.getUserId(), memoryIdentity(snapshot));
         boolean aiEnabled = !chatModelRegistry.getFallbackChain(modelId).isEmpty();
@@ -359,6 +351,7 @@ public class ChatServiceImpl implements ChatService {
     public ChatResponse chat(ChatRequest request) {
         Assert.notNull(request, "请求参数不能为空");
         Assert.hasText(request.getMessage(), "消息内容不能为空");
+        validateInput(request.getMessage());
 
         UserSnapshot snapshot = currentStaffSnapshot();
         String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
@@ -381,7 +374,7 @@ public class ChatServiceImpl implements ChatService {
 
         if (chatModelRegistry.isActive(modelId)) {
             try {
-                reply = callAi(systemPrompt, history, modelId);
+                reply = callAi(systemPrompt, session, history, modelId);
             } catch (Exception e) {
                 log.warn("AI 调用失败，切换本地回复: {}", e.getMessage());
                 if (useLocalFallback) {
@@ -403,9 +396,9 @@ public class ChatServiceImpl implements ChatService {
     /**
      * 调用指定模型生成完整回复（非流式）。
      */
-    private String callAi(String systemPrompt, List<ChatMessage> history, String modelId) {
+    private String callAi(String systemPrompt, ChatSession session, List<ChatMessage> history, String modelId) {
         ChatClient client = chatClientFactory.getChatClient(modelId);
-        List<Message> messages = buildContextMessages(history);
+        List<Message> messages = conversationMemory.build(session, history);
         return client.prompt()
                 .system(systemPrompt)
                 .messages(messages)
@@ -442,107 +435,18 @@ public class ChatServiceImpl implements ChatService {
         return result;
     }
 
-    // ==================== 上下文构建（DB 驱动） ====================
+    // ==================== 输入校验 ====================
 
     /**
-     * 构建对话上下文消息列表。
-     * <ul>
-     *     <li>短对话（≤ SUMMARY_THRESHOLD）：全部历史作为上下文；</li>
-     *     <li>长对话（> SUMMARY_THRESHOLD）：旧消息压缩为摘要，保留最近 RECENT_CONTEXT_SIZE 条完整消息。</li>
-     * </ul>
+     * 校验用户消息长度（服务层兜底，上限来自 {@code ai.chat.max-input-chars}）。
+     *
+     * @param message 用户消息
      */
-    private List<Message> buildContextMessages(List<ChatMessage> history) {
-        if (history.size() <= ChatConstants.SUMMARY_THRESHOLD) {
-            return toMessages(history);
+    private void validateInput(String message) {
+        int maxChars = aiProperties.getChat().getMaxInputChars();
+        if (message != null && message.length() > maxChars) {
+            throw new BusinessException("消息长度不能超过" + maxChars + "字");
         }
-
-        int splitPoint = history.size() - ChatConstants.RECENT_CONTEXT_SIZE;
-        List<ChatMessage> oldMessages = new ArrayList<>(history.subList(0, splitPoint));
-        List<ChatMessage> recentMessages = new ArrayList<>(history.subList(splitPoint, history.size()));
-
-        String summary = summarizeOldMessages(oldMessages);
-        List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(SUMMARY_HEADER + summary + RECENT_HEADER));
-        messages.addAll(toMessages(recentMessages));
-        return messages;
-    }
-
-    /**
-     * 将实体消息列表转换为 Spring AI Message 列表。
-     */
-    private List<Message> toMessages(List<ChatMessage> messages) {
-        List<Message> result = new ArrayList<>(messages.size());
-        for (ChatMessage m : messages) {
-            if ("user".equals(m.getRole())) {
-                result.add(new UserMessage(m.getContent()));
-            } else {
-                result.add(new AssistantMessage(m.getContent()));
-            }
-        }
-        return result;
-    }
-
-    /**
-     * 对旧消息进行轻量摘要：提取城市、话题、情绪、关键问题。
-     */
-    private String summarizeOldMessages(List<ChatMessage> oldMessages) {
-        Set<String> cities = new LinkedHashSet<>();
-        Set<String> topics = new LinkedHashSet<>();
-        List<String> userQuestions = new ArrayList<>();
-        String userMood = "情绪平稳";
-
-        for (ChatMessage m : oldMessages) {
-            if (!"user".equals(m.getRole()) || m.getContent() == null) {
-                continue;
-            }
-            String content = m.getContent();
-
-            Matcher cityMatcher = CITY_PATTERN.matcher(content);
-            while (cityMatcher.find()) {
-                String city = cityMatcher.group(1);
-                if (!city.matches("(查|问|看|找|这|那|个|的|我|你|他|她|今|明|后|白|晚)+")) {
-                    cities.add(city);
-                }
-            }
-
-            if (content.contains("游戏")) topics.add("游戏");
-            if (content.contains("电影")) topics.add("电影");
-            if (content.contains("工作")) topics.add("工作");
-            if (content.contains("学习")) topics.add("学习");
-            if (content.contains("美食") || content.contains("吃")) topics.add("美食");
-            if (content.contains("旅游") || content.contains("旅行")) topics.add("旅游");
-            if (content.contains("音乐")) topics.add("音乐");
-            if (content.contains("运动") || content.contains("健身")) topics.add("运动");
-            if (content.contains("代码") || content.contains("编程") || content.contains("程序")) topics.add("编程");
-
-            if (content.contains("难过") || content.contains("伤心") || content.contains("不开心") || content.contains("emo")) {
-                userMood = "有些低落";
-            } else if (content.contains("开心") || content.contains("高兴") || content.contains("哈哈")) {
-                userMood = "心情不错";
-            } else if (content.contains("累") || content.contains("烦") || content.contains("压力")) {
-                userMood = "有些疲惫";
-            }
-
-            if ((content.endsWith("？") || content.endsWith("?")) && content.length() > 5 && content.length() < 50) {
-                userQuestions.add(content);
-            }
-        }
-
-        StringBuilder sb = new StringBuilder("在之前的对话中");
-        if (!cities.isEmpty()) {
-            sb.append("，用户问了").append(String.join("、", cities)).append("的天气");
-        }
-        if (!topics.isEmpty()) {
-            sb.append("，聊过").append(String.join("、", topics)).append("等话题");
-        }
-        if (!"情绪平稳".equals(userMood)) {
-            sb.append("，用户当时").append(userMood);
-        }
-        if (!userQuestions.isEmpty()) {
-            sb.append("，问过「").append(userQuestions.get(userQuestions.size() - 1)).append("」");
-        }
-        sb.append("。");
-        return sb.toString();
     }
 
     // ==================== 动态系统提示词（用户画像注入） ====================

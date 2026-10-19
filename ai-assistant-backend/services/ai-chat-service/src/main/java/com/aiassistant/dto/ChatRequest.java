@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import jakarta.validation.constraints.Size;
+
 /**
  * 聊天请求 DTO。
  *
@@ -20,6 +22,7 @@ public class ChatRequest {
     private String sessionId;
 
     /** 用户消息内容 */
+    @Size(max = 4000, message = "消息长度不能超过4000字")
     private String message;
 
     /** 会话标题（新建会话时使用，可选） */

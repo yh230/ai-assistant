@@ -52,6 +52,14 @@ public class ChatSession {
     @Column(name = "role_id", length = 32)
     private String roleId;
 
+    /** 历史消息摘要（上下文超预算时由会话记忆启发式生成，不调用模型） */
+    @Column(columnDefinition = "TEXT")
+    private String summary;
+
+    /** 摘要更新时间（摘要内容变更时刷新） */
+    @Column(name = "summary_updated_at")
+    private LocalDateTime summaryUpdatedAt;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
