@@ -1,13 +1,18 @@
 package com.hospital.service.impl;
 
 import com.api.client.UserClient;
+import com.api.dto.RoleBriefDTO;
 import com.api.dto.UserBriefDTO;
 import com.api.dto.UserPageRequest;
+import com.common.auth.UserSnapshot;
+import com.common.constant.RoleConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.common.result.Result;
 import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
+import com.common.security.RoleGrantPolicy;
+import com.common.security.SecurityUtils;
 import com.common.support.StatusValidator;
 import com.hospital.dto.EmployeeQueryDTO;
 import com.hospital.dto.EmployeeSaveDTO;
@@ -109,6 +114,8 @@ public class EmployeeServiceImpl implements EmployeeService {
             dto.setDepartmentId(scope.getDepartmentId());
             dto.setHospitalId(scope.getHospitalId());
         }
+        // 角色授予白名单：按当前登录人角色校验，越权授予在调用用户中心前拦截
+        assertRoleGrantable(dto.getRoleIds());
         unwrap(userClient.create(dto), "新增员工失败");
     }
 
@@ -121,6 +128,14 @@ public class EmployeeServiceImpl implements EmployeeService {
     @Override
     public void update(Long id, EmployeeUpdateDTO dto) {
         requireUser(id, "无权操作该员工");
+        // 自提权拦截：非 admin 不得修改自己的角色（含清空/追加）
+        if (id.equals(SecurityUtils.getCurrentUserIdOrNull()) && dto.getRoleIds() != null) {
+            UserSnapshot operator = SecurityUtils.currentSnapshot();
+            if (operator == null || operator.getRoles() == null
+                    || !operator.getRoles().contains(RoleConstants.ADMIN)) {
+                throw new BusinessException("不能修改自己的角色");
+            }
+        }
         DataScope scope = dataScopeResolver.resolve();
         if (scope.isHospital()) {
             // 院长：锁定本院，科室可调整（科室须属本院，前端越权传参无效）
@@ -130,6 +145,8 @@ public class EmployeeServiceImpl implements EmployeeService {
             dto.setDepartmentId(scope.getDepartmentId());
             dto.setHospitalId(scope.getHospitalId());
         }
+        // 角色授予白名单：按当前登录人角色校验，越权授予在调用用户中心前拦截
+        assertRoleGrantable(dto.getRoleIds());
         unwrap(userClient.update(id, dto), "更新员工失败");
     }
 
@@ -197,6 +214,35 @@ public class EmployeeServiceImpl implements EmployeeService {
             list = match ? rows : List.of();
         }
         return PageResult.of(list.size(), query.getPageNum(), query.getPageSize(), enrich(list));
+    }
+
+    /**
+     * 校验当前登录人可授予目标角色（角色 ID 经用户中心角色列表映射为角色码）
+     * <p>
+     * 未登录或无角色时按不可授予处理；角色 ID 不存在时直接拒绝，避免静默忽略。
+     *
+     * @param roleIds 目标角色 ID 列表（空表示不调整角色）
+     */
+    private void assertRoleGrantable(List<Long> roleIds) {
+        if (roleIds == null || roleIds.isEmpty()) {
+            return;
+        }
+        List<RoleBriefDTO> allRoles = unwrap(userClient.roles(), "查询角色列表失败");
+        if (allRoles == null) {
+            allRoles = List.of();
+        }
+        Map<Long, String> codeById = allRoles.stream()
+                .collect(Collectors.toMap(RoleBriefDTO::getId, RoleBriefDTO::getRoleCode,
+                        (first, second) -> first));
+        List<String> targetCodes = roleIds.stream().distinct().map(roleId -> {
+            String code = codeById.get(roleId);
+            if (code == null) {
+                throw new BusinessException("角色不存在：" + roleId);
+            }
+            return code;
+        }).toList();
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        RoleGrantPolicy.assertGrantable(operator == null ? List.<String>of() : operator.getRoles(), targetCodes);
     }
 
     /**

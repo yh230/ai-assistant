@@ -10,12 +10,14 @@ import com.api.dto.UserBriefDTO;
 import com.api.dto.UserCreateRequest;
 import com.api.dto.UserPageRequest;
 import com.api.dto.UserUpdateRequest;
+import com.common.auth.UserSnapshot;
 import com.common.constant.RoleConstants;
 import com.common.constant.SecurityConstants;
 import com.common.constant.StatusConstants;
 import com.common.exception.BusinessException;
 import com.common.jwt.TokenRevocationService;
 import com.common.result.PageResult;
+import com.common.security.RoleGrantPolicy;
 import com.common.security.SecurityUtils;
 import com.common.support.StatusValidator;
 import com.system.entity.SysRole;
@@ -224,6 +226,8 @@ public class UserServiceImpl implements UserService {
                 new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, dto.getUsername())) > 0) {
             throw new BusinessException("账号已存在");
         }
+        // 角色授予兜底校验：仅对转发身份的调用生效，内部无身份调用视为可信
+        assertRoleGrantable(dto.getRoleIds());
         SysUser user = new SysUser();
         user.setUsername(dto.getUsername());
         user.setPassword(PasswordSupport.encodeOrDefault(dto.getPassword(), passwordEncoder));
@@ -253,6 +257,14 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
+        // 自提权拦截（兜底）：非 admin 不得修改自己的角色，内部无身份调用视为可信
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        if (operator != null && id.equals(operator.getUserId()) && dto.getRoleIds() != null
+                && (operator.getRoles() == null || !operator.getRoles().contains(RoleConstants.ADMIN))) {
+            throw new BusinessException("不能修改自己的角色");
+        }
+        // 角色授予兜底校验：仅对转发身份的调用生效，内部无身份调用视为可信
+        assertRoleGrantable(dto.getRoleIds());
         user.setName(dto.getName());
         user.setPhone(dto.getPhone());
         user.setEmail(dto.getEmail());
@@ -460,6 +472,21 @@ public class UserServiceImpl implements UserService {
         } catch (Exception e) {
             log.warn("强制用户下线失败: userId={}, {}", userId, e.getMessage());
         }
+    }
+
+    /**
+     * 角色授予兜底校验：转发身份存在时按白名单校验目标角色，未转发身份的内部调用视为可信
+     *
+     * @param roleIds 目标角色 ID 列表（空表示不调整角色）
+     */
+    private void assertRoleGrantable(List<Long> roleIds) {
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        if (operator == null || roleIds == null || roleIds.isEmpty()) {
+            return;
+        }
+        List<String> targetCodes = roleMapper.selectBatchIds(roleIds).stream()
+                .map(SysRole::getRoleCode).toList();
+        RoleGrantPolicy.assertGrantable(operator.getRoles(), targetCodes);
     }
 
     /**

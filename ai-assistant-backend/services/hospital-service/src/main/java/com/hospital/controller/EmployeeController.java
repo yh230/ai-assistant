@@ -3,9 +3,12 @@ package com.hospital.controller;
 import com.api.client.UserClient;
 import com.api.dto.ResetPasswordDTO;
 import com.api.dto.RoleBriefDTO;
+import com.common.auth.UserSnapshot;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.common.result.Result;
+import com.common.security.RoleGrantPolicy;
+import com.common.security.SecurityUtils;
 import com.common.security.operlog.OperLog;
 import com.hospital.dto.EmployeeQueryDTO;
 import com.hospital.dto.EmployeeSaveDTO;
@@ -74,7 +77,7 @@ public class EmployeeController {
 
     /**
      * 员工表单的角色下拉（医院域，无需 system:role:list）。
-     * 院长/科室主任均可调用，避免暴露系统角色管理权限。
+     * 院长/科室主任均可调用，避免暴露系统角色管理权限；仅返回当前登录人可授予的角色。
      */
     @GetMapping("/roles")
     @PreAuthorize("hasAuthority('hospital:employee:list')")
@@ -83,7 +86,13 @@ public class EmployeeController {
         if (result == null || result.getCode() != 200) {
             throw new BusinessException(result == null ? "查询角色列表失败" : result.getMsg());
         }
-        return Result.success(result.getData());
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        List<String> operatorRoles = operator == null || operator.getRoles() == null
+                ? List.of() : operator.getRoles();
+        List<RoleBriefDTO> grantable = result.getData() == null ? List.of() : result.getData().stream()
+                .filter(role -> RoleGrantPolicy.canGrant(operatorRoles, role.getRoleCode()))
+                .toList();
+        return Result.success(grantable);
     }
 
     @OperLog(module = "员工管理", action = "修改员工")
