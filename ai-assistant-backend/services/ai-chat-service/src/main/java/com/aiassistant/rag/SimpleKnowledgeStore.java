@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -25,7 +24,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * 每医院一个向量文件（hospital_{id}.json），首次访问时按需加载、写后落盘；检索仅查本院文件，
  * 医院级数据隔离由文件名与缓存键共同保证。文档切片使用确定性 ID（documentId:chunkIndex），
- * 更新走“按旧切片数删除 + 追加”，删除走“按切片数删除”，避免整库重建。
+ * 更新走“先追加（覆盖同名 ID）再清理多余旧切片”，删除走“按切片数删除”，避免整库重建。
+ * <p>
+ * 写入、删除与检索均以实例锁串行化，检索不会观察到“追加/删除”的中间状态；null 医院 ID
+ * 的写操作按 no-op 处理、检索返回空列表，避免调用方传入空值导致 NPE。
  *
  * @author yh
  * @date 2026-10-19
@@ -57,10 +59,13 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
     }
 
     /**
-     * 幂等写入文档切片：先按旧切片数删除确定性 ID，再追加新切片并落盘
+     * 幂等写入文档切片：先追加新切片（同名确定性 ID 覆盖旧值），再清理超出新切片数的旧 ID，最后落盘
+     * <p>
+     * 追加先于删除：若 {@link SimpleVectorStore#add} 在嵌入阶段抛出异常，内存中仍是写入前的旧状态，
+     * 不会出现“内存已删、磁盘仍有”的数据丢失窗口。
      *
-     * @param hospitalId         医院 ID
-     * @param documentId         文档 ID
+     * @param hospitalId         医院 ID（null 时按 no-op 处理）
+     * @param documentId         文档 ID（null 时按 no-op 处理）
      * @param documentName       文档名（写入 metadata.source）
      * @param previousChunkCount 该文档此前已写入的切片数
      * @param chunks             新切片列表
@@ -68,18 +73,22 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
     @Override
     public synchronized void upsertDocument(Long hospitalId, Long documentId, String documentName,
                                             int previousChunkCount, List<Document> chunks) {
-        Objects.requireNonNull(hospitalId, "hospitalId");
-        Objects.requireNonNull(documentId, "documentId");
+        if (hospitalId == null || documentId == null) {
+            log.warn("upsertDocument 忽略空 hospitalId/documentId: hospitalId={}, documentId={}",
+                    hospitalId, documentId);
+            return;
+        }
         List<Document> safeChunks = chunks == null ? List.of() : chunks;
 
         SimpleVectorStore store = storeOf(hospitalId);
-        List<String> oldIds = ids(documentId, previousChunkCount);
-        if (!oldIds.isEmpty()) {
-            store.delete(oldIds);
-        }
         List<Document> normalized = normalize(documentId, documentName, safeChunks);
         if (!normalized.isEmpty()) {
+            // 先 add：同名确定性 ID 直接覆盖，且嵌入失败时旧数据仍完整保留
             store.add(normalized);
+        }
+        List<String> staleIds = staleIds(documentId, normalized.size(), previousChunkCount);
+        if (!staleIds.isEmpty()) {
+            store.delete(staleIds);
         }
         save(hospitalId, store);
     }
@@ -87,14 +96,17 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
     /**
      * 删除文档的全部切片并落盘
      *
-     * @param hospitalId 医院 ID
-     * @param documentId 文档 ID
+     * @param hospitalId 医院 ID（null 时按 no-op 处理）
+     * @param documentId 文档 ID（null 时按 no-op 处理）
      * @param chunkCount 该文档已写入的切片数
      */
     @Override
     public synchronized void deleteDocument(Long hospitalId, Long documentId, int chunkCount) {
-        Objects.requireNonNull(hospitalId, "hospitalId");
-        Objects.requireNonNull(documentId, "documentId");
+        if (hospitalId == null || documentId == null) {
+            log.warn("deleteDocument 忽略空 hospitalId/documentId: hospitalId={}, documentId={}",
+                    hospitalId, documentId);
+            return;
+        }
 
         SimpleVectorStore store = storeOf(hospitalId);
         List<String> targetIds = ids(documentId, chunkCount);
@@ -111,10 +123,13 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
      * @param query      检索问题
      * @param topK       片段数上限
      * @param threshold  相似度阈值
-     * @return 命中片段（按相关度降序）；本院无向量数据返回空列表
+     * @return 命中片段（按相关度降序）；医院 ID 为空或本院无向量数据返回空列表
      */
     @Override
-    public List<ScoredChunk> search(Long hospitalId, String query, int topK, double threshold) {
+    public synchronized List<ScoredChunk> search(Long hospitalId, String query, int topK, double threshold) {
+        if (hospitalId == null) {
+            return List.of();
+        }
         SimpleVectorStore store = stores.get(hospitalId);
         if (store == null) {
             // 应用重启后尚未发生写入时，按存量文件懒加载，避免检索结果为空
@@ -185,6 +200,22 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
     private List<String> ids(Long documentId, int count) {
         List<String> ids = new ArrayList<>(Math.max(count, 0));
         for (int i = 0; i < count; i++) {
+            ids.add(vectorId(documentId, i));
+        }
+        return ids;
+    }
+
+    /**
+     * 生成新切片数之外、仍可能残留的旧切片 ID（newCount .. previousCount-1）
+     *
+     * @param documentId    文档 ID
+     * @param newCount      本次写入的切片数
+     * @param previousCount 此前已写入的切片数
+     * @return 需清理的旧切片 ID；新切片数不小于旧切片数时为空
+     */
+    private List<String> staleIds(Long documentId, int newCount, int previousCount) {
+        List<String> ids = new ArrayList<>();
+        for (int i = Math.max(newCount, 0); i < previousCount; i++) {
             ids.add(vectorId(documentId, i));
         }
         return ids;
