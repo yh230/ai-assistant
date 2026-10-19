@@ -57,6 +57,8 @@ spring:
       port: 6379
       database: 0
       timeout: 5000ms
+  elasticsearch:
+    uris: ${ES_URI:http://localhost:9200}
   ai:
     openai:
       enabled: false
@@ -64,6 +66,17 @@ spring:
 # 本地降级开关：AI 调用失败时是否使用内置回复引擎
 ai:
   local-fallback: true
+  rag:
+    # 向量存储实现：simple（本地文件）| elasticsearch（BM25+kNN 混合检索）
+    store: ${AI_RAG_STORE:simple}
+    # 嵌入维度（必须与 ES 索引 dense_vector dims 一致）
+    embedding-dimensions: ${AI_EMBEDDING_DIMENSIONS:384}
+    # 切片重叠比例（0~0.5）
+    chunk-overlap: ${AI_RAG_CHUNK_OVERLAP:0.15}
+    elasticsearch:
+      uri: ${ES_URI:http://localhost:9200}
+      index-name: ${AI_RAG_ES_INDEX:ai_knowledge_chunk_v1}
+      analyzer: ${AI_RAG_ES_ANALYZER:cjk_ngram}
   assistant:
     default-model: openai
     models:
