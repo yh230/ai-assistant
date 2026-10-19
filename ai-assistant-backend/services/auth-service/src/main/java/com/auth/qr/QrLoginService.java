@@ -53,7 +53,7 @@ public class QrLoginService {
             local v = redis.call('GET', KEYS[1])
             if not v then return -1 end
             local ok, node = pcall(cjson.decode, v)
-            if not ok or type(node) ~= 'table' then return -2 end
+            if not ok or type(node) ~= 'table' or node.status == nil then return -2 end
             if node.status ~= 'WAITING' then return 0 end
             node.status = 'CONFIRMED'
             node.identity = ARGV[1]
@@ -130,6 +130,10 @@ public class QrLoginService {
      * @param userId 确认者用户 ID
      */
     public void confirm(String sceneId, String identity, Long userId) {
+        if (identity == null || identity.isBlank() || userId == null) {
+            // 防御性校验：不允许把空的确认者信息写入场景
+            throw new BusinessException("二维码状态异常，请刷新后重试");
+        }
         Long result = redis.execute(CONFIRM_SCRIPT, List.of(key(sceneId)),
                 identity, String.valueOf(userId));
         long code = result == null ? -1L : result;
@@ -141,6 +145,10 @@ public class QrLoginService {
         }
         if (code == 0L) {
             throw new BusinessException("二维码已确认，请勿重复操作");
+        }
+        if (code != 1L) {
+            // 脚本返回了未预期的结果码，按状态异常处理
+            throw new BusinessException("二维码状态异常，请刷新后重试");
         }
     }
 

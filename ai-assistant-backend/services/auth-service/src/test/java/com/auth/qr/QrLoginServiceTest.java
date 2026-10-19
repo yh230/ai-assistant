@@ -7,6 +7,7 @@ import com.auth.vo.LoginVO;
 import com.common.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -54,11 +55,26 @@ class QrLoginServiceTest {
     }
 
     /**
+     * 轮询脚本桩：按调用顺序返回多个结果，用于验证一次性消费
+     */
+    @SuppressWarnings("unchecked")
+    private void stubPollScriptSequence(String first, String second) {
+        when(redis.execute(any(RedisScript.class), anyList())).thenReturn(first, second);
+    }
+
+    /**
      * 确认脚本桩：返回给定的结果码
      */
     @SuppressWarnings("unchecked")
     private void stubConfirmScript(Long code) {
         when(redis.execute(any(RedisScript.class), anyList(), any(), any())).thenReturn(code);
+    }
+
+    private static LoginVO loginVO() {
+        LoginVO vo = new LoginVO();
+        vo.setToken("t");
+        vo.setRefreshToken("r");
+        return vo;
     }
 
     @Test
@@ -70,19 +86,29 @@ class QrLoginServiceTest {
         verify(redis).execute(any(RedisScript.class), eq(List.of("qr:scene:" + created.getSceneId())));
     }
 
+    /**
+     * 一次性消费：第一次轮询拿到 CONFIRMED 并签发令牌，第二次轮询脚本返回 null → EXPIRED。
+     * 证明 Java 依赖的是脚本的原子消费结果，而不是可重复读取的 GET。
+     */
     @Test
-    void pollConsumesConfirmedSceneAtomically() {
-        stubPollScript(CONFIRMED_JSON);
-        LoginVO vo = new LoginVO();
-        vo.setToken("t");
-        vo.setRefreshToken("r");
-        when(issuer.issue("staff", 7L)).thenReturn(vo);
+    void pollConsumesConfirmedSceneOnlyOnce() {
+        stubPollScriptSequence(CONFIRMED_JSON, null);
+        when(issuer.issue("staff", 7L)).thenReturn(loginVO());
 
-        QrPollVO poll = service.poll("scene1");
-        assertThat(poll.getStatus()).isEqualTo("CONFIRMED");
-        assertThat(poll.getToken()).isEqualTo("t");
-        assertThat(poll.getRefreshToken()).isEqualTo("r");
-        // 场景由 Lua 脚本消费，Java 侧不再 delete
+        QrPollVO first = service.poll("scene1");
+        assertThat(first.getStatus()).isEqualTo("CONFIRMED");
+        assertThat(first.getToken()).isEqualTo("t");
+        assertThat(first.getRefreshToken()).isEqualTo("r");
+
+        // 场景已被脚本 DEL，第二次读取拿不到内容
+        QrPollVO second = service.poll("scene1");
+        assertThat(second.getStatus()).isEqualTo("EXPIRED");
+        assertThat(second.getToken()).isNull();
+
+        // 只签发一次
+        verify(issuer, times(1)).issue("staff", 7L);
+        verify(redis, times(2)).execute(any(RedisScript.class), eq(List.of("qr:scene:scene1")));
+        // Java 侧不再自己做 delete
         verify(redis, never()).delete(anyString());
         verify(ops, never()).get(anyString());
     }
@@ -99,6 +125,37 @@ class QrLoginServiceTest {
         stubPollScript("not-json");
         assertThat(service.poll("scene1").getStatus()).isEqualTo("EXPIRED");
         verify(redis, never()).delete(anyString());
+    }
+
+    /**
+     * 钉住实际执行的脚本：poll 必须是带 DEL 的轮询脚本，confirm 必须是带 KEEPTTL 的条件写入脚本。
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void pollAndConfirmUseExpectedScripts() {
+        stubPollScriptSequence(CONFIRMED_JSON, null);
+        when(issuer.issue("staff", 7L)).thenReturn(loginVO());
+        service.poll("scene1");
+        service.poll("scene1");
+
+        ArgumentCaptor<RedisScript<String>> pollScriptCaptor =
+                ArgumentCaptor.forClass(RedisScript.class);
+        verify(redis, times(2)).execute(pollScriptCaptor.capture(), eq(List.of("qr:scene:scene1")));
+        assertThat(pollScriptCaptor.getAllValues()).allSatisfy(script -> {
+            assertThat(script.getScriptAsString()).contains("redis.call('DEL'");
+            assertThat(script.getScriptAsString()).doesNotContain("KEEPTTL");
+        });
+
+        stubConfirmScript(1L);
+        service.confirm("scene1", "staff", 7L);
+
+        ArgumentCaptor<RedisScript<Long>> confirmScriptCaptor =
+                ArgumentCaptor.forClass(RedisScript.class);
+        verify(redis).execute(confirmScriptCaptor.capture(), eq(List.of("qr:scene:scene1")),
+                eq("staff"), eq("7"));
+        String confirmScript = confirmScriptCaptor.getValue().getScriptAsString();
+        assertThat(confirmScript).contains("KEEPTTL");
+        assertThat(confirmScript).doesNotContain("redis.call('DEL'");
     }
 
     @Test
@@ -125,6 +182,30 @@ class QrLoginServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("二维码已确认，请勿重复操作");
         verify(ops, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void 未预期的脚本结果码抛状态异常() {
+        stubConfirmScript(2L);
+        assertThatThrownBy(() -> service.confirm("scene1", "staff", 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("二维码状态异常，请刷新后重试");
+    }
+
+    @Test
+    void 确认身份为空时不执行脚本() {
+        assertThatThrownBy(() -> service.confirm("scene1", " ", 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("二维码状态异常，请刷新后重试");
+        verify(redis, never()).execute(any(RedisScript.class), anyList(), any(), any());
+    }
+
+    @Test
+    void 确认用户ID为空时不执行脚本() {
+        assertThatThrownBy(() -> service.confirm("scene1", "staff", null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("二维码状态异常，请刷新后重试");
+        verify(redis, never()).execute(any(RedisScript.class), anyList(), any(), any());
     }
 
     @Test
