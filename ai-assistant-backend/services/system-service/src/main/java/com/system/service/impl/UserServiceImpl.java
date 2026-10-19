@@ -41,9 +41,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -257,14 +259,29 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
-        // 自提权拦截（兜底）：非 admin 不得修改自己的角色，内部无身份调用视为可信
+        // 自提权/管理员目标拦截（兜底），内部无身份调用视为可信
         UserSnapshot operator = SecurityUtils.currentSnapshot();
-        if (operator != null && id.equals(operator.getUserId()) && dto.getRoleIds() != null
-                && (operator.getRoles() == null || !operator.getRoles().contains(RoleConstants.ADMIN))) {
-            throw new BusinessException("不能修改自己的角色");
+        List<Long> currentRoleIds = dto.getRoleIds() == null
+                ? List.of() : nullSafe(userRoleMapper.selectRoleIdsByUserId(id));
+        boolean selfUnchanged = operator != null && id.equals(operator.getUserId())
+                && dto.getRoleIds() != null && asSet(dto.getRoleIds()).equals(asSet(currentRoleIds));
+        if (operator != null && dto.getRoleIds() != null) {
+            List<String> operatorRoles = operator.getRoles() == null ? List.of() : operator.getRoles();
+            if (!operatorRoles.contains(RoleConstants.ADMIN)) {
+                // 管理员目标保护：非 admin 不得改动管理员现有角色（防降级/剥离）
+                if (roleCodes(currentRoleIds).contains(RoleConstants.ADMIN)) {
+                    throw new BusinessException("无权修改管理员角色");
+                }
+                // 自提权拦截：非 admin 仅可提交与现状一致的角色集合，实际变更一律拒绝
+                if (id.equals(operator.getUserId()) && !selfUnchanged) {
+                    throw new BusinessException("不能修改自己的角色");
+                }
+            }
         }
-        // 角色授予兜底校验：仅对转发身份的调用生效，内部无身份调用视为可信
-        assertRoleGrantable(dto.getRoleIds());
+        // 角色授予兜底校验（本人提交未变更角色集合视为回显，跳过白名单）
+        if (!selfUnchanged) {
+            assertRoleGrantable(dto.getRoleIds());
+        }
         user.setName(dto.getName());
         user.setPhone(dto.getPhone());
         user.setEmail(dto.getEmail());
@@ -476,6 +493,8 @@ public class UserServiceImpl implements UserService {
 
     /**
      * 角色授予兜底校验：转发身份存在时按白名单校验目标角色，未转发身份的内部调用视为可信
+     * <p>
+     * 未知角色 ID 直接拒绝（与医院侧一致），避免静默忽略造成两处语义不一致。
      *
      * @param roleIds 目标角色 ID 列表（空表示不调整角色）
      */
@@ -484,9 +503,53 @@ public class UserServiceImpl implements UserService {
         if (operator == null || roleIds == null || roleIds.isEmpty()) {
             return;
         }
-        List<String> targetCodes = roleMapper.selectBatchIds(roleIds).stream()
-                .map(SysRole::getRoleCode).toList();
+        if (roleIds.stream().anyMatch(Objects::isNull)) {
+            throw new BusinessException("角色不存在");
+        }
+        List<Long> distinctIds = roleIds.stream().distinct().toList();
+        List<SysRole> roles = nullSafe(roleMapper.selectBatchIds(distinctIds));
+        if (roles.size() != distinctIds.size()) {
+            Set<Long> foundIds = roles.stream().map(SysRole::getId).collect(Collectors.toSet());
+            List<Long> missing = distinctIds.stream().filter(roleId -> !foundIds.contains(roleId)).toList();
+            throw new BusinessException("角色不存在：" + missing);
+        }
+        List<String> targetCodes = roles.stream().map(SysRole::getRoleCode).toList();
         RoleGrantPolicy.assertGrantable(operator.getRoles(), targetCodes);
+    }
+
+    /**
+     * 按角色 ID 查询角色编码（已删除/不存在的 ID 忽略，用于读取现状）
+     *
+     * @param roleIds 角色 ID 列表
+     * @return 角色编码列表（无匹配返回空列表）
+     */
+    private List<String> roleCodes(List<Long> roleIds) {
+        if (roleIds.isEmpty()) {
+            return List.of();
+        }
+        return nullSafe(roleMapper.selectBatchIds(roleIds)).stream()
+                .map(SysRole::getRoleCode).toList();
+    }
+
+    /**
+     * 角色 ID 集合化（用于按集合比较角色是否有实际变化）
+     *
+     * @param roleIds 角色 ID 列表（可空）
+     * @return 角色 ID 集合
+     */
+    private static Set<Long> asSet(List<Long> roleIds) {
+        return roleIds == null ? Set.of() : new HashSet<>(roleIds);
+    }
+
+    /**
+     * 空集合兜底
+     *
+     * @param list 列表（可空）
+     * @param <T> 元素类型
+     * @return 非空列表
+     */
+    private static <T> List<T> nullSafe(List<T> list) {
+        return list == null ? List.of() : list;
     }
 
     /**

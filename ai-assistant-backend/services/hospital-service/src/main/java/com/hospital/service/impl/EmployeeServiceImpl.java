@@ -29,9 +29,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -115,7 +117,9 @@ public class EmployeeServiceImpl implements EmployeeService {
             dto.setHospitalId(scope.getHospitalId());
         }
         // 角色授予白名单：按当前登录人角色校验，越权授予在调用用户中心前拦截
-        assertRoleGrantable(dto.getRoleIds());
+        if (dto.getRoleIds() != null && !dto.getRoleIds().isEmpty()) {
+            assertRoleGrantable(dto.getRoleIds(), loadRoleCodeMap());
+        }
         unwrap(userClient.create(dto), "新增员工失败");
     }
 
@@ -127,13 +131,26 @@ public class EmployeeServiceImpl implements EmployeeService {
      */
     @Override
     public void update(Long id, EmployeeUpdateDTO dto) {
-        requireUser(id, "无权操作该员工");
-        // 自提权拦截：非 admin 不得修改自己的角色（含清空/追加）
-        if (id.equals(SecurityUtils.getCurrentUserIdOrNull()) && dto.getRoleIds() != null) {
-            UserSnapshot operator = SecurityUtils.currentSnapshot();
-            if (operator == null || operator.getRoles() == null
-                    || !operator.getRoles().contains(RoleConstants.ADMIN)) {
-                throw new BusinessException("不能修改自己的角色");
+        UserBriefDTO target = requireUser(id, "无权操作该员工");
+        List<Long> roleIds = dto.getRoleIds();
+        if (roleIds != null) {
+            Map<Long, String> codeById = loadRoleCodeMap();
+            List<String> operatorRoles = operatorRoles();
+            boolean selfUnchanged = id.equals(SecurityUtils.getCurrentUserIdOrNull())
+                    && asSet(roleIds).equals(asSet(target.getRoleIds()));
+            if (!operatorRoles.contains(RoleConstants.ADMIN)) {
+                // 管理员目标保护：非 admin 不得改动管理员现有角色（防降级/剥离）
+                if (codesOf(target.getRoleIds(), codeById).contains(RoleConstants.ADMIN)) {
+                    throw new BusinessException("无权修改管理员角色");
+                }
+                // 自提权拦截：非 admin 仅可提交与现状一致的角色集合，实际变更一律拒绝
+                if (id.equals(SecurityUtils.getCurrentUserIdOrNull()) && !selfUnchanged) {
+                    throw new BusinessException("不能修改自己的角色");
+                }
+            }
+            // 本人提交未变更的角色集合视为回显，不做授予白名单校验
+            if (!selfUnchanged) {
+                assertRoleGrantable(roleIds, codeById);
             }
         }
         DataScope scope = dataScopeResolver.resolve();
@@ -145,8 +162,6 @@ public class EmployeeServiceImpl implements EmployeeService {
             dto.setDepartmentId(scope.getDepartmentId());
             dto.setHospitalId(scope.getHospitalId());
         }
-        // 角色授予白名单：按当前登录人角色校验，越权授予在调用用户中心前拦截
-        assertRoleGrantable(dto.getRoleIds());
         unwrap(userClient.update(id, dto), "更新员工失败");
     }
 
@@ -222,18 +237,12 @@ public class EmployeeServiceImpl implements EmployeeService {
      * 未登录或无角色时按不可授予处理；角色 ID 不存在时直接拒绝，避免静默忽略。
      *
      * @param roleIds 目标角色 ID 列表（空表示不调整角色）
+     * @param codeById 角色 ID→角色编码映射
      */
-    private void assertRoleGrantable(List<Long> roleIds) {
+    private void assertRoleGrantable(List<Long> roleIds, Map<Long, String> codeById) {
         if (roleIds == null || roleIds.isEmpty()) {
             return;
         }
-        List<RoleBriefDTO> allRoles = unwrap(userClient.roles(), "查询角色列表失败");
-        if (allRoles == null) {
-            allRoles = List.of();
-        }
-        Map<Long, String> codeById = allRoles.stream()
-                .collect(Collectors.toMap(RoleBriefDTO::getId, RoleBriefDTO::getRoleCode,
-                        (first, second) -> first));
         List<String> targetCodes = roleIds.stream().distinct().map(roleId -> {
             String code = codeById.get(roleId);
             if (code == null) {
@@ -241,8 +250,59 @@ public class EmployeeServiceImpl implements EmployeeService {
             }
             return code;
         }).toList();
+        RoleGrantPolicy.assertGrantable(operatorRoles(), targetCodes);
+    }
+
+    /**
+     * 加载全量角色 ID→角色编码映射（用户中心角色下拉）
+     *
+     * @return 角色 ID→角色编码映射
+     */
+    private Map<Long, String> loadRoleCodeMap() {
+        List<RoleBriefDTO> allRoles = unwrap(userClient.roles(), "查询角色列表失败");
+        if (allRoles == null) {
+            return Map.of();
+        }
+        return allRoles.stream()
+                .collect(Collectors.toMap(RoleBriefDTO::getId, RoleBriefDTO::getRoleCode,
+                        (first, second) -> first));
+    }
+
+    /**
+     * 把角色 ID 映射为角色编码（不存在/已删除的角色 ID 忽略，用于读取现状）
+     *
+     * @param roleIds 角色 ID 列表
+     * @param codeById 角色 ID→角色编码映射
+     * @return 角色编码列表（无匹配返回空列表）
+     */
+    private static List<String> codesOf(List<Long> roleIds, Map<Long, String> codeById) {
+        if (roleIds == null || roleIds.isEmpty()) {
+            return List.of();
+        }
+        return roleIds.stream()
+                .map(codeById::get)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    /**
+     * 当前登录人角色编码（未登录/无角色返回空列表）
+     *
+     * @return 角色编码列表
+     */
+    private static List<String> operatorRoles() {
         UserSnapshot operator = SecurityUtils.currentSnapshot();
-        RoleGrantPolicy.assertGrantable(operator == null ? List.<String>of() : operator.getRoles(), targetCodes);
+        return operator == null || operator.getRoles() == null ? List.of() : operator.getRoles();
+    }
+
+    /**
+     * 角色 ID 集合化（用于按集合比较角色是否有实际变化）
+     *
+     * @param roleIds 角色 ID 列表（可空）
+     * @return 角色 ID 集合
+     */
+    private static Set<Long> asSet(List<Long> roleIds) {
+        return roleIds == null ? Set.of() : new HashSet<>(roleIds);
     }
 
     /**
