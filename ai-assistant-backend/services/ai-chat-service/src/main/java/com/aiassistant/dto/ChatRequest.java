@@ -25,7 +25,7 @@ public class ChatRequest {
     /** 会话标题（新建会话时使用，可选） */
     private String title;
 
-    /** 角色ID，对应配置 ai.assistant.roles；为空使用默认角色 */
+    /** 角色ID（数据库 ai_role 表，员工域）；为空使用默认角色 */
     private String roleId;
 
     /** 模型ID，对应配置 ai.assistant.models；为空使用默认模型 */

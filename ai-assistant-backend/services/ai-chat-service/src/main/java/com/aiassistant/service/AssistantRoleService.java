@@ -22,8 +22,7 @@ import java.util.regex.Pattern;
  * 角色服务 - 数据库驱动（管理 AI 助手的人设/角色）。
  * <p>
  * 负责角色的解析（聊天时按 roleId 选取人设）、列表查询与增删改查。
- * 配置 {@code ai.assistant.default-role} 仅作为「找不到合适角色时」的兜底，
- * 角色主数据全部以数据库为准。
+ * 角色主数据全部以数据库为准，兜底角色 ID 为内置常量 chat_buddy。
  * <p>
  * 注：此类由原 {@code RoleService} 重命名而来，以避免与 RBAC 模块中的
  * {@code com.aiassistant.system.service.RoleService}（权限角色服务）产生同名 Bean 冲突。

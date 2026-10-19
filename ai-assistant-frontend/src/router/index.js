@@ -51,7 +51,7 @@ const routes = [
         path: 'roles',
         name: 'ChatRoles',
         component: () => import('../views/RoleManageView.vue'),
-        meta: { title: '聊天人设', requiresAuth: true }
+        meta: { title: '聊天人设', requiresAuth: true, perm: PERMS.AI_ROLE_MANAGE }
       },
       {
         path: 'profile',

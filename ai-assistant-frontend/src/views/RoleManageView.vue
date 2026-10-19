@@ -3,12 +3,30 @@
     <div class="page-header">
       <div>
         <h2 class="page-title">角色管理</h2>
-        <p class="page-sub">角色数据保存在数据库，可在此自由新增、编辑、启用/停用、删除。</p>
+        <p class="page-sub">员工角色全局共用；患者角色按医院与会话类型隔离。角色数据保存在数据库，可在此新增、编辑、启用/停用、删除。</p>
       </div>
       <el-button type="primary" :icon="Plus" @click="openCreate">新增角色</el-button>
     </div>
 
     <div class="table-card">
+      <div class="scope-bar">
+        <el-radio-group v-model="scope" @change="onScopeChange">
+          <el-radio-button value="STAFF">员工角色</el-radio-button>
+          <el-radio-button value="PATIENT">患者角色</el-radio-button>
+        </el-radio-group>
+        <span class="scope-hint">{{ scopeHint }}</span>
+      </div>
+
+      <el-alert
+        v-if="scope === 'PATIENT' && !boundHospitalId"
+        class="scope-alert"
+        type="info"
+        :closable="false"
+        show-icon
+        title="患者角色按医院隔离"
+        description="已绑定医院的账号由服务端自动使用所属医院；平台管理员（未绑院）需在管理员账号下指定医院，前端不提供医院选择，以避免越权。"
+      />
+
       <el-table v-if="roles.length > 0" :data="roles" stripe>
         <el-table-column label="角色ID" width="120">
           <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
@@ -17,6 +35,11 @@
           <template #default="{ row }"><span class="avatar-cell">{{ row.avatar || '—' }}</span></template>
         </el-table-column>
         <el-table-column prop="name" label="名称" width="120" />
+        <el-table-column v-if="scope === 'PATIENT'" label="会话类型" width="120">
+          <template #default="{ row }">
+            <el-tag effect="light">{{ typeLabel(row.sessionType) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="描述">
           <template #default="{ row }"><span class="desc-cell">{{ row.description || '—' }}</span></template>
         </el-table-column>
@@ -63,6 +86,12 @@
           <el-input-number v-model="form.sortOrder" :min="0" style="width: 200px" />
         </el-form-item>
 
+        <el-form-item v-if="scope === 'PATIENT'" label="会话类型" required>
+          <el-select v-model="form.sessionType" placeholder="请选择会话类型" style="width: 200px">
+            <el-option v-for="t in SESSION_TYPES" :key="t.value" :label="t.label" :value="t.value" />
+          </el-select>
+        </el-form-item>
+
         <el-form-item label="描述">
           <el-input v-model="form.description" placeholder="一句话简介，展示在选择卡片上" />
         </el-form-item>
@@ -91,10 +120,29 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { getAdminRoles, createRole, updateRole, deleteRole } from '../api/role'
+import { useAuth } from '../store/auth'
 import { confirm as showConfirm, toast } from '../utils/message'
+
+// 会话类型显示名（与患者端口径一致）
+const TYPE_LABELS = { CHAT: '闲聊', TRIAGE: 'AI 导诊', RAG: '知识库问答' }
+const SESSION_TYPES = [
+  { value: 'CHAT', label: '闲聊' },
+  { value: 'TRIAGE', label: 'AI 导诊' },
+  { value: 'RAG', label: '知识库问答' }
+]
+
+const { userInfo } = useAuth()
+
+// 角色域：STAFF-员工，PATIENT-患者
+const scope = ref('STAFF')
+// 当前账号绑定的医院（未绑院时为空，患者角色由服务端按登录人医院隔离）
+const boundHospitalId = computed(() => userInfo.value?.hospitalId || null)
+const scopeHint = computed(() =>
+  scope.value === 'PATIENT' ? '患者角色按医院隔离，同一医院每种会话类型一份' : '员工角色全局共用，聊天时供员工选择'
+)
 
 const roles = ref([])
 const showModal = ref(false)
@@ -109,17 +157,32 @@ const emptyForm = () => ({
   description: '',
   systemPrompt: '',
   sortOrder: 0,
-  enabled: true
+  enabled: true,
+  sessionType: 'CHAT'
 })
 const form = ref(emptyForm())
 
+function typeLabel(type) {
+  return TYPE_LABELS[type] || type || '—'
+}
+
 async function loadRoles() {
   try {
-    roles.value = await getAdminRoles()
+    roles.value = await getAdminRoles(scope.value)
   } catch (e) {
     console.error('加载角色失败:', e)
     toast.error('加载角色失败：' + e.message)
   }
+}
+
+// 切换角色域：关闭并重置表单，重新拉取当前域角色
+function onScopeChange() {
+  showModal.value = false
+  isEdit.value = false
+  editingId.value = ''
+  form.value = emptyForm()
+  roles.value = []
+  loadRoles()
 }
 
 function openCreate() {
@@ -139,7 +202,8 @@ function openEdit(role) {
     description: role.description || '',
     systemPrompt: role.systemPrompt || '',
     sortOrder: role.sortOrder ?? 0,
-    enabled: role.enabled !== false
+    enabled: role.enabled !== false,
+    sessionType: role.sessionType || 'CHAT'
   }
   showModal.value = true
 }
@@ -153,13 +217,27 @@ async function save() {
   if (!/^[A-Za-z0-9_]{2,32}$/.test(form.value.id.trim())) return toast.warn('角色ID仅允许字母、数字、下划线，长度2~32')
   if (!form.value.name.trim()) return toast.warn('请填写名称')
   if (!form.value.systemPrompt.trim()) return toast.warn('请填写系统提示词')
+  if (scope.value === 'PATIENT' && !form.value.sessionType) return toast.warn('请选择会话类型')
+
+  // 提交载荷：始终带 scope；sessionType 仅患者域携带，医院 ID 由服务端按登录人解析
+  const payload = {
+    id: form.value.id.trim(),
+    name: form.value.name.trim(),
+    avatar: form.value.avatar,
+    description: form.value.description,
+    systemPrompt: form.value.systemPrompt,
+    sortOrder: form.value.sortOrder,
+    enabled: form.value.enabled,
+    scope: scope.value
+  }
+  if (scope.value === 'PATIENT') payload.sessionType = form.value.sessionType
 
   saving.value = true
   try {
     if (isEdit.value) {
-      await updateRole(editingId.value, form.value)
+      await updateRole(editingId.value, payload)
     } else {
-      await createRole(form.value)
+      await createRole(payload)
     }
     closeModal()
     await loadRoles()
@@ -204,5 +282,21 @@ onMounted(loadRoles)
   font-size: 12px;
   color: var(--text-tertiary);
   margin-left: 8px;
+}
+
+.scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.scope-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.scope-alert {
+  margin-bottom: 12px;
 }
 </style>

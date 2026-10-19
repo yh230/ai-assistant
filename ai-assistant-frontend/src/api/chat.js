@@ -114,7 +114,7 @@ export function deleteSession(sessionId) {
 }
 
 /**
- * 获取可选角色列表（来自后端配置 ai.assistant.roles）
+ * 获取可选员工角色（来自数据库）
  */
 export function getRoles() {
   return api.get('/chat/roles')
