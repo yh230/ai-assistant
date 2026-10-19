@@ -16,7 +16,7 @@ class AuthInfoByPhoneTest {
     void byPhone_未绑定手机号返回null() {
         SysUserMapper mapper = mock(SysUserMapper.class);
         when(mapper.selectByPhone(any())).thenReturn(null);
-        UserServiceImpl service = new UserServiceImpl(mapper, null, null, null, null, null, null, null);
+        UserServiceImpl service = new UserServiceImpl(mapper, null, null, null, null, null, null, null, null);
 
         AuthInfoDTO dto = service.authInfoByPhone("13800000000");
 

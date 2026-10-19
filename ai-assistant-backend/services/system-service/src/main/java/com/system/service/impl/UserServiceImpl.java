@@ -29,6 +29,8 @@ import com.system.mapper.SysUserRoleMapper;
 import com.system.service.MenuService;
 import com.system.service.UserService;
 import com.system.support.PasswordSupport;
+import com.system.support.UserRoleBatchLoader;
+import com.system.support.UserRoleBatchLoader.RoleView;
 import com.system.support.UserRoleBinder;
 import com.system.vo.UserVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -65,6 +67,7 @@ public class UserServiceImpl implements UserService {
     private final SysUserMapper userMapper;
     private final SysUserRoleMapper userRoleMapper;
     private final SysRoleMapper roleMapper;
+    private final UserRoleBatchLoader roleBatchLoader;
     private final SysMenuMapper menuMapper;
     private final MenuService menuService;
     private final PasswordEncoder passwordEncoder;
@@ -90,7 +93,11 @@ public class UserServiceImpl implements UserService {
         }
         qw.orderByDesc(SysUser::getId);
         userMapper.selectPage(page, qw);
-        List<UserVO> list = page.getRecords().stream().map(this::toVO).toList();
+        // 角色一次性批量加载，避免逐行查询角色造成的 N+1
+        Map<Long, RoleView> roleViews = roleBatchLoader.load(
+                page.getRecords().stream().map(SysUser::getId).toList());
+        List<UserVO> list = page.getRecords().stream()
+                .map(user -> toVO(user, roleViews.get(user.getId()))).toList();
         return PageResult.of(page, list);
     }
 
@@ -198,7 +205,11 @@ public class UserServiceImpl implements UserService {
         }
         qw.orderByDesc(SysUser::getId);
         userMapper.selectPage(page, qw);
-        List<UserBriefDTO> list = page.getRecords().stream().map(this::toBrief).toList();
+        // 角色一次性批量加载，避免逐行查询角色造成的 N+1
+        Map<Long, RoleView> roleViews = roleBatchLoader.load(
+                page.getRecords().stream().map(SysUser::getId).toList());
+        List<UserBriefDTO> list = page.getRecords().stream()
+                .map(user -> toBrief(user, roleViews.get(user.getId()))).toList();
         return PageResult.of(page, list);
     }
 
@@ -432,7 +443,24 @@ public class UserServiceImpl implements UserService {
         kickout(id);
     }
 
+    /**
+     * 单行组装 UserVO（详情/非分页场景保留按用户单查角色）
+     *
+     * @param user 用户实体
+     * @return 用户视图
+     */
     private UserVO toVO(SysUser user) {
+        return toVO(user, loadRoleView(user.getId()));
+    }
+
+    /**
+     * 组装 UserVO（角色由调用方批量预加载，避免 N+1）
+     *
+     * @param user 用户实体
+     * @param roleView 已预加载的角色视图（可空，表示无角色）
+     * @return 用户视图
+     */
+    private UserVO toVO(SysUser user, RoleView roleView) {
         UserVO vo = new UserVO();
         vo.setId(user.getId());
         vo.setUsername(user.getUsername());
@@ -441,16 +469,32 @@ public class UserServiceImpl implements UserService {
         vo.setEmail(user.getEmail());
         vo.setStatus(user.getStatus());
         vo.setCreateTime(user.getCreateTime());
-        List<Long> roleIds = userRoleMapper.selectRoleIdsByUserId(user.getId());
+        List<Long> roleIds = roleView == null ? List.of() : nullSafe(roleView.roleIds());
         vo.setRoleIds(roleIds);
         if (!roleIds.isEmpty()) {
-            List<SysRole> roles = roleMapper.selectByUserId(user.getId());
-            vo.setRoleNames(roles.stream().map(SysRole::getRoleName).collect(Collectors.joining(",")));
+            vo.setRoleNames(roleView.roleNames());
         }
         return vo;
     }
 
+    /**
+     * 单行组装 UserBriefDTO（详情/非分页场景保留按用户单查角色）
+     *
+     * @param user 用户实体
+     * @return 用户简要信息
+     */
     private UserBriefDTO toBrief(SysUser user) {
+        return toBrief(user, loadRoleView(user.getId()));
+    }
+
+    /**
+     * 组装 UserBriefDTO（角色由调用方批量预加载，避免 N+1）
+     *
+     * @param user 用户实体
+     * @param roleView 已预加载的角色视图（可空，表示无角色）
+     * @return 用户简要信息
+     */
+    private UserBriefDTO toBrief(SysUser user, RoleView roleView) {
         UserBriefDTO dto = new UserBriefDTO();
         dto.setId(user.getId());
         dto.setUsername(user.getUsername());
@@ -460,13 +504,25 @@ public class UserServiceImpl implements UserService {
         dto.setStatus(user.getStatus());
         dto.setHospitalId(user.getHospitalId());
         dto.setDepartmentId(user.getDepartmentId());
-        List<Long> roleIds = userRoleMapper.selectRoleIdsByUserId(user.getId());
+        List<Long> roleIds = roleView == null ? List.of() : nullSafe(roleView.roleIds());
         dto.setRoleIds(roleIds);
         if (!roleIds.isEmpty()) {
-            List<SysRole> roles = roleMapper.selectByUserId(user.getId());
-            dto.setRoleNames(roles.stream().map(SysRole::getRoleName).collect(Collectors.joining(",")));
+            dto.setRoleNames(roleView.roleNames());
         }
         return dto;
+    }
+
+    /**
+     * 按用户单查角色视图（保持原有详情语义：角色名称逗号分隔）
+     *
+     * @param userId 用户 ID
+     * @return 角色视图
+     */
+    private RoleView loadRoleView(Long userId) {
+        List<Long> roleIds = nullSafe(userRoleMapper.selectRoleIdsByUserId(userId));
+        String roleNames = roleIds.isEmpty() ? "" : nullSafe(roleMapper.selectByUserId(userId)).stream()
+                .map(SysRole::getRoleName).collect(Collectors.joining(","));
+        return new RoleView(roleIds, roleNames);
     }
 
     /**
