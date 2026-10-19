@@ -21,6 +21,7 @@ import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.PatientChatService;
 import com.aiassistant.service.PendingActionService;
 import com.aiassistant.service.support.ChatMessagePersister;
+import com.aiassistant.service.support.ChatPersistContent;
 import com.aiassistant.tool.PatientTools;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
@@ -264,7 +265,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                         persist.then(Mono.<ServerSentEvent<String>>empty()),
                         referencesEvent,
                         buildConfirmRequiredEvent(sessionId), doneEvent)
-                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted))
+                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted, blocked))
                 .doFinally(signal -> patientSseActive.decrementAndGet());
     }
 
@@ -284,10 +285,10 @@ public class PatientChatServiceImpl implements PatientChatService {
             if (!persisted.compareAndSet(false, true)) {
                 return Mono.empty();
             }
-            String body = blocked.get() ? safetyFilter.blockedMessage()
-                    : full + "\n\n" + aiProperties.getDisclaimer();
-            String referenceJson = (!blocked.get() && !fallback.get() && !ctx.referenceJson().isEmpty())
-                    ? ctx.referenceJson() : null;
+            String body = ChatPersistContent.body(blocked.get(), safetyFilter.blockedMessage(),
+                    full.toString(), aiProperties.getDisclaimer());
+            String referenceJson = ChatPersistContent.references(blocked.get(), fallback.get(),
+                    ctx.referenceJson());
             return messagePersister.persistAssistant(ctx.session().getSessionId(), body, referenceJson);
         });
     }
@@ -426,16 +427,22 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * SSE 客户端断开处理：记录日志；本次回复尚未落库且已产生部分内容时，按部分内容（附免责）同步落库
+     * SSE 客户端断开处理：记录日志；本次回复尚未落库时，按「输出风控状态 + 已产生正文」同步落库
+     * <p>
+     * 输出侧已判定拦截时只落标准文案，绝不落原始部分正文。
      *
      * @param sessionId 会话ID
      * @param full      回复正文累积器
      * @param persisted 已持久化标记
+     * @param blocked   输出侧拦截标记
      */
-    private void handleClientCancel(String sessionId, StringBuilder full, AtomicBoolean persisted) {
+    private void handleClientCancel(String sessionId, StringBuilder full, AtomicBoolean persisted,
+                                    AtomicBoolean blocked) {
         log.info("SSE 客户端断开: sessionId={}", sessionId);
-        if (persisted.compareAndSet(false, true) && full.length() > 0) {
-            messagePersister.persistBlocking(sessionId, full + "\n\n" + aiProperties.getDisclaimer(), null);
+        if (persisted.compareAndSet(false, true) && (blocked.get() || full.length() > 0)) {
+            String body = ChatPersistContent.body(blocked.get(), safetyFilter.blockedMessage(),
+                    full.toString(), aiProperties.getDisclaimer());
+            messagePersister.persistBlocking(sessionId, body, null);
         }
     }
 
@@ -538,7 +545,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                         outputSafetyGuard(full, blocked),
                         persist.then(Mono.<ServerSentEvent<String>>empty()),
                         doneEvent)
-                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted))
+                .doOnCancel(() -> handleClientCancel(sessionId, full, persisted, blocked))
                 .doFinally(signal -> patientSseActive.decrementAndGet());
     }
 

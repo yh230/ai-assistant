@@ -184,8 +184,7 @@ public class ChatServiceImpl implements ChatService {
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
                 ? buildAiContentFlux(ctx, full, usedFallback)
-                : buildLocalChunkFlux(ctx.sessionId(),
-                        generateLocalResponse(ctx.userMessage(), ctx.history()), full);
+                : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
 
         Mono<Void> persist = Mono.defer(() -> {
             if (!persisted.compareAndSet(false, true)) {
@@ -232,20 +231,18 @@ public class ChatServiceImpl implements ChatService {
                 .onErrorResume(ex -> {
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
-                    return buildLocalChunkFlux(ctx.sessionId(),
-                            generateLocalResponse(ctx.userMessage(), ctx.history()), full);
+                    return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
                 });
     }
 
     /**
      * 将文本切片为 SSE token 流（本地降级复用）：仅向累积器追加 token，不落库。
      *
-     * @param sessionId 会话ID（透传，便于日志定位）
-     * @param text      完整文本
-     * @param full      回复内容累积器
+     * @param text 完整文本
+     * @param full 回复内容累积器
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String sessionId, String text, StringBuilder full) {
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuilder full) {
         List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
         return Flux.fromIterable(chunks)
                 .delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS))
