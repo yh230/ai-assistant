@@ -12,6 +12,7 @@ import com.registration.enums.Period;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
 import com.registration.service.NumberSourceService;
+import com.registration.support.ScheduleLock;
 import com.registration.vo.NumberSourceVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
     private final DoctorScheduleMapper scheduleMapper;
     private final UserClient userClient;
     private final DataScopeResolver dataScopeResolver;
+    private final ScheduleLock scheduleLock;
 
     /**
      * 查询号源池列表（按当前登录人数据范围过滤）
@@ -113,6 +115,19 @@ public class NumberSourceServiceImpl implements NumberSourceService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void generateForSchedule(DoctorSchedule schedule) {
+        // 与预约抢号共用排班锁，避免重生成按旧快照算 maxSeq 后与并发占号互相覆盖
+        scheduleLock.withLock(schedule.getId(), () -> {
+            doGenerateForSchedule(schedule);
+            return null;
+        });
+    }
+
+    /**
+     * 实际重生成逻辑（调用方须已持有排班锁）
+     *
+     * @param schedule 排班
+     */
+    private void doGenerateForSchedule(DoctorSchedule schedule) {
         if (schedule.getTotalLimit() == null || schedule.getTotalLimit() <= 0) {
             return; // 无号源总数，不生成
         }
