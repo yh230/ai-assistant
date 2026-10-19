@@ -31,6 +31,15 @@
 | 医院业务 | 管理端 | 多医院数据隔离、排班号源、预约状态机 |
 | 工程底座 | 全链路 | 双身份 JWT、网关限流、Kafka、可观测性 |
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/staff-login.png" width="49%" alt="员工端登录" />
+  <img src="docs/images/patient-login.png" width="49%" alt="患者端登录" />
+</p>
+
+> 登录页支持账号密码、手机号验证码与扫码三种方式；核心业务页面截图欢迎通过 PR 补充。
+
 ## 快速体验
 
 Windows：
