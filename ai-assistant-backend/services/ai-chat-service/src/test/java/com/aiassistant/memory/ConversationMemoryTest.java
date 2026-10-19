@@ -31,7 +31,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * 会话记忆与输入预算单测（token 估算、预算内全量、超预算摘要、摘要复用与增量更新）
+ * 会话记忆与输入预算单测（token 估算、预算内全量、超预算摘要、摘要重生成与写库条件）
  *
  * @author yh
  * @date 2026-10-19
@@ -149,11 +149,11 @@ class ConversationMemoryTest {
     }
 
     @Test
-    void reusesExistingSummaryWithoutSaving() {
-        aiProperties.getChat().setContextTokenBudget(100);
+    void keepsExistingSummaryWhenOlderHasNoUserMessages() {
+        aiProperties.getChat().setContextTokenBudget(60);
         LocalDateTime summarizedAt = LocalDateTime.now().minusHours(1);
         List<ChatMessage> history = List.of(
-                message("user", "早".repeat(80), summarizedAt.minusMinutes(10)),
+                message("assistant", "助".repeat(80), summarizedAt.minusMinutes(10)),
                 message("user", "最近一条消息", LocalDateTime.now()));
 
         ChatSession session = session("s6");
@@ -164,7 +164,7 @@ class ConversationMemoryTest {
 
         assertEquals(2, messages.size());
         assertInstanceOf(SystemMessage.class, messages.get(0));
-        // 已有摘要被复用（而非用早期消息重新生成）
+        // 早期区没有用户消息，保留既有摘要（既不重新生成也不写库）
         assertEquals(SUMMARY_PREFIX + "既有摘要", messages.get(0).getText());
         assertInstanceOf(UserMessage.class, messages.get(1));
         assertEquals("既有摘要", session.getSummary());
@@ -173,25 +173,34 @@ class ConversationMemoryTest {
     }
 
     @Test
-    void regeneratesSummaryWhenNewOlderMessagesArrive() {
+    void regeneratesSummaryForDisplacedOlderMessages() {
         aiProperties.getChat().setContextTokenBudget(100);
-        LocalDateTime summarizedAt = LocalDateTime.now().minusHours(1);
-        List<ChatMessage> history = List.of(
-                message("user", "旧问题".repeat(27), summarizedAt.minusMinutes(10)),
-                message("user", "新问题".repeat(27), summarizedAt.plusMinutes(10)),
-                message("user", "最近一条消息", LocalDateTime.now()));
+        List<ChatMessage> history = new ArrayList<>();
+        LocalDateTime base = LocalDateTime.now().minusMinutes(30);
+        for (int i = 1; i <= 10; i++) {
+            history.add(message("user", "编号" + i + "：" + "内".repeat(70), base.plusMinutes(i)));
+        }
+        history.add(message("user", "最近一条消息", base.plusMinutes(20)));
 
         ChatSession session = session("s7");
         session.setSummary("旧摘要");
+        // 摘要时间戳晚于所有消息创建时间：旧实现会因此复用「旧摘要」，被挤出的早期消息永远不会进入摘要
+        LocalDateTime summarizedAt = LocalDateTime.now().minusSeconds(1);
         session.setSummaryUpdatedAt(summarizedAt);
 
         List<Message> messages = memory.build(session, history);
 
+        assertEquals(2, messages.size());
         assertInstanceOf(SystemMessage.class, messages.get(0));
         String summary = messages.get(0).getText().substring(SUMMARY_PREFIX.length());
-        // 早期区出现晚于 summaryUpdatedAt 的新消息 → 重新生成并纳入最新早期用户消息
-        assertTrue(summary.contains("旧问题"));
-        assertTrue(summary.contains("新问题"));
+        String[] items = summary.split("；");
+        // 每次超预算构建都基于完整早期区重新生成：早期区最后 8 条用户消息全部被纳入
+        assertEquals(8, items.length);
+        assertTrue(items[0].startsWith("编号3："));
+        assertTrue(items[7].startsWith("编号10："));
+        assertFalse(summary.contains("编号1："));
+        assertFalse(summary.contains("编号2："));
+        // 生成文本与旧摘要不同 → 写回并推进时间戳
         assertNotEquals("旧摘要", session.getSummary());
         assertEquals(summary, session.getSummary());
         assertTrue(session.getSummaryUpdatedAt().isAfter(summarizedAt));
@@ -199,24 +208,26 @@ class ConversationMemoryTest {
     }
 
     @Test
-    void bumpsSummaryTimestampWhenNewOlderMessageKeepsSameText() {
-        aiProperties.getChat().setContextTokenBudget(30);
-        LocalDateTime summarizedAt = LocalDateTime.now().minusHours(1);
+    void doesNotSaveWhenRegeneratedSummaryMatchesExisting() {
+        aiProperties.getChat().setContextTokenBudget(90);
+        LocalDateTime summarizedAt = LocalDateTime.now();
         List<ChatMessage> history = List.of(
-                message("user", "旧摘要", summarizedAt.minusMinutes(10)),
-                message("assistant", "补充", summarizedAt.plusMinutes(10)),
-                message("user", "最".repeat(40), LocalDateTime.now()));
+                message("user", "早".repeat(80), summarizedAt.minusMinutes(10)),
+                message("user", "最近一条消息", summarizedAt.minusMinutes(5)));
 
         ChatSession session = session("s8");
-        session.setSummary("旧摘要");
+        // 与「早」×60 的启发式摘要完全一致
+        session.setSummary("早".repeat(60));
         session.setSummaryUpdatedAt(summarizedAt);
 
-        memory.build(session, history);
+        List<Message> messages = memory.build(session, history);
 
-        // 摘要文本未变，但需推进 summaryUpdatedAt 以标记新早期消息已纳入
-        assertEquals("旧摘要", session.getSummary());
-        assertTrue(session.getSummaryUpdatedAt().isAfter(summarizedAt));
-        verify(sessionRepository, times(1)).save(session);
+        assertEquals(2, messages.size());
+        assertEquals(SUMMARY_PREFIX + "早".repeat(60), messages.get(0).getText());
+        // 重新生成的文本未变化 → 不写库、不推进时间戳
+        assertEquals("早".repeat(60), session.getSummary());
+        assertEquals(summarizedAt, session.getSummaryUpdatedAt());
+        verify(sessionRepository, never()).save(any());
     }
 
     @Test
@@ -243,7 +254,7 @@ class ConversationMemoryTest {
     }
 
     /**
-     * 构造带创建时间的消息实体（摘要增量判断依赖 createdAt）。
+     * 构造带创建时间的消息实体（用于构造「被挤出最近窗口」的历史对话）。
      */
     private ChatMessage message(String role, String content, LocalDateTime createdAt) {
         return ChatMessage.builder().role(role).content(content).createdAt(createdAt).build();

@@ -25,8 +25,9 @@ import java.util.List;
  *         未超预算时全部历史进入上下文。</li>
  *     <li><b>超预算压缩</b>：保留最近消息（占预算 70%），更早的消息用启发式摘要替代；
  *         摘要不调用模型，仅取早期（最近窗口之前）用户消息中<b>最后</b> 8 条片段拼接，并持久化到会话。</li>
- *     <li><b>摘要复用</b>：已有摘要且无新进入早期区（{@code createdAt > summaryUpdatedAt}）的消息时直接复用，
- *         不再写库；出现新的早期消息才重新生成并刷新摘要时间戳。</li>
+ *     <li><b>摘要重生成</b>：每次超预算构建都基于完整早期区重新生成摘要（不使用 {@code createdAt}/{@code summaryUpdatedAt}
+ *         判断新旧），因此从最近窗口中被挤出的消息一定被纳入；生成文本与会话已有摘要相同则不写库，
+ *         否则写回 {@code summary} 并刷新 {@code summaryUpdatedAt}。</li>
  *     <li><b>预算计入摘要</b>：最近消息预算先扣除摘要（前缀 + 正文 + 消息开销）的估算 token，避免摘要占用导致溢出。</li>
  *     <li><b>启发式估算</b>：中日韩字符按 1 token/字，ASCII 按 4 字/token，其余按 2 字/token。</li>
  * </ul>
@@ -74,8 +75,9 @@ public class ConversationMemory {
      * 按 token 预算构建上下文消息列表
      * <p>
      * 未超预算时返回全部历史消息；超预算时保留最近消息，并把更早（最近窗口之前）的消息压缩为一条系统摘要消息。
-     * 已有摘要且早期区没有晚于 {@code summaryUpdatedAt} 的新消息时复用摘要；否则基于早期区
-     * <b>最后</b> {@value #MAX_SUMMARY_ITEMS} 条用户消息重新生成并写回会话（{@code summary} / {@code summary_updated_at}）。
+     * 每次都会基于完整早期区<b>最后</b> {@value #MAX_SUMMARY_ITEMS} 条用户消息重新生成摘要，
+     * 不依赖 {@code summaryUpdatedAt} 判断新旧（被挤出最近窗口的消息创建时间可能早于摘要时间戳）。
+     * 生成文本与会话已有摘要相同则不写库；不同则写回 {@code summary} 并刷新 {@code summaryUpdatedAt}。
      *
      * @param session 当前会话（可为空，为空时不复用/持久化摘要）
      * @param history 历史消息（按时间正序，含本轮用户消息）
@@ -91,20 +93,19 @@ public class ConversationMemory {
         }
 
         int recentBudget = budget * RECENT_BUDGET_PERCENT / 100;
-        int recentStart = recentStartIndex(history, Math.max(0, recentBudget - summaryTokens(existingSummary(session))));
-        List<ChatMessage> older = history.subList(0, recentStart);
-        String candidate = resolveSummary(session, older);
-        int candidateTokens = summaryTokens(candidate);
-        if (candidateTokens > summaryTokens(existingSummary(session))) {
+        String existing = existingSummary(session);
+        int recentStart = recentStartIndex(history, Math.max(0, recentBudget - summaryTokens(existing)));
+        String summary = resolveSummary(session, history.subList(0, recentStart));
+        int summaryTokenCount = summaryTokens(summary);
+        if (summaryTokenCount > summaryTokens(existing)) {
             // 摘要实际占用超出预留额度时，按实际值收缩一次最近窗口（只调整一次，避免反复抖动）
-            int adjustedStart = recentStartIndex(history, Math.max(0, recentBudget - candidateTokens));
+            int adjustedStart = recentStartIndex(history, Math.max(0, recentBudget - summaryTokenCount));
             if (adjustedStart > recentStart) {
                 recentStart = adjustedStart;
-                older = history.subList(0, recentStart);
-                candidate = resolveSummary(session, older);
+                summary = resolveSummary(session, history.subList(0, recentStart));
             }
         }
-        String summary = applySummary(session, older, candidate);
+        summary = persistSummary(session, summary);
 
         List<Message> messages = new ArrayList<>();
         if (StringUtils.hasText(summary)) {
@@ -201,22 +202,18 @@ public class ConversationMemory {
     }
 
     /**
-     * 解析应当注入的摘要（不写库）：已有摘要且早期区无新消息时复用；否则按早期区重新生成。
+     * 解析应当注入的摘要（不写库）：始终基于完整早期区重新生成；早期区没有可摘要的用户消息时保留已有摘要。
      *
      * @param session 当前会话（可为空）
      * @param older   早期消息（最近窗口之前）
-     * @return 摘要文本；无可摘要内容时返回空串
+     * @return 摘要文本；无任何摘要时返回空串
      */
     private String resolveSummary(ChatSession session, List<ChatMessage> older) {
-        String existing = existingSummary(session);
-        if (StringUtils.hasText(existing) && unsummarized(session, older).isEmpty()) {
-            return existing;
-        }
         String generated = summarize(older);
         if (StringUtils.hasText(generated)) {
             return generated;
         }
-        // 早期区暂无可摘要的用户消息时保留已有摘要，避免摘要丢失
+        String existing = existingSummary(session);
         return StringUtils.hasText(existing) ? existing : generated;
     }
 
@@ -244,34 +241,6 @@ public class ConversationMemory {
     }
 
     /**
-     * 找出早期区中尚未纳入摘要的消息：{@code createdAt} 晚于 {@code summaryUpdatedAt} 的消息。
-     * 无摘要或无摘要时间戳时视为全部未摘要。
-     * <p>
-     * 缺少 {@code createdAt} 的消息（如内存构造的历史）不视为新消息，避免重复重建摘要。
-     *
-     * @param session 当前会话（可为空）
-     * @param older   早期消息
-     * @return 未纳入摘要的早期消息
-     */
-    private List<ChatMessage> unsummarized(ChatSession session, List<ChatMessage> older) {
-        if (older.isEmpty()) {
-            return List.of();
-        }
-        if (session == null || !StringUtils.hasText(session.getSummary()) || session.getSummaryUpdatedAt() == null) {
-            return older;
-        }
-        LocalDateTime since = session.getSummaryUpdatedAt();
-        List<ChatMessage> result = new ArrayList<>();
-        for (ChatMessage message : older) {
-            LocalDateTime createdAt = message == null ? null : message.getCreatedAt();
-            if (createdAt != null && createdAt.isAfter(since)) {
-                result.add(message);
-            }
-        }
-        return result;
-    }
-
-    /**
      * 启发式摘要：取早期消息中<b>最后</b> {@value #MAX_SUMMARY_ITEMS} 条用户消息（按时间正序输出），
      * 每条压平空白并截断到 {@value #SUMMARY_ITEM_CHARS} 字，以「；」连接。
      *
@@ -296,24 +265,19 @@ public class ConversationMemory {
     }
 
     /**
-     * 将摘要持久化到会话：内容变化，或早期区存在尚未摘要的新消息（需推进摘要时间戳）时写库。
+     * 将摘要持久化到会话：生成文本与会话已有摘要相同则不写库；不同则写回并刷新摘要时间戳。
      *
      * @param session  当前会话（可为空）
-     * @param older    早期消息
      * @param resolved 已解析的摘要文本
      * @return 实际注入的摘要文本
      */
-    private String applySummary(ChatSession session, List<ChatMessage> older, String resolved) {
-        if (session == null || !StringUtils.hasText(resolved)) {
+    private String persistSummary(ChatSession session, String resolved) {
+        if (session == null || !StringUtils.hasText(resolved) || resolved.equals(session.getSummary())) {
             return resolved;
         }
-        boolean changed = !resolved.equals(session.getSummary());
-        boolean stale = !unsummarized(session, older).isEmpty();
-        if (changed || stale) {
-            session.setSummary(resolved);
-            session.setSummaryUpdatedAt(LocalDateTime.now());
-            sessionRepository.save(session);
-        }
+        session.setSummary(resolved);
+        session.setSummaryUpdatedAt(LocalDateTime.now());
+        sessionRepository.save(session);
         return resolved;
     }
 
