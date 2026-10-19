@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -57,7 +58,14 @@ public class KnowledgeChunker {
     }
 
     /**
-     * 将文档文本切分为切片（兼容旧调用，documentId 固定为 0，切片序号从 0 递增）。
+     * 将文档文本切分为切片（兼容旧调用）。
+     * <p>
+     * 旧签名没有真实文档 ID，这里为每次调用生成一个唯一且非负的合成 ID，避免不同文档的
+     * 切片 ID（{@code documentId:index}）互相覆盖；同一文档多次切分得到的 ID 不同，
+     * 因此该重载<b>不能</b>用于需要稳定 ID 的场景。
+     * <p>
+     * <b>Task 7 要求</b>：{@code KnowledgeVectorStore} 等仍在调用本重载的消费者必须改为
+     * {@link #split(Long, String, String)} 并传入数据库中的真实 documentId。
      *
      * @param sourceName 来源文件名
      * @param text       文档全文
@@ -67,7 +75,8 @@ public class KnowledgeChunker {
      */
     @Deprecated
     public List<Document> split(String sourceName, String text) {
-        return split(0L, sourceName, text);
+        long syntheticDocumentId = UUID.randomUUID().getMostSignificantBits() & Long.MAX_VALUE;
+        return split(syntheticDocumentId, sourceName, text);
     }
 
     /**
@@ -83,7 +92,8 @@ public class KnowledgeChunker {
             return List.of();
         }
         long docId = documentId == null ? 0L : documentId;
-        int overlapTokens = (int) Math.round(chunkSize * overlap);
+        // 重叠 token 数上限为 chunkSize / 2，避免尾部重叠吞掉整片导致切片无法推进
+        int overlapTokens = Math.min((int) Math.round(chunkSize * overlap), chunkSize / 2);
         List<Document> result = new ArrayList<>();
         int index = 0;
         for (Section section : sections(text)) {
@@ -231,11 +241,14 @@ public class KnowledgeChunker {
     }
 
     /**
-     * 取切片末尾约 overlapTokens 个 token 的文本作为下一片前缀
+     * 取切片末尾约 overlapTokens 个 token 的文本作为下一片前缀。
+     * <p>
+     * 若整个切片都不足 overlapTokens（尾部会等于上一片全文），返回空串而不是整片，
+     * 保证重叠不会把上一片完整复制到下一片。
      *
      * @param text          已输出切片
      * @param overlapTokens 重叠 token 数
-     * @return 尾部文本；无重叠返回空串
+     * @return 尾部文本；无重叠或尾部将覆盖整片时返回空串
      */
     private String tailOf(String text, int overlapTokens) {
         if (overlapTokens <= 0 || text.isEmpty()) {
@@ -255,7 +268,10 @@ public class KnowledgeChunker {
                 break;
             }
         }
-        return i <= 0 ? text : text.substring(i);
+        if (i <= 0) {
+            return "";
+        }
+        return text.substring(i).trim();
     }
 
     /**

@@ -33,15 +33,17 @@ public class KafkaErrorConfig {
     }
 
     /**
-     * 知识库切片器 Bean：供知识库任务消费者注入（切片大小与检索配置同源）
+     * 知识库切片器 Bean：供知识库任务消费者注入（切片大小、重叠比例与检索配置同源）
      * <p>
      * KnowledgeServiceImpl/KnowledgeVectorStore 内部仍自行 new 构建，此处仅补齐消费侧依赖，避免连带改动
      *
-     * @param aiProperties AI 配置（取切片大小）
+     * @param aiProperties AI 配置（取切片大小与重叠比例）
      * @return 知识库切片器
      */
     @Bean
     public KnowledgeChunker knowledgeChunker(AiProperties aiProperties) {
-        return new KnowledgeChunker(aiProperties.getRag().getChunkSize());
+        return new KnowledgeChunker(
+                aiProperties.getRag().getChunkSize(),
+                aiProperties.getRag().getChunkOverlap());
     }
 }

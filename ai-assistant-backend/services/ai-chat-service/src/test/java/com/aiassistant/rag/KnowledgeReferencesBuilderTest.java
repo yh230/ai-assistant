@@ -97,6 +97,19 @@ class KnowledgeReferencesBuilderTest {
     }
 
     @Test
+    void legacyDocumentsHonourMetadataDocumentId() {
+        Document doc = new Document("正文", Map.of("source", "a.md", "documentId", 42L, "chunkIndex", 3));
+        Document duplicate = new Document("正文2",
+                Map.of("source", "a.md", "documentId", 42L, "chunkIndex", 3));
+
+        String json = builder.build(List.of(doc, duplicate), 3);
+
+        // metadata 带真实 documentId/chunkIndex 时按 chunk 去重，不再退化为按列表下标区分
+        assertEquals(1, json.split("a\\.md", -1).length - 1);
+        assertFalse(json.contains("正文2"));
+    }
+
+    @Test
     void shouldSkipLegacyDocumentWithoutSource() {
         assertEquals("", builder.build(List.of(new Document("no-source")), 3));
     }

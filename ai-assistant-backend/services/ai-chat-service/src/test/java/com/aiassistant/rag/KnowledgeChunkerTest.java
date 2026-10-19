@@ -3,7 +3,9 @@ package com.aiassistant.rag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -98,13 +100,93 @@ class KnowledgeChunkerTest {
         assertTrue(chunker.split(1L, "a.md", null).isEmpty());
     }
 
+    @Test
+    void zeroOverlapDoesNotRepeatPreviousChunk() {
+        KnowledgeChunker noOverlap = new KnowledgeChunker(10, 0.0);
+        String first = "一二三四五六七八";
+        String second = "九十甲乙丙丁戊己";
+
+        List<Document> docs = noOverlap.split(5L, "无重叠.md", first + "\n\n" + second);
+
+        assertEquals(2, docs.size());
+        assertEquals(first, docs.get(0).getText());
+        assertEquals(second, docs.get(1).getText());
+    }
+
+    @Test
+    void oversizedOverlapIsClampedAndNeverDuplicatesWholeChunk() {
+        // overlap=5.0 应被收敛为 0.5，即最多 10/2=5 个 token
+        KnowledgeChunker hugeOverlap = new KnowledgeChunker(10, 5.0);
+        String first = "一二三四五六七八";
+        String second = "九十甲乙丙丁戊己";
+
+        List<Document> docs = hugeOverlap.split(6L, "大重叠.md", first + "\n\n" + second);
+
+        assertEquals(2, docs.size());
+        assertEquals(first, docs.get(0).getText());
+        String secondChunk = docs.get(1).getText();
+        assertTrue(secondChunk.startsWith("四五六七八"));
+        assertTrue(secondChunk.contains(second));
+        assertNotEquals(first, secondChunk);
+    }
+
+    @Test
+    void chunkShorterThanOverlapIsNotCopiedWholesale() {
+        KnowledgeChunker hugeOverlap = new KnowledgeChunker(10, 1.0);
+        String first = "一二三四";
+        String second = "五六七八九十甲乙";
+
+        List<Document> docs = hugeOverlap.split(7L, "短片.md", first + "\n\n" + second);
+
+        assertEquals(2, docs.size());
+        assertEquals(first, docs.get(0).getText());
+        assertEquals(second, docs.get(1).getText());
+    }
+
+    @Test
+    void everyParagraphIsPreservedInSomeChunk() {
+        KnowledgeChunker small = new KnowledgeChunker(12, 0.15);
+        String[] paragraphs = {
+                "门诊时间为周一至周五。",
+                "挂号可通过公众号办理。",
+                "缴费支持自助机与窗口。",
+                "取药请到一层药房窗口。"
+        };
+
+        List<Document> docs = small.split(8L, "全文.md", String.join("\n\n", paragraphs));
+
+        assertTrue(docs.size() > 1);
+        for (String paragraph : paragraphs) {
+            assertTrue(docs.stream().anyMatch(doc -> doc.getText().contains(paragraph)),
+                    "段落被丢弃: " + paragraph);
+        }
+    }
+
+    @Test
+    void nonPositiveChunkSizeFallsBackToOneToken() {
+        KnowledgeChunker zero = new KnowledgeChunker(0);
+        KnowledgeChunker negative = new KnowledgeChunker(-5, 0.5);
+
+        List<Document> docs = zero.split(9L, "小片.md", "门诊时间");
+
+        assertFalse(docs.isEmpty());
+        docs.forEach(doc -> assertFalse(doc.getText().isBlank()));
+        assertEquals("门诊时间", docs.stream().map(Document::getText).reduce("", String::concat));
+        assertFalse(negative.split(10L, "小片.md", "门诊时间").isEmpty());
+    }
+
     @SuppressWarnings("deprecation")
     @Test
-    void legacyOverloadUsesZeroDocumentId() {
-        List<Document> docs = chunker.split("a.md", "内容。");
+    void legacyOverloadGeneratesUniqueDocumentIdsPerCall() {
+        List<Document> first = chunker.split("a.md", "内容。");
+        List<Document> second = chunker.split("a.md", "内容。");
 
-        assertEquals(1, docs.size());
-        assertEquals("0:0", docs.get(0).getId());
-        assertEquals(0L, docs.get(0).getMetadata().get("documentId"));
+        Set<Long> documentIds = new HashSet<>();
+        first.forEach(doc -> documentIds.add(((Number) doc.getMetadata().get("documentId")).longValue()));
+        second.forEach(doc -> documentIds.add(((Number) doc.getMetadata().get("documentId")).longValue()));
+
+        assertEquals(2, documentIds.size());
+        assertTrue(documentIds.stream().allMatch(id -> id >= 0));
+        assertNotEquals(first.get(0).getId(), second.get(0).getId());
     }
 }

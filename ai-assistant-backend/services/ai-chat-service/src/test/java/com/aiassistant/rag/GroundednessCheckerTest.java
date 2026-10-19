@@ -61,6 +61,29 @@ class GroundednessCheckerTest {
     }
 
     @Test
+    void partialCoverageNearThresholdDecidesBothSides() {
+        // 20 个 ASCII 词，命中 7 个 → 覆盖率恰为 0.35
+        String answer = "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+                + "kilo lima mike november oscar papa quebec romeo sierra tango";
+        KnowledgeStore.ScoredChunk covered =
+                hit("alpha bravo charlie delta echo foxtrot golf");
+
+        assertTrue(checker.isGrounded(answer, List.of(covered), 0.34));
+        assertFalse(checker.isGrounded(answer, List.of(covered), 0.36));
+    }
+
+    @Test
+    void clampsThresholdIntoUnitInterval() {
+        KnowledgeStore.ScoredChunk covered = hit("门诊时间");
+
+        // 负阈值收敛为 0
+        assertTrue(checker.isGrounded("门诊时间", List.of(covered), -3.0));
+        // 超过 1 的阈值收敛为 1：全覆盖为 true，部分覆盖为 false
+        assertTrue(checker.isGrounded("门诊时间", List.of(covered), 5.0));
+        assertFalse(checker.isGrounded("今天天气", List.of(covered), 5.0));
+    }
+
+    @Test
     void trueWhenAnswerHasNoComparableFeatures() {
         assertTrue(checker.isGrounded("。。。", List.of(hit("门诊时间")), THRESHOLD));
     }

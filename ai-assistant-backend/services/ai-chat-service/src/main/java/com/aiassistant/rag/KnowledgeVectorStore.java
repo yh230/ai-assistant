@@ -47,11 +47,13 @@ public class KnowledgeVectorStore {
      * 构造器注入：初始化向量目录并加载存量向量文件
      *
      * @param embeddingModel 嵌入模型
-     * @param aiProperties   AI 配置（向量目录与切片大小）
+     * @param aiProperties   AI 配置（向量目录、切片大小与重叠比例）
      */
     public KnowledgeVectorStore(EmbeddingModel embeddingModel, AiProperties aiProperties) {
         this.embeddingModel = embeddingModel;
-        this.knowledgeChunker = new KnowledgeChunker(aiProperties.getRag().getChunkSize());
+        this.knowledgeChunker = new KnowledgeChunker(
+                aiProperties.getRag().getChunkSize(),
+                aiProperties.getRag().getChunkOverlap());
         this.vectorDir = Path.of(aiProperties.getRag().getVectorPath());
         createVectorDir();
         loadAll();

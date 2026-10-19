@@ -20,8 +20,9 @@ import java.util.Set;
  * 提供两个静态类型的入口，不做任何运行时类型分派（无需 {@code instanceof}）：
  * <ul>
  *   <li>{@link #build(List, int)}：过渡方法，接收旧的 {@link Document} 入参，
- *       内部转换为 {@link KnowledgeStore.ScoredChunk}（documentId=0、列表下标兜底 chunkIndex、
- *       score=0.0）后委托给 {@link #buildFromChunks(List, int)}。</li>
+ *       内部转换为 {@link KnowledgeStore.ScoredChunk}（metadata 存在 documentId 时取真实值，
+ *       否则为 0；缺失 chunkIndex 时以列表下标兜底；score=0.0）后委托给
+ *       {@link #buildFromChunks(List, int)}。</li>
  *   <li>{@link #buildFromChunks(List, int)}：新的 chunk 级方法，直接接收
  *       {@link KnowledgeStore.ScoredChunk}，保留真实 documentId/chunkIndex/score。</li>
  * </ul>
@@ -46,8 +47,8 @@ public class KnowledgeReferencesBuilder {
      * 构建引用来源 JSON（过渡方法，仅接收旧版 {@link Document}）。
      * <p>
      * 内部把每个 Document 转换为 {@link KnowledgeStore.ScoredChunk} 后委托
-     * {@link #buildFromChunks(List, int)}：documentId 固定为 0，chunkIndex 缺失时使用列表下标，
-     * score 固定为 0.0，section/source 取自 metadata。
+     * {@link #buildFromChunks(List, int)}：metadata 存在 documentId 时取真实值（缺失为 0），
+     * chunkIndex 缺失时使用列表下标，score 固定为 0.0，section/source 取自 metadata。
      * <p>
      * <b>Task 7 必须把调用方切换到 {@link #buildFromChunks(List, int)} 并删除本方法。</b>
      *

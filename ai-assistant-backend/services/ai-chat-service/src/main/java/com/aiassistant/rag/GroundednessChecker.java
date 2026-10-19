@@ -30,13 +30,14 @@ public class GroundednessChecker {
      *
      * @param answer    模型回答
      * @param hits      检索命中片段
-     * @param threshold 覆盖率阈值（0~1）
+     * @param threshold 覆盖率阈值（自动收敛到 [0,1]）
      * @return 覆盖率达到阈值返回 true；无命中、空回答或无有效特征时视为 true
      */
     public boolean isGrounded(String answer, List<KnowledgeStore.ScoredChunk> hits, double threshold) {
         if (hits == null || hits.isEmpty() || answer == null || answer.isBlank()) {
             return true;
         }
+        double effectiveThreshold = Math.min(1.0, Math.max(0.0, threshold));
         Set<String> answerGrams = grams(answer);
         if (answerGrams.isEmpty()) {
             return true;
@@ -49,7 +50,7 @@ public class GroundednessChecker {
             hitGrams.addAll(grams(hit.content()));
         }
         long matched = answerGrams.stream().filter(hitGrams::contains).count();
-        return (double) matched / answerGrams.size() >= threshold;
+        return (double) matched / answerGrams.size() >= effectiveThreshold;
     }
 
     /**
