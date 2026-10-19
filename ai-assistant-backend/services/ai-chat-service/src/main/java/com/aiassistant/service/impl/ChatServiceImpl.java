@@ -1,9 +1,12 @@
 package com.aiassistant.service.impl;
 
+import com.aiassistant.config.AiProperties;
 import com.aiassistant.config.AssistantProperties;
 import com.aiassistant.config.ChatClientFactory;
 import com.aiassistant.config.ChatModelRegistry;
 import com.aiassistant.config.ModelProperties;
+import com.aiassistant.config.ModelStreamExecutor;
+import com.aiassistant.config.SceneOptionsFactory;
 import com.aiassistant.dto.ChatRequest;
 import com.aiassistant.dto.ChatResponse;
 import com.aiassistant.dto.ModelInfo;
@@ -25,6 +28,7 @@ import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.security.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -32,6 +36,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
@@ -39,10 +44,12 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -99,9 +106,13 @@ public class ChatServiceImpl implements ChatService {
     // ==================== 依赖 ====================
 
     private final AssistantProperties assistantProperties;
+    private final AiProperties aiProperties;
     private final AssistantRoleService assistantRoleService;
     private final ChatClientFactory chatClientFactory;
     private final ChatModelRegistry chatModelRegistry;
+    private final ModelStreamExecutor modelStreamExecutor;
+    private final SceneOptionsFactory sceneOptionsFactory;
+    private final MeterRegistry meterRegistry;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final UserMemoryBuilder userMemoryBuilder;
@@ -155,7 +166,7 @@ public class ChatServiceImpl implements ChatService {
         List<Message> contextMessages = buildContextMessages(history);
         String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
                 snapshot.getUserId(), memoryIdentity(snapshot));
-        boolean aiEnabled = chatModelRegistry.isActive(modelId);
+        boolean aiEnabled = !chatModelRegistry.getFallbackChain(modelId).isEmpty();
 
         log.info("流式聊天 sessionId={}, roleId={}, modelId={}, aiEnabled={}, 历史消息数={}",
                 sessionId, roleId, modelId, aiEnabled, history.size());
@@ -208,7 +219,8 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 构建 AI 模型流式内容（逐 token 推送并累积，失败时降级本地引擎继续累积）。
+     * 构建 AI 模型流式内容：多模型故障转移 + 场景参数 + 空闲/总超时 + 用量计量，
+     * 逐 token 推送并累积，失败时降级本地引擎继续累积。
      *
      * @param ctx          聊天上下文
      * @param full         回复内容累积器（AI token 与降级 token 共用）
@@ -217,23 +229,98 @@ public class ChatServiceImpl implements ChatService {
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuffer full,
                                                             AtomicBoolean usedFallback) {
-        ChatClient client = chatClientFactory.getChatClient(ctx.modelId());
+        String scene = "chat";
+        List<String> chain = chatModelRegistry.getFallbackChain(ctx.modelId());
 
-        return client.prompt()
-                .system(ctx.systemPrompt())
-                .messages(ctx.messages())
-                .stream()
-                .content()
+        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
+            long startNanos = System.nanoTime();
+            AtomicBoolean firstToken = new AtomicBoolean(true);
+            return Flux.defer(() -> {
+                        meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
+                        return chatClientFactory.getChatClient(candidate).prompt()
+                                .system(ctx.systemPrompt())
+                                .messages(ctx.messages())
+                                .options(sceneOptionsFactory.options(scene))
+                                .stream()
+                                .chatResponse();
+                    })
+                    .doOnNext(response -> recordUsage(candidate, scene, response))
+                    .map(this::extractText)
+                    .filter(StringUtils::hasText)
+                    .doOnNext(token -> {
+                        if (firstToken.compareAndSet(true, false)) {
+                            meterRegistry.timer("ai.model.latency", "model", candidate)
+                                    .record(Duration.ofNanos(System.nanoTime() - startNanos));
+                        }
+                    })
+                    .doOnError(ex -> meterRegistry.counter("ai.model.failures", "model", candidate,
+                            "reason", failureReason(ex)).increment());
+        });
+
+        return tokens
                 .publishOn(Schedulers.boundedElastic())
                 .map(token -> {
                     full.append(token);
                     return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
                 })
+                .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
+                .take(Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds()))
                 .onErrorResume(ex -> {
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
                     return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
                 });
+    }
+
+    /**
+     * 从模型响应中提取正文（工具调用等无文本片段返回空串，由调用方过滤）。
+     *
+     * @param response 模型响应
+     * @return 正文文本
+     */
+    private String extractText(org.springframework.ai.chat.model.ChatResponse response) {
+        if (response == null || response.getResult() == null || response.getResult().getOutput() == null
+                || response.getResult().getOutput().getText() == null) {
+            return "";
+        }
+        return response.getResult().getOutput().getText();
+    }
+
+    /**
+     * 记录模型用量指标（提示/补全 token）；流式响应未携带用量时静默跳过。
+     *
+     * @param modelId  模型ID
+     * @param scene    场景标识
+     * @param response 模型响应
+     */
+    private void recordUsage(String modelId, String scene, org.springframework.ai.chat.model.ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return;
+        }
+        Usage usage = response.getMetadata().getUsage();
+        if (usage == null) {
+            return;
+        }
+        Integer promptTokens = usage.getPromptTokens();
+        if (promptTokens != null && promptTokens > 0) {
+            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "prompt")
+                    .increment(promptTokens);
+        }
+        Integer completionTokens = usage.getCompletionTokens();
+        if (completionTokens != null && completionTokens > 0) {
+            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "completion")
+                    .increment(completionTokens);
+        }
+    }
+
+    /**
+     * 归一化失败原因标签（异常类型名），用于失败计数维度。
+     *
+     * @param ex 异常
+     * @return 失败原因标签
+     */
+    private String failureReason(Throwable ex) {
+        return ex.getClass().getSimpleName();
     }
 
     /**
