@@ -18,7 +18,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -45,6 +45,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
     private final UserClient userClient;
     private final DataScopeResolver dataScopeResolver;
     private final ScheduleLock scheduleLock;
+    private final TransactionTemplate txTemplate;
 
     /**
      * 查询号源池列表（按当前登录人数据范围过滤）
@@ -113,13 +114,15 @@ public class NumberSourceServiceImpl implements NumberSourceService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void generateForSchedule(DoctorSchedule schedule) {
-        // 与预约抢号共用排班锁，避免重生成按旧快照算 maxSeq 后与并发占号互相覆盖
-        scheduleLock.withLock(schedule.getId(), () -> {
-            doGenerateForSchedule(schedule);
-            return null;
-        });
+        // 与预约抢号共用排班锁，避免重生成按旧快照算 maxSeq 后与并发占号互相覆盖。
+        // 锁必须覆盖事务提交：事务由 TransactionTemplate 在锁内开启/提交，提交后才释放锁；
+        // 若在外层事务中调用（save/update），内层 REQUIRED 直接加入同一事务，仍由外层锁兜底。
+        scheduleLock.withLock(schedule.getId(), () ->
+                txTemplate.execute(status -> {
+                    doGenerateForSchedule(schedule);
+                    return null;
+                }));
     }
 
     /**

@@ -29,7 +29,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -60,6 +60,7 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     private final RegistrationMapper registrationMapper;
     private final RegistrationEventPublisher eventPublisher;
     private final ScheduleLock scheduleLock;
+    private final TransactionTemplate txTemplate;
 
     /**
      * 分页查询出诊排班（按当前登录人数据范围过滤）
@@ -95,7 +96,6 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public ScheduleVO save(ScheduleSaveDTO dto) {
         DataScope scope = dataScopeResolver.resolveRequired();
         UserBriefDTO doctor = loadDoctor(dto.getDoctorUserId());
@@ -107,21 +107,27 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         s.setRegisteredCount(0);
         s.setCreateTime(LocalDateTime.now());
         s.setUpdateTime(LocalDateTime.now());
-        try {
-            scheduleMapper.insert(s);
-        } catch (DuplicateKeyException e) {
-            // 并发插入穿透：uk_doctor_active_slot 唯一索引兜底
-            throw new BusinessException("该医生该时段已有排班");
-        }
-        numberSourceService.generateForSchedule(s);
-        return enrich(List.of(s)).get(0);
+        // 号源槽锁：同医生+日期+时段串行化“插入排班 + 生成号源”，锁覆盖事务提交；
+        // 号源再生内部再取排班ID锁（与预约抢号共用），其 REQUIRED 事务加入当前事务。
+        String slotKey = ScheduleLock.SCHEDULE_SLOT_LOCK_PREFIX
+                + s.getDoctorUserId() + ":" + s.getScheduleDate() + ":" + s.getPeriod();
+        return scheduleLock.withLock(slotKey, () -> txTemplate.execute(status -> {
+            try {
+                scheduleMapper.insert(s);
+            } catch (DuplicateKeyException e) {
+                // 并发插入穿透：uk_doctor_active_slot 唯一索引兜底
+                throw new BusinessException("该医生该时段已有排班");
+            }
+            numberSourceService.generateForSchedule(s);
+            return enrich(List.of(s)).get(0);
+        }));
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public ScheduleVO update(Long id, ScheduleSaveDTO dto) {
-        // 锁内完成 select + 校验 + 更新 + 号源再生；再生对同键重入（Redisson RLock 线程可重入）
-        DoctorSchedule updated = scheduleLock.withLock(id, () -> {
+        // 锁覆盖事务提交：先取锁 → 事务内完成 select + 校验 + 更新 + 号源再生 → 提交 → 释放锁；
+        // 再生对同键重入（Redisson RLock 线程可重入，外层持锁计数保证提交后才真正释放）。
+        DoctorSchedule updated = scheduleLock.withLock(id, () -> txTemplate.execute(status -> {
             DoctorSchedule s = requireSchedule(id);
             DataScope scope = dataScopeResolver.resolveRequired();
             scope.assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
@@ -135,20 +141,24 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
                     || !Objects.equals(s.getTotalLimit(), dto.getTotalLimit());
             copyFromDto(s, dto, doctor);
             s.setUpdateTime(LocalDateTime.now());
-            scheduleMapper.updateById(s);
+            try {
+                scheduleMapper.updateById(s);
+            } catch (DuplicateKeyException e) {
+                // 改派/改期撞上 uk_doctor_active_slot：与新增保持一致的友好提示
+                throw new BusinessException("该医生该时段已有排班");
+            }
             if (scheduleChanged) {
                 numberSourceService.generateForSchedule(s);
             }
             return s;
-        });
+        }));
         return enrich(List.of(updated)).get(0);
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void remove(Long id) {
-        // 与预约抢号共用排班锁：停用与释放空闲号源需原子完成
-        scheduleLock.withLock(id, () -> {
+        // 与预约抢号共用排班锁：停用与释放空闲号源需原子完成，锁覆盖事务提交
+        scheduleLock.withLock(id, () -> txTemplate.execute(status -> {
             DoctorSchedule s = requireSchedule(id);
             dataScopeResolver.resolveRequired()
                     .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
@@ -167,12 +177,12 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
                             RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
             eventPublisher.publishScheduleCancelled(s, affected);
             return null;
-        });
+        }));
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void generateSources(Long scheduleId) {
+        // 校验在锁外只读完成；实际再生由 generateForSchedule 内部取排班锁并用 TransactionTemplate 提交
         DoctorSchedule s = requireSchedule(scheduleId);
         dataScopeResolver.resolveRequired()
                 .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");

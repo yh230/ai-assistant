@@ -16,15 +16,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 排班锁组件单测（锁键、等锁失败快速抛出、异常路径释放）
+ * 排班锁组件单测（锁键、看门狗等锁签名、等锁失败快速抛出、异常路径释放）
  *
  * @author yh
  * @date 2026-10-19
@@ -43,21 +43,37 @@ class ScheduleLockTest {
     @Test
     void executesBodyAndUnlocksOnSuccess() throws InterruptedException {
         when(redissonClient.getLock("lock:schedule:7")).thenReturn(lock);
-        when(lock.tryLock(3, 15, TimeUnit.SECONDS)).thenReturn(true);
+        // 看门狗模式：仅传等待时长，不传租期
+        when(lock.tryLock(3, TimeUnit.SECONDS)).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
 
         String result = scheduleLock.withLock(7L, () -> "ok");
 
         assertEquals("ok", result);
         verify(redissonClient).getLock("lock:schedule:7");
-        verify(lock).tryLock(3, 15, TimeUnit.SECONDS);
+        verify(lock).tryLock(3, TimeUnit.SECONDS);
+        verify(lock).unlock();
+    }
+
+    @Test
+    void executesBodyWithExplicitLockKey() throws InterruptedException {
+        String slotKey = ScheduleLock.SCHEDULE_SLOT_LOCK_PREFIX + "200:2026-10-20:1";
+        when(redissonClient.getLock(slotKey)).thenReturn(lock);
+        when(lock.tryLock(3, TimeUnit.SECONDS)).thenReturn(true);
+        when(lock.isHeldByCurrentThread()).thenReturn(true);
+
+        String result = scheduleLock.withLock(slotKey, () -> "slot-ok");
+
+        assertEquals("slot-ok", result);
+        verify(redissonClient).getLock("lock:schedule-slot:200:2026-10-20:1");
+        verify(lock).tryLock(3, TimeUnit.SECONDS);
         verify(lock).unlock();
     }
 
     @Test
     void throwsBusyWhenLockNotAcquired() throws InterruptedException {
         when(redissonClient.getLock("lock:schedule:7")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+        when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(false);
         AtomicBoolean executed = new AtomicBoolean(false);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -75,7 +91,7 @@ class ScheduleLockTest {
     @Test
     void unlocksWhenBodyThrows() throws InterruptedException {
         when(redissonClient.getLock("lock:schedule:8")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(lock.tryLock(3, TimeUnit.SECONDS)).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
 
         assertThrows(IllegalStateException.class,
@@ -89,7 +105,7 @@ class ScheduleLockTest {
     @Test
     void restoresInterruptFlagWhenInterruptedWhileWaiting() throws InterruptedException {
         when(redissonClient.getLock("lock:schedule:9")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class)))
+        when(lock.tryLock(anyLong(), any(TimeUnit.class)))
                 .thenThrow(new InterruptedException("interrupted"));
 
         try {
@@ -107,14 +123,14 @@ class ScheduleLockTest {
     void supportsNestedAcquireForUpdateThenRegenerate() throws InterruptedException {
         // update 持锁后调用号源再生（同键）：Redisson RLock 线程可重入，两次调用均应成功
         when(redissonClient.getLock("lock:schedule:10")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(lock.tryLock(3, TimeUnit.SECONDS)).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
 
         String result = scheduleLock.withLock(10L,
                 () -> scheduleLock.withLock(10L, () -> "done"));
 
         assertEquals("done", result);
-        verify(lock, times(2)).tryLock(3, 15, TimeUnit.SECONDS);
+        verify(lock, times(2)).tryLock(3, TimeUnit.SECONDS);
         verify(lock, times(2)).unlock();
     }
 }
