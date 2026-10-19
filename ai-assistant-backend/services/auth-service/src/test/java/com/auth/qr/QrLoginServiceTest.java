@@ -5,6 +5,7 @@ import com.auth.qr.vo.QrCreateVO;
 import com.auth.qr.vo.QrPollVO;
 import com.auth.vo.LoginVO;
 import com.common.exception.BusinessException;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -34,6 +35,7 @@ class QrLoginServiceTest {
     private StringRedisTemplate redis;
     private ValueOperations<String, String> ops;
     private LoginIssuer issuer;
+    private SimpleMeterRegistry meterRegistry;
     private QrLoginService service;
 
     @BeforeEach
@@ -42,8 +44,9 @@ class QrLoginServiceTest {
         redis = mock(StringRedisTemplate.class);
         ops = mock(ValueOperations.class);
         issuer = mock(LoginIssuer.class);
+        meterRegistry = new SimpleMeterRegistry();
         when(redis.opsForValue()).thenReturn(ops);
-        service = new QrLoginService(redis, issuer, new QrProperties());
+        service = new QrLoginService(redis, issuer, new QrProperties(), meterRegistry);
     }
 
     /**
@@ -234,8 +237,9 @@ class QrLoginServiceTest {
         assertThatThrownBy(() -> service.poll("scene1"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("issue failed");
-        // 场景已被脚本原子消费，不删除、不复活
+        // 场景已被脚本原子消费，不删除、不复活；签发失败计入指标
         verify(redis, never()).delete(anyString());
         verify(ops, never()).set(anyString(), anyString(), any(Duration.class));
+        assertThat(meterRegistry.counter("ai.qr.issue.failures").count()).isEqualTo(1.0);
     }
 }

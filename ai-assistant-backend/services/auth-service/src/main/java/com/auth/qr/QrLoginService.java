@@ -8,6 +8,7 @@ import com.common.exception.BusinessException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -65,6 +66,7 @@ public class QrLoginService {
     private final StringRedisTemplate redis;
     private final LoginIssuer loginIssuer;
     private final QrProperties props;
+    private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -111,7 +113,8 @@ public class QrLoginService {
         try {
             login = loginIssuer.issue(identity, userId);
         } catch (RuntimeException e) {
-            // 场景已被 Lua 脚本原子消费，签发失败时不复活场景，仅记录告警并向上抛出
+            // 场景已被 Lua 脚本原子消费，签发失败时不复活场景，仅记录告警与指标并向上抛出
+            meterRegistry.counter("ai.qr.issue.failures").increment();
             log.warn("扫码场景已消费但令牌签发失败，sceneId={}", sceneId, e);
             throw e;
         }

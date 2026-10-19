@@ -129,7 +129,8 @@ class RegistrationIdempotencyTest {
     }
 
     /**
-     * Redis 键已被占用但查不到进行中原单（未落库/已清理）：提示「请勿重复提交」并回收窗口键
+     * Redis 键已被占用但查不到进行中原单（可能属于在途首次请求）：提示「请勿重复提交」，
+     * 且不得删除键（避免误删在途请求的占位键），交由 5 分钟 TTL 自然过期
      */
     @Test
     void duplicateAnonymousSubmitWithoutExistingThrows() {
@@ -141,7 +142,7 @@ class RegistrationIdempotencyTest {
                 () -> registrationService.createAppointment(anonymousDto()));
         assertEquals("请勿重复提交", ex.getMessage());
         verify(registrationMapper, never()).insert(any(Registration.class));
-        verify(bucket).delete();
+        verify(bucket, never()).delete();
     }
 
     /**
@@ -234,7 +235,8 @@ class RegistrationIdempotencyTest {
     }
 
     /**
-     * 终态单（已取消/已过期/已退号）残留唯一键时不得作为成功重复返回：拒绝并回收窗口键
+     * 终态单（已取消/已过期/已退号）残留唯一键时不得作为成功重复返回：拒绝；
+     * 键可能属于在途首次请求，故不回收，等待 TTL 过期
      */
     @Test
     void terminalRegistrationNotReturnedAsDuplicate() {
@@ -248,7 +250,7 @@ class RegistrationIdempotencyTest {
 
         assertEquals("请勿重复提交", ex.getMessage());
         verify(registrationMapper, never()).insert(any(Registration.class));
-        verify(bucket).delete();
+        verify(bucket, never()).delete();
         // 回查必须带状态过滤（RESERVED/CALLED），终态单不会被返回
         assertTrue(selectOneSqlSegment().toLowerCase().contains("status"));
     }
@@ -382,6 +384,23 @@ class RegistrationIdempotencyTest {
         assertTrue(expired);
         assertTrue(updateSqlSet().toLowerCase().contains("idempotency"));
         verify(bucket).delete();
+    }
+
+    /**
+     * 患者自助查询固定追加 LIMIT 50，避免无界 selectList
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void patientQueryAppendsLimit50() {
+        when(registrationMapper.selectList(any())).thenReturn(List.of());
+
+        registrationService.patientQuery(PHONE, ID_CARD, null);
+
+        ArgumentCaptor<Wrapper<Registration>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(registrationMapper).selectList(captor.capture());
+        LambdaQueryWrapper<Registration> qw = (LambdaQueryWrapper<Registration>) captor.getValue();
+        // getSqlSegment = 条件片段 + lastSql；断言 last SQL 恰为 LIMIT 50
+        assertTrue(qw.getSqlSegment().trim().endsWith("LIMIT 50"));
     }
 
     // ===================== 测试辅助 =====================

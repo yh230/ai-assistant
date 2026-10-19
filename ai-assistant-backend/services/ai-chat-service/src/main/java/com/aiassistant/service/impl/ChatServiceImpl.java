@@ -179,7 +179,8 @@ public class ChatServiceImpl implements ChatService {
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
-        StringBuilder full = new StringBuilder();
+        // 取消回调可能在其他线程读取累积器，使用线程安全的 StringBuffer
+        StringBuffer full = new StringBuffer();
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
@@ -214,7 +215,7 @@ public class ChatServiceImpl implements ChatService {
      * @param usedFallback 降级标记
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuilder full,
+    private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuffer full,
                                                             AtomicBoolean usedFallback) {
         ChatClient client = chatClientFactory.getChatClient(ctx.modelId());
 
@@ -242,7 +243,7 @@ public class ChatServiceImpl implements ChatService {
      * @param full 回复内容累积器
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuilder full) {
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuffer full) {
         List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
         return Flux.fromIterable(chunks)
                 .delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS))

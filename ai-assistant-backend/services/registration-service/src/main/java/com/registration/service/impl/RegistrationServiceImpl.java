@@ -143,8 +143,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             if (!bucket.trySet("1", IDEMPOTENCY_TTL_MINUTES, TimeUnit.MINUTES)) {
                 Registration existing = findActiveByIdempotencyKey(idempotencyKey);
                 if (existing == null) {
-                    // 终态单（已取消/已过期/已退号）残留唯一键或原单尚未落库：回收窗口键并拒绝
-                    releaseIdempotencyKey(idempotencyKey);
+                    // 键可能属于尚未落库的在途首次请求：不得删除，等待 5 分钟窗口自然过期
                     throw new BusinessException("请勿重复提交");
                 }
                 return enrichSafe(List.of(existing)).get(0);
@@ -342,7 +341,8 @@ public class RegistrationServiceImpl implements RegistrationService {
             qw.eq(Registration::getPatientPhone, phone);
             qw.eq(Registration::getPatientIdCard, idCard);
         }
-        qw.orderByDesc(Registration::getCreateTime);
+        // 患者自助查询按创建时间倒序，硬上限 50 条，避免无界 selectList 拖垮接口
+        qw.orderByDesc(Registration::getCreateTime).last("LIMIT 50");
         return enrich(registrationMapper.selectList(qw));
     }
 

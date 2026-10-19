@@ -237,7 +237,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
-        StringBuilder full = new StringBuilder();
+        StringBuffer full = new StringBuffer();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
                 ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, true))
                 : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
@@ -279,7 +279,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param blocked   输出侧拦截标记
      * @return 落库完成信号
      */
-    private Mono<Void> buildPersistMono(PatientChatContext ctx, StringBuilder full, AtomicBoolean persisted,
+    private Mono<Void> buildPersistMono(PatientChatContext ctx, StringBuffer full, AtomicBoolean persisted,
                                         AtomicBoolean fallback, AtomicBoolean blocked) {
         return Mono.defer(() -> {
             if (!persisted.compareAndSet(false, true)) {
@@ -339,7 +339,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param tools    本次请求装配的工具回调列表
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuilder full,
+    private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuffer full,
                                                              AtomicBoolean fallback, List<ToolCallback> tools) {
         ChatClient client = chatClientFactory.getChatClientWithTools(
                 assistantProperties.resolveModelId(null), tools);
@@ -380,7 +380,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param full 完整回复内容累积器
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(PatientChatContext ctx, StringBuilder full) {
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(PatientChatContext ctx, StringBuffer full) {
         String localReply = generateLocalResponse(ctx.userMessage());
         List<String> chunks = splitIntoChunks(localReply, ChatConstants.LOCAL_CHUNK_SIZE);
         return Flux.fromIterable(chunks)
@@ -412,7 +412,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param blocked 输出侧拦截标记（供落库正文与 references 事件下发判定）
      * @return 命中时输出 error 事件流，未命中则为空流
      */
-    private Mono<ServerSentEvent<String>> outputSafetyGuard(StringBuilder full, AtomicBoolean blocked) {
+    private Mono<ServerSentEvent<String>> outputSafetyGuard(StringBuffer full, AtomicBoolean blocked) {
         return Mono.defer(() -> {
             String body = full.toString();
             if (safetyFilter.blockedInput(body)) {
@@ -436,7 +436,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param persisted 已持久化标记
      * @param blocked   输出侧拦截标记
      */
-    private void handleClientCancel(String sessionId, StringBuilder full, AtomicBoolean persisted,
+    private void handleClientCancel(String sessionId, StringBuffer full, AtomicBoolean persisted,
                                     AtomicBoolean blocked) {
         log.info("SSE 客户端断开: sessionId={}", sessionId);
         if (persisted.compareAndSet(false, true) && (blocked.get() || full.length() > 0)) {
@@ -529,7 +529,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
-        StringBuilder full = new StringBuilder();
+        StringBuffer full = new StringBuffer();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
                 ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, false))
                 : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
