@@ -192,8 +192,8 @@ CREATE TABLE IF NOT EXISTS doctor_schedule (
   create_time      DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   update_time      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_schedule (doctor_user_id, schedule_date, period),
   UNIQUE KEY uk_doctor_active_slot (active_slot),
+  KEY idx_doctor_date (doctor_user_id, schedule_date),
   KEY idx_hospital (hospital_id),
   KEY idx_dept (department_id),
   KEY idx_date (schedule_date)

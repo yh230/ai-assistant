@@ -3,12 +3,17 @@
 -- 适用库：system_db / hospital_db / registration_db / chat_db
 -- 说明：
 --   1. 全新环境直接执行 sql/init.sql 即可（已包含下列全部列与索引），无需本脚本。
---   2. 存量环境按顺序执行本脚本；重复执行不会报错（列/索引存在则跳过）。
+--   2. 存量环境按顺序执行本脚本；重复执行不会因对象已存在而报错（列/索引存在则跳过）。
 --   3. 脚本开头的两个检查 SELECT 用于发现重复数据：若结果非空，请先人工清理，
 --      否则唯一键 uk_doctor_active_slot / uk_schedule_seq 的创建会失败。
 --      建议首次执行前先单独运行这两个 SELECT（预期为空），清理后再执行脚本主体。
---   4. 本脚本只做结构变更，不改动任何业务数据。
---   5. 开头的检查 SELECT 直接引用 registration_db 的表，若目标库/表尚未创建
+--   4. 若未先清理重复数据，唯一键的 ALTER 会报错，mysql 客户端默认遇错即退出
+--      （不会继续执行后续语句）。正确处理方式是：清理重复数据后，重新完整执行本脚本
+--      （脚本幂等，已完成的步骤会自动跳过）。
+--   5. 本脚本只做结构变更，不改动任何业务数据。
+--   6. 创建存储过程需要 CREATE ROUTINE 权限（以及 ALTER / INDEX / ALTER ROUTINE 等），
+--      执行账号不足时请先由 DBA 授权；脚本首尾的 DROP PROCEDURE 同样需要该权限。
+--   7. 开头的检查 SELECT 直接引用 registration_db 的表，若目标库/表尚未创建
 --      （即全新环境），请跳过本脚本、直接执行 sql/init.sql。
 -- =============================================================
 
@@ -30,9 +35,14 @@ HAVING COUNT(*) > 1;
 
 -- -------------------------------------------------------------
 -- 幂等辅助过程：列 / 索引不存在且表存在时才执行 DDL
+-- 注意：CREATE PROCEDURE 必须先有默认库，故先切换到 registration_db
+--       （本脚本所有对象均以 库名.表名 全限定方式引用，切换默认库不影响后续 DDL）。
 -- -------------------------------------------------------------
+USE registration_db;
+
 DROP PROCEDURE IF EXISTS add_column_if_missing;
 DROP PROCEDURE IF EXISTS add_index_if_missing;
+DROP PROCEDURE IF EXISTS drop_index_if_exists;
 
 DELIMITER $$
 
@@ -58,6 +68,18 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
                         WHERE table_schema = db_name AND table_name = tbl AND index_name = idx) THEN
         SET @ddl = CONCAT('ALTER TABLE `', db_name, '`.`', tbl, '` ADD ', ddl);
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END$$
+
+CREATE PROCEDURE drop_index_if_exists(
+    IN db_name VARCHAR(64), IN tbl VARCHAR(64), IN idx VARCHAR(64))
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.statistics
+                WHERE table_schema = db_name AND table_name = tbl AND index_name = idx) THEN
+        SET @ddl = CONCAT('ALTER TABLE `', db_name, '`.`', tbl, '` DROP INDEX `', idx, '`');
         PREPARE stmt FROM @ddl;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
@@ -105,11 +127,18 @@ CALL add_index_if_missing('registration_db', 'registration', 'idx_patient_day',
 -- 5. registration_db.doctor_schedule：启用排班唯一槽位（生成列 + 唯一键）
 --    生成列在 status=1 时取 doctor_user_id-schedule_date-period，停用时为 NULL，
 --    因此停用排班不参与唯一性约束。需先清理重复启用排班（见脚本开头检查 1）。
+--    同时删除历史遗留的跨状态唯一键 uk_schedule（否则"停用后再建同日同时段排班"
+--    仍会被它拦截），并以非唯一查询索引 idx_doctor_date 替代。
+--    顺序：先加生成列/唯一键（此时旧唯一键仍在，可双重校验无重复），
+--          再删除 uk_schedule，最后补普通索引。
 -- -------------------------------------------------------------
 CALL add_column_if_missing('registration_db', 'doctor_schedule', 'active_slot',
     '`active_slot` VARCHAR(128) GENERATED ALWAYS AS (IF(`status` = 1, CONCAT(`doctor_user_id`, ''-'', `schedule_date`, ''-'', `period`), NULL)) STORED COMMENT ''启用排班唯一槽位''');
 CALL add_index_if_missing('registration_db', 'doctor_schedule', 'uk_doctor_active_slot',
     'UNIQUE KEY `uk_doctor_active_slot` (`active_slot`)');
+CALL drop_index_if_exists('registration_db', 'doctor_schedule', 'uk_schedule');
+CALL add_index_if_missing('registration_db', 'doctor_schedule', 'idx_doctor_date',
+    'KEY `idx_doctor_date` (`doctor_user_id`, `schedule_date`)');
 
 -- -------------------------------------------------------------
 -- 6. registration_db.number_source：号源池唯一序号
@@ -120,7 +149,7 @@ CALL add_index_if_missing('registration_db', 'number_source', 'uk_schedule_seq',
 
 DROP PROCEDURE IF EXISTS add_column_if_missing;
 DROP PROCEDURE IF EXISTS add_index_if_missing;
-
+DROP PROCEDURE IF EXISTS drop_index_if_exists;
 -- -------------------------------------------------------------
 -- 事后自检：应返回 5 行新增列
 -- -------------------------------------------------------------
@@ -133,11 +162,21 @@ SELECT table_schema, table_name, column_name, column_type
  ORDER BY table_schema, table_name, column_name;
 
 -- -------------------------------------------------------------
--- 事后自检：应返回 7 行新增索引
+-- 事后自检：应返回 8 行新增索引
+-- （uk_schedule 已被删除，不在预期结果内；idx_doctor_date 为新增的普通索引）
 -- -------------------------------------------------------------
 SELECT table_schema, table_name, index_name, non_unique
   FROM information_schema.statistics
- WHERE (table_schema = 'registration_db' AND index_name IN ('uk_registration_idem', 'idx_expire_status', 'idx_patient_day', 'uk_doctor_active_slot', 'uk_schedule_seq'))
+ WHERE (table_schema = 'registration_db' AND index_name IN ('uk_registration_idem', 'idx_expire_status', 'idx_patient_day', 'uk_doctor_active_slot', 'idx_doctor_date', 'uk_schedule_seq'))
     OR (table_schema = 'chat_db'         AND index_name IN ('idx_hospital_status', 'idx_session_created'))
  GROUP BY table_schema, table_name, index_name, non_unique
  ORDER BY table_schema, table_name, index_name;
+
+-- -------------------------------------------------------------
+-- 事后自检：uk_schedule 应已不存在（期望返回 0 行）
+-- -------------------------------------------------------------
+SELECT table_schema, table_name, index_name
+  FROM information_schema.statistics
+ WHERE table_schema = 'registration_db'
+   AND table_name = 'doctor_schedule'
+   AND index_name = 'uk_schedule';
