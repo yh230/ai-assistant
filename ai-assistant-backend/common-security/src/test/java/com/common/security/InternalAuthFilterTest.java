@@ -1,0 +1,87 @@
+package com.common.security;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 内部调用认证过滤器测试：令牌校验与常量时间比较的边界行为
+ *
+ * @author yh
+ * @date 2026-10-19
+ */
+class InternalAuthFilterTest {
+
+    private static final String TOKEN = "expected-token-0123456789abcdef";
+
+    private final InternalAuthFilter filter = new InternalAuthFilter(TOKEN, new ObjectMapper());
+
+    @Test
+    void rejectsWrongToken() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/inner/user/1");
+        request.addHeader("X-Internal-Token", "wrong");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(403, response.getStatus());
+    }
+
+    @Test
+    void passesCorrectToken() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/inner/user/1");
+        request.addHeader("X-Internal-Token", TOKEN);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+        filter.doFilter(request, response, chain);
+        assertEquals(200, response.getStatus());
+    }
+
+    @Test
+    void rejectsMissingToken() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/inner/user/1");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(403, response.getStatus());
+    }
+
+    @Test
+    void rejectsDifferentLengthToken() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/inner/user/1");
+        request.addHeader("X-Internal-Token", TOKEN + "-suffix");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(403, response.getStatus());
+    }
+
+    @Test
+    void rejectsWhenConfiguredTokenIsBlank() throws Exception {
+        InternalAuthFilter blankFilter = new InternalAuthFilter("", new ObjectMapper());
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/inner/user/1");
+        request.addHeader("X-Internal-Token", "");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        blankFilter.doFilter(request, response, new MockFilterChain());
+        assertEquals(403, response.getStatus());
+    }
+
+    @Test
+    void skipsCheckForNonInnerPath() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/user/1");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(200, response.getStatus());
+    }
+
+    @Test
+    void forbiddenResponseKeepsResultJsonBody() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/inner/user/1");
+        request.addHeader("X-Internal-Token", "wrong");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(403, response.getStatus());
+        assertTrue(response.getContentAsString().contains("权限不足，禁止访问"));
+    }
+}
