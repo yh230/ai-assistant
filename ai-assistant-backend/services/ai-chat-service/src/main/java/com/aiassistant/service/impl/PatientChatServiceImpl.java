@@ -26,6 +26,7 @@ import com.aiassistant.service.PatientChatService;
 import com.aiassistant.service.PendingActionService;
 import com.aiassistant.service.support.ChatMessagePersister;
 import com.aiassistant.service.support.ChatPersistContent;
+import com.aiassistant.tool.GuardedToolCallback;
 import com.aiassistant.tool.PatientTools;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
@@ -337,20 +338,40 @@ public class PatientChatServiceImpl implements PatientChatService {
 
     /**
      * 装配患者工具回调节点：仅导诊会话装配；确认续答链路（includeWriteTools=false）排除写工具，
-     * 避免确认后续答再次签发待确认操作
+     * 避免确认后续答再次签发待确认操作。
+     * <p>
+     * 每个回调再包一层 {@link GuardedToolCallback}：本次请求内所有工具共享一个剩余次数计数器
+     * （上限取 {@code ai.chat.tool-max-iterations}），单次调用超时取 {@code ai.chat.tool-timeout-seconds}，
+     * 超限/超时/异常统一转为结构化错误 JSON 并记录 {@code ai.tool.calls} 指标。
+     * 写工具识别基于包装后透传的 {@code getToolDefinition().name()}，不因包装失效。
      *
      * @param ctx               患者聊天上下文
      * @param includeWriteTools 是否包含写工具（普通导诊链路为 true，确认续答为 false）
-     * @return 工具回调列表
+     * @return 工具回调列表（已做安全包装）
      */
     private List<ToolCallback> resolvePatientToolCallbacks(PatientChatContext ctx, boolean includeWriteTools) {
         if (!TYPE_TRIAGE.equals(ctx.session().getSessionType())) {
             return List.of();
         }
+        // 每次请求独立计数器：同一次回答内所有工具累计调用次数受同一上限约束
+        AtomicInteger remainingToolCalls = new AtomicInteger(resolveToolMaxIterations());
+        int toolTimeoutSeconds = aiProperties.getChat().getToolTimeoutSeconds();
         return Arrays.stream(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
                 .filter(callback -> includeWriteTools
                         || !WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()))
+                .map(callback -> (ToolCallback) new GuardedToolCallback(callback, remainingToolCalls,
+                        toolTimeoutSeconds, meterRegistry))
                 .toList();
+    }
+
+    /**
+     * 解析单次请求工具调用次数上限（配置非正时回退 5 次，避免关闭工具能力）
+     *
+     * @return 工具调用次数上限
+     */
+    private int resolveToolMaxIterations() {
+        int configured = aiProperties.getChat().getToolMaxIterations();
+        return configured > 0 ? configured : 5;
     }
 
     /**
