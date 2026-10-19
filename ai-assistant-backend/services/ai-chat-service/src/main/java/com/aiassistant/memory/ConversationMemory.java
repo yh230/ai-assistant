@@ -13,6 +13,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -23,7 +24,10 @@ import java.util.List;
  *     <li><b>token 预算</b>：以 {@code ai.chat.context-token-budget} 为上限估算历史消息 token，
  *         未超预算时全部历史进入上下文。</li>
  *     <li><b>超预算压缩</b>：保留最近消息（占预算 70%），更早的消息用启发式摘要替代；
- *         摘要不调用模型，仅取早期用户消息片段拼接，并持久化到会话。</li>
+ *         摘要不调用模型，仅取早期（最近窗口之前）用户消息中<b>最后</b> 8 条片段拼接，并持久化到会话。</li>
+ *     <li><b>摘要复用</b>：已有摘要且无新进入早期区（{@code createdAt > summaryUpdatedAt}）的消息时直接复用，
+ *         不再写库；出现新的早期消息才重新生成并刷新摘要时间戳。</li>
+ *     <li><b>预算计入摘要</b>：最近消息预算先扣除摘要（前缀 + 正文 + 消息开销）的估算 token，避免摘要占用导致溢出。</li>
  *     <li><b>启发式估算</b>：中日韩字符按 1 token/字，ASCII 按 4 字/token，其余按 2 字/token。</li>
  * </ul>
  *
@@ -69,10 +73,11 @@ public class ConversationMemory {
     /**
      * 按 token 预算构建上下文消息列表
      * <p>
-     * 未超预算时返回全部历史消息；超预算时保留最近消息，并把更早的消息压缩为一条系统摘要消息。
-     * 摘要内容变化时写回会话（{@code summary} / {@code summary_updated_at}）。
+     * 未超预算时返回全部历史消息；超预算时保留最近消息，并把更早（最近窗口之前）的消息压缩为一条系统摘要消息。
+     * 已有摘要且早期区没有晚于 {@code summaryUpdatedAt} 的新消息时复用摘要；否则基于早期区
+     * <b>最后</b> {@value #MAX_SUMMARY_ITEMS} 条用户消息重新生成并写回会话（{@code summary} / {@code summary_updated_at}）。
      *
-     * @param session 当前会话（可为空，为空时不持久化摘要）
+     * @param session 当前会话（可为空，为空时不复用/持久化摘要）
      * @param history 历史消息（按时间正序，含本轮用户消息）
      * @return Spring AI 上下文消息列表
      */
@@ -85,13 +90,25 @@ public class ConversationMemory {
             return toMessages(history);
         }
 
-        int recentStart = recentStartIndex(history, budget * RECENT_BUDGET_PERCENT / 100);
-        String summary = summarize(history.subList(0, recentStart));
+        int recentBudget = budget * RECENT_BUDGET_PERCENT / 100;
+        int recentStart = recentStartIndex(history, Math.max(0, recentBudget - summaryTokens(existingSummary(session))));
+        List<ChatMessage> older = history.subList(0, recentStart);
+        String candidate = resolveSummary(session, older);
+        int candidateTokens = summaryTokens(candidate);
+        if (candidateTokens > summaryTokens(existingSummary(session))) {
+            // 摘要实际占用超出预留额度时，按实际值收缩一次最近窗口（只调整一次，避免反复抖动）
+            int adjustedStart = recentStartIndex(history, Math.max(0, recentBudget - candidateTokens));
+            if (adjustedStart > recentStart) {
+                recentStart = adjustedStart;
+                older = history.subList(0, recentStart);
+                candidate = resolveSummary(session, older);
+            }
+        }
+        String summary = applySummary(session, older, candidate);
 
         List<Message> messages = new ArrayList<>();
         if (StringUtils.hasText(summary)) {
             messages.add(new SystemMessage(SUMMARY_PREFIX + summary));
-            persistSummary(session, summary);
         }
         messages.addAll(toMessages(history.subList(recentStart, history.size())));
         return messages;
@@ -184,7 +201,78 @@ public class ConversationMemory {
     }
 
     /**
-     * 启发式摘要：取早期消息中的前 {@value #MAX_SUMMARY_ITEMS} 条用户消息，
+     * 解析应当注入的摘要（不写库）：已有摘要且早期区无新消息时复用；否则按早期区重新生成。
+     *
+     * @param session 当前会话（可为空）
+     * @param older   早期消息（最近窗口之前）
+     * @return 摘要文本；无可摘要内容时返回空串
+     */
+    private String resolveSummary(ChatSession session, List<ChatMessage> older) {
+        String existing = existingSummary(session);
+        if (StringUtils.hasText(existing) && unsummarized(session, older).isEmpty()) {
+            return existing;
+        }
+        String generated = summarize(older);
+        if (StringUtils.hasText(generated)) {
+            return generated;
+        }
+        // 早期区暂无可摘要的用户消息时保留已有摘要，避免摘要丢失
+        return StringUtils.hasText(existing) ? existing : generated;
+    }
+
+    /**
+     * 取会话已有摘要（会话为空时返回 null）。
+     *
+     * @param session 当前会话
+     * @return 已有摘要
+     */
+    private String existingSummary(ChatSession session) {
+        return session == null ? null : session.getSummary();
+    }
+
+    /**
+     * 计算摘要注入的估算 token（前缀 + 正文 + 消息固定开销）。
+     *
+     * @param summary 摘要文本
+     * @return 估算 token；空摘要返回 0
+     */
+    private int summaryTokens(String summary) {
+        if (!StringUtils.hasText(summary)) {
+            return 0;
+        }
+        return MESSAGE_OVERHEAD_TOKENS + estimateTokens(SUMMARY_PREFIX + summary);
+    }
+
+    /**
+     * 找出早期区中尚未纳入摘要的消息：{@code createdAt} 晚于 {@code summaryUpdatedAt} 的消息。
+     * 无摘要或无摘要时间戳时视为全部未摘要。
+     * <p>
+     * 缺少 {@code createdAt} 的消息（如内存构造的历史）不视为新消息，避免重复重建摘要。
+     *
+     * @param session 当前会话（可为空）
+     * @param older   早期消息
+     * @return 未纳入摘要的早期消息
+     */
+    private List<ChatMessage> unsummarized(ChatSession session, List<ChatMessage> older) {
+        if (older.isEmpty()) {
+            return List.of();
+        }
+        if (session == null || !StringUtils.hasText(session.getSummary()) || session.getSummaryUpdatedAt() == null) {
+            return older;
+        }
+        LocalDateTime since = session.getSummaryUpdatedAt();
+        List<ChatMessage> result = new ArrayList<>();
+        for (ChatMessage message : older) {
+            LocalDateTime createdAt = message == null ? null : message.getCreatedAt();
+            if (createdAt != null && createdAt.isAfter(since)) {
+                result.add(message);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 启发式摘要：取早期消息中<b>最后</b> {@value #MAX_SUMMARY_ITEMS} 条用户消息（按时间正序输出），
      * 每条压平空白并截断到 {@value #SUMMARY_ITEM_CHARS} 字，以「；」连接。
      *
      * @param older 早期消息
@@ -192,10 +280,8 @@ public class ConversationMemory {
      */
     private String summarize(List<ChatMessage> older) {
         List<String> parts = new ArrayList<>();
-        for (ChatMessage message : older) {
-            if (parts.size() >= MAX_SUMMARY_ITEMS) {
-                break;
-            }
+        for (int i = older.size() - 1; i >= 0 && parts.size() < MAX_SUMMARY_ITEMS; i--) {
+            ChatMessage message = older.get(i);
             if (message == null || !"user".equals(message.getRole()) || !StringUtils.hasText(message.getContent())) {
                 continue;
             }
@@ -205,22 +291,30 @@ public class ConversationMemory {
             }
             parts.add(content);
         }
+        Collections.reverse(parts);
         return String.join(SUMMARY_JOINER, parts);
     }
 
     /**
-     * 将摘要持久化到会话（内容未变化时跳过写库）。
+     * 将摘要持久化到会话：内容变化，或早期区存在尚未摘要的新消息（需推进摘要时间戳）时写库。
      *
-     * @param session 当前会话（可为空）
-     * @param summary 摘要文本
+     * @param session  当前会话（可为空）
+     * @param older    早期消息
+     * @param resolved 已解析的摘要文本
+     * @return 实际注入的摘要文本
      */
-    private void persistSummary(ChatSession session, String summary) {
-        if (session == null || summary.equals(session.getSummary())) {
-            return;
+    private String applySummary(ChatSession session, List<ChatMessage> older, String resolved) {
+        if (session == null || !StringUtils.hasText(resolved)) {
+            return resolved;
         }
-        session.setSummary(summary);
-        session.setSummaryUpdatedAt(LocalDateTime.now());
-        sessionRepository.save(session);
+        boolean changed = !resolved.equals(session.getSummary());
+        boolean stale = !unsummarized(session, older).isEmpty();
+        if (changed || stale) {
+            session.setSummary(resolved);
+            session.setSummaryUpdatedAt(LocalDateTime.now());
+            sessionRepository.save(session);
+        }
+        return resolved;
     }
 
     /**
