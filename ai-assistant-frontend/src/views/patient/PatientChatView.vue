@@ -391,12 +391,20 @@ function sendMessage() {
   const text = inputText.value.trim()
   if (!text || loading.value) return
 
+  // 发送即作废在途的历史加载：服务端可能回显同一 sessionId（不会进入 onSession 的自增分支），
+  // 若不作废，迟到的历史响应会覆盖本次乐观插入的用户消息与流式气泡
+  historySeq += 1
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
 
   // 预先创建一条空的 assistant 消息，用于流式追加内容
   messages.value.push({ role: 'assistant', content: '', streaming: true, references: [] })
   const assistantIndex = messages.value.length - 1
+  // 仅当该索引仍指向本次的流式气泡时才允许写入（防止迟到回调写到别的气泡或越界）
+  const streamTarget = () => {
+    const item = messages.value[assistantIndex]
+    return item && item.role === 'assistant' && item.streaming ? item : null
+  }
   loading.value = true
   nextTick(scrollToBottom)
 
@@ -412,15 +420,18 @@ function sendMessage() {
         }
       },
       onToken: (token) => {
-        messages.value[assistantIndex].content += token
+        const target = streamTarget()
+        if (!target) return
+        target.content += token
         nextTick(scrollToBottom)
       },
       onConfirm: (info) => {
         pendingConfirm.value = info
       },
       onReferences: (refs) => {
-        if (Array.isArray(refs)) {
-          messages.value[assistantIndex].references = refs
+        const target = streamTarget()
+        if (target && Array.isArray(refs)) {
+          target.references = refs
         }
       },
       onDone: () => {
@@ -442,8 +453,10 @@ function sendQuickMessage(text) {
 }
 
 function finishStreaming(index) {
-  if (index >= 0 && messages.value[index]) {
-    messages.value[index].streaming = false
+  const item = index >= 0 ? messages.value[index] : null
+  // 仅当仍指向本次的流式气泡时才收尾，避免迟到回调影响到别的消息
+  if (item && item.role === 'assistant' && item.streaming) {
+    item.streaming = false
   }
   loading.value = false
   currentController = null
@@ -452,7 +465,7 @@ function finishStreaming(index) {
 // 出错：空占位气泡移除，错误文案以系统消息样式展示
 function failStreaming(index, message) {
   const item = index >= 0 ? messages.value[index] : null
-  if (item && item.role === 'assistant') {
+  if (item && item.role === 'assistant' && item.streaming) {
     if (!item.content) {
       messages.value.splice(index, 1)
     } else {
