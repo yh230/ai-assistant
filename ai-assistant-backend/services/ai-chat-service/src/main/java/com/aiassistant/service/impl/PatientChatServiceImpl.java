@@ -14,6 +14,7 @@ import com.aiassistant.entity.ChatSession;
 import com.aiassistant.entity.PendingAction;
 import com.aiassistant.entity.Role;
 import com.aiassistant.memory.ConversationMemory;
+import com.aiassistant.rag.GroundednessChecker;
 import com.aiassistant.rag.KnowledgeContextBuilder;
 import com.aiassistant.rag.KnowledgeReferencesBuilder;
 import com.aiassistant.rag.KnowledgeStore;
@@ -79,7 +80,8 @@ import java.util.stream.Collectors;
  *     <li><b>会话类型</b>：CHAT=闲聊 / TRIAGE=导诊（装配患者工具）/ RAG=知识库（知识库人设提示词 + 本院检索片段作为独立用户消息注入），
  *         系统提示词由 {@link AssistantRoleService} 按医院角色库解析，Nacos {@link AiProperties} 仅作模板兜底。</li>
  *     <li><b>免责与降级</b>：每次流式回答（AI 或本地降级）末尾强制追加免责声明；模型不可用或流异常时降级本地回复引擎，对话不中断。</li>
- *     <li><b>输入输出风控</b>：命中敏感词规则的输入直接拦截；输出侧仅扫描生成正文，命中即丢弃生成内容并持久化标准文案。</li>
+ *     <li><b>输入输出风控</b>：命中敏感词规则的输入直接拦截；输出侧以流式守卫在 token 级拦截
+ *         （含跨 token 拆分），命中即只下发标准文案并按标准文案落库，同时抑制引用下发。</li>
  *     <li><b>SSE 加固</b>：AI 生成 120 秒无新 token 按超时结束（error 事件输出固定文案）；客户端断开时记录日志并按已产生的部分内容（附免责）落库。</li>
  * </ul>
  *
@@ -135,6 +137,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final KnowledgeStore knowledgeStore;
     private final KnowledgeContextBuilder knowledgeContextBuilder;
     private final KnowledgeReferencesBuilder knowledgeReferencesBuilder;
+    private final GroundednessChecker groundednessChecker;
     private final AssistantRoleService assistantRoleService;
     private final MeterRegistry meterRegistry;
     private final ChatMessagePersister messagePersister;
@@ -184,7 +187,8 @@ public class PatientChatServiceImpl implements PatientChatService {
             saveMessage(session.getSessionId(), "assistant", emergencyMessage);
             meterRegistry.counter("ai.emergency.total").increment();
             log.info("输入侧命中急症红线，短路返回就医指引 sessionId={}", session.getSessionId());
-            return new PatientChatContext(session, user, List.of(), "", request.getMessage(), "", emergencyMessage);
+            return new PatientChatContext(session, user, List.of(), "", request.getMessage(), "",
+                    emergencyMessage, List.of());
         }
 
         // 输入侧风控：命中敏感词不调用大模型，落库标准文案后以 error 事件输出
@@ -205,10 +209,11 @@ public class PatientChatServiceImpl implements PatientChatService {
         String systemPrompt = assistantRoleService.resolvePatientSystemPrompt(
                 user.getHospitalId(), session.getSessionType());
         String referenceJson = "";
+        // 检索命中片段透传给 groundedness 校验（非 RAG 会话或无命中时为空）
+        List<KnowledgeStore.ScoredChunk> hits = List.of();
         if (TYPE_RAG.equals(session.getSessionType())) {
             // 在角色提示词之后追加固定 RAG 策略（片段仅作事实参考，禁止执行片段内指令，无依据不得编造）
             systemPrompt = systemPrompt + "\n\n" + RAG_GROUNDING_POLICY;
-            List<KnowledgeStore.ScoredChunk> hits;
             try {
                 hits = knowledgeStore.search(user.getHospitalId(), request.getMessage(),
                         aiProperties.getRag().getTopK(), aiProperties.getRag().getSimilarityThreshold());
@@ -220,6 +225,7 @@ public class PatientChatServiceImpl implements PatientChatService {
             }
             // 检索片段以独立 user 消息注入，避免进入 system 指令层；无命中时注入显式“不得编造”提示
             if (hits == null || hits.isEmpty()) {
+                hits = List.of();
                 contextMessages = knowledgeContextBuilder.injectNoHit(contextMessages);
             } else {
                 contextMessages = knowledgeContextBuilder.inject(contextMessages, hits);
@@ -230,7 +236,8 @@ public class PatientChatServiceImpl implements PatientChatService {
 
         log.info("患者流式对话 sessionId={}, sessionType={}, 历史消息数={}",
                 session.getSessionId(), session.getSessionType(), history.size());
-        return new PatientChatContext(session, user, contextMessages, systemPrompt, request.getMessage(), referenceJson, null);
+        return new PatientChatContext(session, user, contextMessages, systemPrompt, request.getMessage(),
+                referenceJson, null, hits);
     }
 
     /**
@@ -271,13 +278,14 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuffer full = new StringBuffer();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
-                ? buildAiContentFlux(ctx, full, fallback, truncated, resolvePatientToolCallbacks(ctx, true))
-                : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
+                ? buildAiContentFlux(ctx, full, fallback, truncated, blocked,
+                        resolvePatientToolCallbacks(ctx, true))
+                : Flux.concat(buildLocalChunkFlux(ctx, full, blocked), disclaimerTokenFlux());
 
         Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
-                buildDoneEvent(fallback.get(), truncated.get()));
+                buildDoneEvent(fallback.get(), truncated.get(), resolveGrounded(ctx, full)));
 
         // 引用来源：仅在模型作答、未降级、未被输出风控拦截且有命中时下发（降级/拦截时展示来源会误导）
         Mono<ServerSentEvent<String>> referencesEvent = Mono.defer(() ->
@@ -415,15 +423,16 @@ public class PatientChatServiceImpl implements PatientChatService {
      * （主模型失败直接降级本地引擎），换取写操作恰好一次。
      *
      * @param ctx       患者聊天上下文
-     * @param full      回复内容累积器（供输出侧风控兜底与持久化使用）
+     * @param full      回复内容累积器（供持久化使用）
      * @param fallback  降级标记（AI 流异常置为 true，供结束事件上报）
      * @param truncated 总超时截断标记（流在总超时点结束置为 true，供结束事件上报）
+     * @param blocked   输出侧流式风控拦截标记（守卫命中时置位）
      * @param tools     本次请求装配的工具回调列表
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuffer full,
                                                              AtomicBoolean fallback, AtomicBoolean truncated,
-                                                             List<ToolCallback> tools) {
+                                                             AtomicBoolean blocked, List<ToolCallback> tools) {
         String modelId = assistantProperties.resolveModelId(null);
         List<String> candidateChain = chatModelRegistry.getFallbackChain(modelId);
         String scene = resolveScene(ctx);
@@ -463,41 +472,39 @@ public class PatientChatServiceImpl implements PatientChatService {
                     .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
         });
 
-        Flux<ServerSentEvent<String>> content = tokens
-                .publishOn(Schedulers.boundedElastic())
-                .map(token -> {
-                    full.append(token);
-                    return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
-                })
-                .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
-                .take(overallTimeout)
-                .doOnComplete(() -> {
-                    // take 到点属正常完成，没有异常信号；按耗时判定是否被总超时截断
-                    if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
-                        truncated.set(true);
-                        recordFailure(primaryModel, scene, "OverallTimeout");
-                        meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
-                                .increment();
-                        log.warn("患者侧 AI 生成达总超时（{} 秒）被截断: sessionId={}",
-                                aiProperties.getChat().getOverallTimeoutSeconds(), ctx.session().getSessionId());
-                    }
-                })
-                .onErrorResume(ex -> {
-                    if (ex instanceof TimeoutException) {
-                        // 生成超时（空闲超时）：按异常处理，固定文案由顶层转为 error 事件
-                        recordFailure(primaryModel, scene, "IdleTimeout");
-                        log.warn("患者侧 AI 生成超时（{} 秒无新 token）: sessionId={}",
-                                aiProperties.getChat().getIdleTimeoutSeconds(), ctx.session().getSessionId());
-                        return Flux.error(new BusinessException("生成超时，请稍后重试"));
-                    }
-                    if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
-                        // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
-                        recordFailure(primaryModel, scene, "EmptyChain");
-                    }
-                    log.warn("患者侧 AI 流式异常，降级本地引擎: {}", ex.getMessage());
-                    fallback.set(true);
-                    return buildLocalChunkFlux(ctx, full);
-                });
+        Flux<ServerSentEvent<String>> content =
+                GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
+                                aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage())
+                        .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
+                        .take(overallTimeout)
+                        .doOnComplete(() -> {
+                            // take 到点属正常完成，没有异常信号；按耗时判定是否被总超时截断
+                            if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
+                                truncated.set(true);
+                                recordFailure(primaryModel, scene, "OverallTimeout");
+                                meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
+                                        .increment();
+                                log.warn("患者侧 AI 生成达总超时（{} 秒）被截断: sessionId={}",
+                                        aiProperties.getChat().getOverallTimeoutSeconds(),
+                                        ctx.session().getSessionId());
+                            }
+                        })
+                        .onErrorResume(ex -> {
+                            if (ex instanceof TimeoutException) {
+                                // 生成超时（空闲超时）：按异常处理，固定文案由顶层转为 error 事件
+                                recordFailure(primaryModel, scene, "IdleTimeout");
+                                log.warn("患者侧 AI 生成超时（{} 秒无新 token）: sessionId={}",
+                                        aiProperties.getChat().getIdleTimeoutSeconds(), ctx.session().getSessionId());
+                                return Flux.error(new BusinessException("生成超时，请稍后重试"));
+                            }
+                            if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
+                                // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
+                                recordFailure(primaryModel, scene, "EmptyChain");
+                            }
+                            log.warn("患者侧 AI 流式异常，降级本地引擎: {}", ex.getMessage());
+                            fallback.set(true);
+                            return buildLocalChunkFlux(ctx, full, blocked);
+                        });
 
         // 免责强制追加：token 流结束后补一个 token 事件（AI 与本地降级分支同款）
         return Flux.concat(content, disclaimerTokenFlux());
@@ -534,14 +541,59 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @return 结束事件
      */
     private ServerSentEvent<String> buildDoneEvent(boolean localFallback, boolean truncated) {
+        return buildDoneEvent(localFallback, truncated, null);
+    }
+
+    /**
+     * 构建结束事件 JSON：固定带 localFallback；非空时追加 grounded（RAG 有命中时）。
+     *
+     * @param localFallback 是否走了本地降级
+     * @param truncated     是否被总超时截断
+     * @param grounded      groundedness 校验结果（null 表示不下发该字段）
+     * @return 结束事件
+     */
+    private ServerSentEvent<String> buildDoneEvent(boolean localFallback, boolean truncated, Boolean grounded) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("localFallback", localFallback);
         if (truncated) {
             payload.put("truncated", true);
         }
+        if (grounded != null) {
+            payload.put("grounded", grounded);
+        }
         return ServerSentEvent.builder(toJson(payload))
                 .event(ChatConstants.EVENT_DONE)
                 .build();
+    }
+
+    /**
+     * 计算 RAG 回答的 groundedness 校验结果：仅 RAG 会话且有检索命中时下发，
+     * 未通过时递增 {@code ai.rag.groundedness.false} 指标。
+     * <p>
+     * 校验正文排除流尾免责声明，避免固定文案稀释覆盖率。
+     *
+     * @param ctx  患者聊天上下文
+     * @param full 回复正文累积器
+     * @return true/false 表示校验结果；非 RAG 或无命中返回 null（done 事件不下发该字段）
+     */
+    private Boolean resolveGrounded(PatientChatContext ctx, StringBuffer full) {
+        if (!TYPE_RAG.equals(ctx.session().getSessionType()) || ctx.hits().isEmpty()) {
+            return null;
+        }
+        String answer = full.toString();
+        String disclaimer = aiProperties.getDisclaimer();
+        if (disclaimer != null && !disclaimer.isEmpty()) {
+            int index = answer.lastIndexOf(disclaimer);
+            if (index >= 0) {
+                answer = answer.substring(0, index);
+            }
+        }
+        boolean grounded = groundednessChecker.isGrounded(answer, ctx.hits(),
+                aiProperties.getRag().getGroundednessThreshold());
+        if (!grounded) {
+            meterRegistry.counter("ai.rag.groundedness.false").increment();
+        }
+        return grounded;
     }
 
     /**
@@ -607,21 +659,21 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 构建本地降级 token 流（按字符切片模拟打字机效果，内容追加进累积器供调用方落库）
+     * 构建本地降级 token 流（按字符切片模拟打字机效果）：token 先经流式风控守卫，
+     * 再映射为 SSE 并累积正文，与 AI 分支共用同一拦截标记。
      *
-     * @param ctx  患者聊天上下文
-     * @param full 完整回复内容累积器
+     * @param ctx     患者聊天上下文
+     * @param full    完整回复内容累积器
+     * @param blocked 输出侧流式风控拦截标记
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(PatientChatContext ctx, StringBuffer full) {
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(PatientChatContext ctx, StringBuffer full,
+                                                              AtomicBoolean blocked) {
         String localReply = generateLocalResponse(ctx.userMessage());
         List<String> chunks = splitIntoChunks(localReply, ChatConstants.LOCAL_CHUNK_SIZE);
-        return Flux.fromIterable(chunks)
-                .delayElements(Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS))
-                .map(chunk -> {
-                    full.append(chunk);
-                    return ServerSentEvent.builder(chunk).event(ChatConstants.EVENT_TOKEN).build();
-                });
+        return GuardedSse.guardedSse(
+                Flux.fromIterable(chunks).delayElements(Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
+                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage());
     }
 
     /**
@@ -636,17 +688,22 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 输出侧风控兜底：内容流结束后对累计正文做敏感词校验，命中则丢弃生成内容并追加 error 事件
+     * 输出侧风控兜底（流式守卫之后的补充检查）：内容流结束后对累计正文做敏感词校验，
+     * 命中则丢弃生成内容并追加 error 事件
      * <p>
+     * 流式守卫已在 token 级拦截时直接跳过本节点，避免重复下发/重复拦截；
      * 判定仅扫描模型/本地生成的正文（不含免责文案与固定前置话术，防关键词与免责重叠致全量误拦）；
      * 本节点只负责检测并置位 blocked（落库由下游 persist 节点按 blocked 状态改用标准文案），不再直接持久化
      *
      * @param full    回复正文累积器
      * @param blocked 输出侧拦截标记（供落库正文与 references 事件下发判定）
-     * @return 命中时输出 error 事件流，未命中则为空流
+     * @return 命中时输出 error 事件流，未命中或流式守卫已拦截时为空流
      */
     private Mono<ServerSentEvent<String>> outputSafetyGuard(StringBuffer full, AtomicBoolean blocked) {
         return Mono.defer(() -> {
+            if (blocked.get()) {
+                return Mono.empty();
+            }
             String body = full.toString();
             if (safetyFilter.blockedInput(body)) {
                 blocked.set(true);
@@ -742,7 +799,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                 actionId, action.getToolName(), session.getSessionId(), resultText);
         return new PatientChatContext(session, user, contextMessages,
                 assistantRoleService.resolvePatientSystemPrompt(user.getHospitalId(), session.getSessionType()),
-                confirmMessage, "", null);
+                confirmMessage, "", null, List.of());
     }
 
     /**
@@ -762,8 +819,9 @@ public class PatientChatServiceImpl implements PatientChatService {
         AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuffer full = new StringBuffer();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
-                ? buildAiContentFlux(ctx, full, fallback, truncated, resolvePatientToolCallbacks(ctx, false))
-                : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
+                ? buildAiContentFlux(ctx, full, fallback, truncated, blocked,
+                        resolvePatientToolCallbacks(ctx, false))
+                : Flux.concat(buildLocalChunkFlux(ctx, full, blocked), disclaimerTokenFlux());
 
         Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
 
@@ -1028,6 +1086,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @param userMessage   当前用户消息
      * @param referenceJson 引用来源 JSON（RAG 命中时非空；无来源为空串）
      * @param emergencyReply 急症红线短路回复（命中时非 null，服务层据此走短路链路）
+     * @param hits          RAG 检索命中片段（非 RAG 或无命中时为空列表，供 groundedness 校验）
      */
     private record PatientChatContext(
             ChatSession session,
@@ -1036,6 +1095,7 @@ public class PatientChatServiceImpl implements PatientChatService {
             String systemPrompt,
             String userMessage,
             String referenceJson,
-            String emergencyReply) {
+            String emergencyReply,
+            List<KnowledgeStore.ScoredChunk> hits) {
     }
 }

@@ -18,6 +18,7 @@ import com.aiassistant.entity.ChatSession;
 import com.aiassistant.memory.ConversationMemory;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
+import com.aiassistant.safety.OutputSafetyFilter;
 import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.UserMemoryBuilder;
@@ -73,6 +74,8 @@ import java.util.stream.Collectors;
  *     <li><b>上下文管理</b>：按 token 预算组装历史（{@link ConversationMemory}），超预算时保留最近消息并压缩早期消息为摘要；
  *         用户画像仅从当前登录人自身历史中提取。</li>
  *     <li><b>会话隔离</b>：会话按归属用户 + 身份绑定，员工侧读写一律限定当前登录人（identity=staff）的会话。</li>
+ *     <li><b>输入输出风控</b>：输入命中敏感词直接拦截并落库标准文案；输出以流式守卫在 token 级拦截
+ *         （含跨 token 拆分），命中后仅下发标准文案并按标准文案落库。</li>
  * </ul>
  *
  * @author yh
@@ -113,6 +116,7 @@ public class ChatServiceImpl implements ChatService {
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
     private final ChatMessagePersister messagePersister;
+    private final OutputSafetyFilter safetyFilter;
 
     @Value("${ai.local-fallback:true}")
     private boolean useLocalFallback;
@@ -156,6 +160,14 @@ public class ChatServiceImpl implements ChatService {
         String title = resolveTitle(request);
         saveUserMessage(sessionId, request.getMessage());
 
+        // 输入侧风控：命中敏感词不调用大模型，落库标准文案后以 error 事件输出
+        if (safetyFilter.blockedInput(request.getMessage())) {
+            String blockedMessage = safetyFilter.blockedMessage();
+            saveAssistantMessage(sessionId, blockedMessage);
+            log.info("输入侧命中风控敏感词，拦截本次请求 sessionId={}", sessionId);
+            throw new BusinessException(blockedMessage);
+        }
+
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
         List<Message> contextMessages = conversationMemory.build(session, history);
         String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
@@ -189,15 +201,16 @@ public class ChatServiceImpl implements ChatService {
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
         AtomicBoolean truncated = new AtomicBoolean(false);
+        AtomicBoolean blocked = new AtomicBoolean(false);
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
-                ? buildAiContentFlux(ctx, full, usedFallback, truncated)
-                : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
+                ? buildAiContentFlux(ctx, full, usedFallback, truncated, blocked)
+                : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full, blocked);
 
         Mono<Void> persist = Mono.defer(() -> {
             if (!persisted.compareAndSet(false, true)) {
                 return Mono.empty();
             }
-            return messagePersister.persistAssistant(ctx.sessionId(), full.toString(), null);
+            return messagePersister.persistAssistant(ctx.sessionId(), persistedBody(full, blocked), null);
         });
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() -> {
@@ -213,10 +226,21 @@ public class ChatServiceImpl implements ChatService {
 
         return Flux.concat(Mono.just(sessionEvent), contentFlux, persist.then(doneEvent))
                 .doOnCancel(() -> {
-                    if (persisted.compareAndSet(false, true) && full.length() > 0) {
-                        messagePersister.persistBlocking(ctx.sessionId(), full.toString(), null);
+                    if (persisted.compareAndSet(false, true) && (blocked.get() || full.length() > 0)) {
+                        messagePersister.persistBlocking(ctx.sessionId(), persistedBody(full, blocked), null);
                     }
                 });
+    }
+
+    /**
+     * 计算落库正文：流式风控命中时只落标准拦截文案，绝不落原始（可能不安全的）部分正文。
+     *
+     * @param full    回复正文累积器
+     * @param blocked 输出侧流式风控拦截标记
+     * @return 可落库的回复正文
+     */
+    private String persistedBody(StringBuffer full, AtomicBoolean blocked) {
+        return blocked.get() ? safetyFilter.blockedMessage() : full.toString();
     }
 
     /**
@@ -230,10 +254,12 @@ public class ChatServiceImpl implements ChatService {
      * @param full         回复内容累积器（AI token 与降级 token 共用）
      * @param usedFallback 降级标记
      * @param truncated    总超时截断标记（供 done 事件上报）
+     * @param blocked      输出侧流式风控拦截标记（守卫命中时置位）
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuffer full,
-                                                            AtomicBoolean usedFallback, AtomicBoolean truncated) {
+                                                            AtomicBoolean usedFallback, AtomicBoolean truncated,
+                                                            AtomicBoolean blocked) {
         String scene = "chat";
         List<String> chain = chatModelRegistry.getFallbackChain(ctx.modelId());
         boolean emptyChain = chain.isEmpty();
@@ -265,12 +291,8 @@ public class ChatServiceImpl implements ChatService {
                     .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
         });
 
-        return tokens
-                .publishOn(Schedulers.boundedElastic())
-                .map(token -> {
-                    full.append(token);
-                    return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
-                })
+        return GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
+                        aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage())
                 .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
                 .take(overallTimeout)
                 .doOnComplete(() -> {
@@ -292,7 +314,7 @@ public class ChatServiceImpl implements ChatService {
                     }
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
-                    return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
+                    return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full, blocked);
                 });
     }
 
@@ -360,20 +382,20 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 将文本切片为 SSE token 流（本地降级复用）：仅向累积器追加 token，不落库。
+     * 将文本切片为 SSE token 流（本地降级复用）：token 先经流式风控守卫，
+     * 再映射为 SSE 并累积正文，不落库。
      *
-     * @param text 完整文本
-     * @param full 回复内容累积器
+     * @param text    完整文本
+     * @param full    回复内容累积器
+     * @param blocked 输出侧流式风控拦截标记
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuffer full) {
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuffer full,
+                                                              AtomicBoolean blocked) {
         List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
-        return Flux.fromIterable(chunks)
-                .delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS))
-                .map(chunk -> {
-                    full.append(chunk);
-                    return ServerSentEvent.builder(chunk).event(ChatConstants.EVENT_TOKEN).build();
-                });
+        return GuardedSse.guardedSse(
+                Flux.fromIterable(chunks).delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
+                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage());
     }
 
     /**
