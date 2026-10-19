@@ -46,6 +46,12 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     /** 允许上传的文档扩展名 */
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("md", "txt");
 
+    /** 解码后允许的最大 U+FFFD 替换符数量 */
+    private static final int MAX_REPLACEMENT_CHARS = 10;
+
+    /** 解码后允许的最大 U+FFFD 替换符占比 */
+    private static final double MAX_REPLACEMENT_RATIO = 0.01;
+
     /** 知识库文档仓库 */
     private final KnowledgeDocumentRepository documentRepository;
 
@@ -176,19 +182,38 @@ public class KnowledgeServiceImpl implements KnowledgeService {
      *
      * @param bytes 原始字节
      * @return 文档文本
+     * @throws BusinessException 解码结果含过多替换符（无法识别的编码）
      */
     private String decode(byte[] bytes) {
         if (bytes.length >= 3 && bytes[0] == (byte) 0xEF
                 && bytes[1] == (byte) 0xBB && bytes[2] == (byte) 0xBF) {
             bytes = Arrays.copyOfRange(bytes, 3, bytes.length);
         }
+        String text;
         try {
-            return StandardCharsets.UTF_8.newDecoder()
+            text = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes)).toString();
         } catch (Exception e) {
-            return new String(bytes, Charset.forName("GB18030"));
+            return checkDecoded(new String(bytes, Charset.forName("GB18030")));
         }
+        return checkDecoded(text);
+    }
+
+    /**
+     * 校验解码文本：替换符过多说明编码无法识别，拒绝入库以免把乱码喂给检索与模型
+     *
+     * @param text 解码后的文本
+     * @return 原文本
+     * @throws BusinessException 替换符数量或占比超限
+     */
+    private String checkDecoded(String text) {
+        long replacements = text.chars().filter(c -> c == '\uFFFD').count();
+        if (replacements > MAX_REPLACEMENT_CHARS
+                || replacements > text.length() * MAX_REPLACEMENT_RATIO) {
+            throw new BusinessException("文档编码无法识别，请使用 UTF-8 或 GB18030");
+        }
+        return text;
     }
 
     /**
