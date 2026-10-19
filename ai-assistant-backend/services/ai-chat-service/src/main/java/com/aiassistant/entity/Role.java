@@ -55,6 +55,7 @@ public class Role {
     private Boolean enabled;
 
     /** 角色域：STAFF-员工，PATIENT-患者 */
+    @Builder.Default
     @Column(nullable = false, length = 10, columnDefinition = "varchar(10) default 'STAFF'")
     private String scope = "STAFF";
 
@@ -72,12 +73,21 @@ public class Role {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * 持久化前生命周期回调：补齐创建/更新时间与默认值
+     * <p>
+     * 无参构造、Builder 与全参构造三条路径都经过本回调，
+     * 因此在此兜底 {@code enabled} 与 {@code scope}，避免向非空列写入 null
+     */
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
         if (this.enabled == null) {
             this.enabled = Boolean.TRUE;
+        }
+        if (this.scope == null || this.scope.isBlank()) {
+            this.scope = "STAFF";
         }
     }
 
