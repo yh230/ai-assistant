@@ -268,6 +268,68 @@ public class AssistantRoleService {
         };
     }
 
+    // ==================== 管理：按域查询与增改 ====================
+
+    /**
+     * 按角色域查询列表（患者域必须指定医院）
+     *
+     * @param scope 角色域 STAFF/PATIENT
+     * @param hospitalId 医院 ID（患者域必填）
+     * @return 角色列表
+     */
+    @Transactional(readOnly = true)
+    public List<Role> listByScope(String scope, Long hospitalId) {
+        if (SCOPE_PATIENT.equalsIgnoreCase(scope)) {
+            if (hospitalId == null) {
+                throw new IllegalArgumentException("查询患者角色必须指定医院");
+            }
+            return roleRepository.findByScopeAndHospitalIdOrderBySortOrderAscIdAsc(SCOPE_PATIENT, hospitalId);
+        }
+        return roleRepository.findByScopeOrderBySortOrderAscIdAsc(SCOPE_STAFF);
+    }
+
+    /**
+     * 新增角色（患者角色强制写入医院与会话类型校验）
+     *
+     * @param form 角色表单
+     * @param hospitalId 服务端确定的医院 ID（患者域必填）
+     * @return 持久化后的角色
+     */
+    @Transactional
+    public Role createForScope(RoleForm form, Long hospitalId) {
+        boolean patient = SCOPE_PATIENT.equalsIgnoreCase(form.getScope());
+        if (patient) {
+            if (hospitalId == null) {
+                throw new IllegalArgumentException("新增患者角色必须指定医院");
+            }
+            if (form.getSessionType() == null || form.getSessionType().isBlank()) {
+                throw new IllegalArgumentException("患者角色必须指定会话类型");
+            }
+            form.setHospitalId(hospitalId);
+            form.setSessionType(normalizeSessionType(form.getSessionType()));
+        }
+        return create(form);
+    }
+
+    /**
+     * 更新角色（患者角色不允许改医院）
+     *
+     * @param id 角色ID（路径参数）
+     * @param form 角色表单
+     * @param hospitalId 服务端确定的医院 ID（未绑院管理员为空）
+     * @return 更新后的角色
+     */
+    @Transactional
+    public Role updateForScope(String id, RoleForm form, Long hospitalId) {
+        Role existing = roleRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("角色不存在: " + id));
+        if (SCOPE_PATIENT.equalsIgnoreCase(existing.getScope()) && hospitalId != null
+                && !hospitalId.equals(existing.getHospitalId())) {
+            throw new IllegalArgumentException("无权修改其他医院的患者角色");
+        }
+        return update(id, form);
+    }
+
     // ==================== 管理：增删改 ====================
 
     /**
@@ -361,6 +423,7 @@ public class AssistantRoleService {
      * 将表单转换为实体（id 由参数指定，避免表单内 id 覆盖路径参数）。
      */
     private Role toEntity(RoleForm form, String id) {
+        boolean patient = SCOPE_PATIENT.equalsIgnoreCase(form.getScope());
         return Role.builder()
                 .id(id)
                 .name(form.getName().trim())
@@ -369,6 +432,9 @@ public class AssistantRoleService {
                 .systemPrompt(form.getSystemPrompt())
                 .sortOrder(form.getSortOrder() == null ? 0 : form.getSortOrder())
                 .enabled(form.getEnabled() == null ? Boolean.TRUE : form.getEnabled())
+                .scope(patient ? SCOPE_PATIENT : SCOPE_STAFF)
+                .sessionType(patient ? form.getSessionType() : null)
+                .hospitalId(patient ? form.getHospitalId() : null)
                 .build();
     }
 }

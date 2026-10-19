@@ -36,4 +36,13 @@ public class RoleForm implements Serializable {
 
     /** 是否启用 */
     private Boolean enabled;
+
+    /** 角色域：STAFF/PATIENT（新增时生效，缺省 STAFF） */
+    private String scope;
+
+    /** 患者会话类型：CHAT/TRIAGE/RAG（患者角色必填） */
+    private String sessionType;
+
+    /** 所属医院 ID（管理员未绑院时必须显式提供；已绑院用户由服务端覆盖） */
+    private Long hospitalId;
 }

@@ -69,6 +69,7 @@ public class SystemDataSeeder implements CommandLineRunner {
         }
         ensureSecurityModule(); // 先于 admin 补链执行，使新菜单当次启动即可见
         ensureNotificationModule(); // 站内信查询权限，与操作日志同款幂等播种
+        ensureAiRoleModule(); // AI 人设管理权限，与站内信同款幂等播种
         // 每次启动都幂等补齐 admin 角色与全部菜单的关联，
         // 避免「菜单已存在但未关联 admin」导致超级管理员权限缺失。
         ensureAdminRoleAllMenus(adminRoleId);
@@ -133,6 +134,26 @@ public class SystemDataSeeder implements CommandLineRunner {
         }
         button(parent.getId(), "站内信查询", "system:notification:list", 10);
         log.info("站内信查询权限已播种");
+    }
+
+    /**
+     * 播种 AI 人设管理权限（管理端角色管理接口鉴权用），幂等
+     */
+    private void ensureAiRoleModule() {
+        if (menuMapper.selectCount(new LambdaQueryWrapper<SysMenu>()
+                .eq(SysMenu::getPerms, "ai:role:manage")) > 0) {
+            return;
+        }
+        SysMenu parent = menuMapper.selectOne(new LambdaQueryWrapper<SysMenu>()
+                .eq(SysMenu::getParentId, 0L)
+                .eq(SysMenu::getMenuName, "系统管理")
+                .last("LIMIT 1"));
+        if (parent == null) {
+            log.warn("未找到「系统管理」菜单，跳过 AI 人设管理权限播种");
+            return;
+        }
+        button(parent.getId(), "AI 人设管理", "ai:role:manage", 11);
+        log.info("AI 人设管理权限已播种");
     }
 
     private Long ensureAdminUser() {
