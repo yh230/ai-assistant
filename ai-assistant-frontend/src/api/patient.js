@@ -1,4 +1,5 @@
 import { createAuthHttp } from './http'
+import { streamSse } from './sse'
 
 /**
  * 患者侧 HTTP 客户端
@@ -145,100 +146,47 @@ export function readAllPatientNotifications() {
 }
 
 /**
- * 解析 SSE 事件流（患者侧，事件：session/token/done/error/confirm_required）
+ * 打开患者侧 SSE 流（主对话流与 confirm 续答流共用）
+ * 事件：session/token/confirm_required/references/done/error
+ * 返回 AbortController 供「停止生成」
  */
-async function consumeSse(response, handlers, signal) {
-  if (response.status === 401 || response.status === 403) {
-    forceToPatientLogin()
-    throw new Error(`HTTP ${response.status}: 未登录或会话已失效`)
-  }
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let doneSeen = false
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    // SSE 事件以 \n\n 分隔
-    const parts = buffer.split('\n\n')
-    buffer = parts.pop() // 保留不完整的部分
-    for (const part of parts) {
-      if (!part.trim()) continue
-      let eventType = 'message'
-      let dataStr = ''
-      for (const line of part.split('\n')) {
-        if (line.startsWith('event:')) eventType = line.slice(6).trim()
-        else if (line.startsWith('data:')) dataStr += line.slice(5).replace(/^\s/, '')
-      }
-      if (eventType === 'session') {
+function openPatientStream(url, body, handlers = {}) {
+  const { controller, done } = streamSse(url, {
+    body: body === undefined ? undefined : JSON.stringify(body),
+    getToken: () => localStorage.getItem('patient_token'),
+    refresh: refreshPatientAccessToken,
+    onEvent: (event, dataStr) => {
+      if (event === 'session') {
         try { handlers.onSession?.(JSON.parse(dataStr)) } catch { /* ignore */ }
-      } else if (eventType === 'token') {
+      } else if (event === 'token') {
         handlers.onToken?.(dataStr)
-      } else if (eventType === 'confirm_required') {
+      } else if (event === 'confirm_required') {
         try { handlers.onConfirm?.(JSON.parse(dataStr)) } catch { /* ignore */ }
-      } else if (eventType === 'references') {
+      } else if (event === 'references') {
         try { handlers.onReferences?.(JSON.parse(dataStr)) } catch { /* ignore */ }
-      } else if (eventType === 'done') {
-        doneSeen = true
+      } else if (event === 'done') {
         try { handlers.onDone?.(JSON.parse(dataStr)) } catch { handlers.onDone?.({}) }
-      } else if (eventType === 'error') {
+      } else if (event === 'error') {
         try { handlers.onError?.(JSON.parse(dataStr).message || dataStr) } catch { handlers.onError?.(dataStr) }
       }
     }
-  }
-  // 流结束兜底：未收到 done 事件也收尾，避免 loading 悬挂（主对话流与 confirm 续答流共用）
-  if (!doneSeen) handlers.onDone?.({})
-}
-
-async function fetchWithPatientRefresh(url, options) {
-  let response = await fetch(url, options)
-  if (response.status === 401) {
-    const token = await refreshPatientAccessToken()
-    response = await fetch(url, { ...options, headers: { ...options.headers, Authorization: 'Bearer ' + token } })
-  }
-  return response
+  })
+  done.catch(err => {
+    if (err.name !== 'AbortError') handlers.onError?.(err.message || '网络异常')
+  })
+  return controller
 }
 
 /**
  * 患者流式对话（SSE），返回 AbortController 供「停止生成」
  */
 export function sendPatientStream(data, handlers) {
-  const token = localStorage.getItem('patient_token')
-  const controller = new AbortController()
-  fetchWithPatientRefresh('/api/chat/patient/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: 'Bearer ' + token } : {})
-    },
-    body: JSON.stringify(data),
-    signal: controller.signal
-  })
-    .then((response) => consumeSse(response, handlers))
-    .catch((err) => {
-      if (err.name !== 'AbortError') handlers.onError?.(err.message || '网络异常')
-    })
-  return controller
+  return openPatientStream('/api/chat/patient/stream', data, handlers)
 }
 
 /**
  * 确认写操作（SSE 续答），返回 AbortController 供「停止生成」
  */
 export function confirmPatientAction(actionId, handlers) {
-  const token = localStorage.getItem('patient_token')
-  const controller = new AbortController()
-  fetchWithPatientRefresh(`/api/chat/patient/action/${actionId}/confirm`, {
-    method: 'POST',
-    headers: token ? { Authorization: 'Bearer ' + token } : {},
-    signal: controller.signal
-  })
-    .then((response) => consumeSse(response, handlers))
-    .catch((err) => {
-      if (err.name !== 'AbortError') handlers.onError?.(err.message || '网络异常')
-    })
-  return controller
+  return openPatientStream(`/api/chat/patient/action/${actionId}/confirm`, undefined, handlers)
 }
