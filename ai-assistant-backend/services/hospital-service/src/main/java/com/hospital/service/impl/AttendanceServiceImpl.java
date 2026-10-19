@@ -241,8 +241,8 @@ public class AttendanceServiceImpl implements AttendanceService {
     private List<Long> resolveUserIdsByKeyword(String keyword) {
         UserPageRequest req = new UserPageRequest();
         req.setPageNum(1);
-        // 规模上限覆盖演示数据，超出时按匹配序截断
-        req.setPageSize(1000);
+        // 全局分页上限 100
+        req.setPageSize(100);
         req.setKeyword(keyword);
         Result<PageResult<UserBriefDTO>> result = userClient.page(req);
         if (result == null || result.getCode() != 200 || result.getData() == null) {

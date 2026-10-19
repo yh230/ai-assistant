@@ -58,6 +58,45 @@ class UserRoleBatchLoaderTest {
     }
 
     @Test
+    void joinsMultiRoleNamesInRelationOrder() {
+        when(userRoleMapper.selectList(any())).thenReturn(List.of(
+                relation(1L, 10L), relation(1L, 12L), relation(1L, 11L)));
+        when(roleMapper.selectBatchIds(any())).thenReturn(List.of(
+                role(10L, "医生"), role(11L, "护士"), role(12L, "药师")));
+
+        Map<Long, UserRoleBatchLoader.RoleView> result = loader.load(List.of(1L));
+
+        // 角色顺序与关联查询返回顺序一致
+        assertEquals(List.of(10L, 12L, 11L), result.get(1L).roleIds());
+        assertEquals("医生,药师,护士", result.get(1L).roleNames());
+    }
+
+    @Test
+    void duplicateUserIdsDoNotDuplicateOutput() {
+        when(userRoleMapper.selectList(any())).thenReturn(List.of(relation(1L, 10L)));
+        when(roleMapper.selectBatchIds(any())).thenReturn(List.of(role(10L, "医生")));
+
+        Map<Long, UserRoleBatchLoader.RoleView> result = loader.load(List.of(1L, 1L));
+
+        assertEquals(1, result.size());
+        assertEquals(List.of(10L), result.get(1L).roleIds());
+        assertEquals("医生", result.get(1L).roleNames());
+        verify(userRoleMapper, times(1)).selectList(any());
+    }
+
+    @Test
+    void missingRoleKeepsRoleIdWithEmptyName() {
+        when(userRoleMapper.selectList(any())).thenReturn(List.of(relation(1L, 99L)));
+        when(roleMapper.selectBatchIds(any())).thenReturn(List.of());
+
+        Map<Long, UserRoleBatchLoader.RoleView> result = loader.load(List.of(1L));
+
+        // 角色已删除时保留 roleId，名称按原语义为空串
+        assertEquals(List.of(99L), result.get(1L).roleIds());
+        assertEquals("", result.get(1L).roleNames());
+    }
+
+    @Test
     void emptyInputShortCircuits() {
         assertTrue(loader.load(null).isEmpty());
         assertTrue(loader.load(List.of()).isEmpty());

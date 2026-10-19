@@ -181,7 +181,8 @@ const poolSchedule = ref(null)
 
 async function loadDoctors() {
   try {
-    const res = await pageEmployees({ pageSize: 200 })
+    // 全局分页上限 100
+    const res = await pageEmployees({ pageSize: 100 })
     // 仅取医生角色
     doctors.value = (res.list || []).filter(d => (d.roleNames || '').includes('医生'))
   } catch (e) { /* 忽略 */ }
