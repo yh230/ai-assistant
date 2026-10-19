@@ -1,10 +1,12 @@
 package com.aiassistant.service;
 
+import com.aiassistant.config.AiProperties;
 import com.aiassistant.dto.RoleForm;
 import com.aiassistant.entity.Role;
 import com.aiassistant.repository.RoleRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.Assert;
@@ -30,6 +32,11 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class AssistantRoleService {
 
+    /** 特征：患者角色域 */
+    public static final String SCOPE_PATIENT = "PATIENT";
+    /** 特征：员工角色域 */
+    public static final String SCOPE_STAFF = "STAFF";
+
     /** 角色ID格式：字母、数字、下划线，2~32 位 */
     private static final Pattern ROLE_ID_PATTERN = Pattern.compile("^[A-Za-z0-9_]{2,32}$");
 
@@ -40,6 +47,7 @@ public class AssistantRoleService {
     private static final String DEFAULT_SYSTEM_PROMPT = "你是用户的 AI 助手，请友好、简洁、真诚地回应。";
 
     private final RoleRepository roleRepository;
+    private final AiProperties aiProperties;
 
     // ==================== 查询 ====================
 
@@ -60,7 +68,7 @@ public class AssistantRoleService {
      */
     @Transactional(readOnly = true)
     public List<Role> listEnabledOrdered() {
-        return roleRepository.findByEnabledTrueOrderBySortOrderAscIdAsc();
+        return roleRepository.findByScopeAndEnabledTrueOrderBySortOrderAscIdAsc(SCOPE_STAFF);
     }
 
     /**
@@ -95,11 +103,11 @@ public class AssistantRoleService {
         if (isEnabled(requested)) {
             return requested;
         }
-        List<Role> enabled = roleRepository.findByEnabledTrueOrderBySortOrderAscIdAsc();
+        List<Role> enabled = roleRepository.findByScopeAndEnabledTrueOrderBySortOrderAscIdAsc(SCOPE_STAFF);
         if (!enabled.isEmpty()) {
             return enabled.get(0).getId();
         }
-        List<Role> all = roleRepository.findAllByOrderBySortOrderAscIdAsc();
+        List<Role> all = roleRepository.findByScopeOrderBySortOrderAscIdAsc(SCOPE_STAFF);
         if (!all.isEmpty()) {
             return all.get(0).getId();
         }
@@ -131,6 +139,112 @@ public class AssistantRoleService {
             return role.getSystemPrompt();
         }
         return DEFAULT_SYSTEM_PROMPT;
+    }
+
+    // ==================== 患者角色（按医院库驱动） ====================
+
+    /**
+     * 解析患者角色（缺失则按模板惰性建库）
+     *
+     * @param hospitalId 医院 ID（为空时不建库，返回 null）
+     * @param sessionType 会话类型 CHAT/TRIAGE/RAG
+     * @return 患者角色；医院为空时返回 null
+     */
+    @Transactional
+    public Role resolvePatientRole(Long hospitalId, String sessionType) {
+        if (hospitalId == null) {
+            return null;
+        }
+        String type = normalizeSessionType(sessionType);
+        Optional<Role> existing = roleRepository
+                .findByScopeAndHospitalIdAndSessionType(SCOPE_PATIENT, hospitalId, type);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        Role role = Role.builder()
+                .id("pat_" + hospitalId + "_" + type)
+                .name(patientRoleName(type))
+                .avatar(patientRoleAvatar(type))
+                .description(patientRoleDescription(type))
+                .systemPrompt(promptTemplate(type))
+                .sortOrder(patientRoleSort(type))
+                .enabled(Boolean.TRUE)
+                .scope(SCOPE_PATIENT)
+                .sessionType(type)
+                .hospitalId(hospitalId)
+                .build();
+        try {
+            return roleRepository.save(role);
+        } catch (DataIntegrityViolationException e) {
+            // 并发双建：唯一键冲突后重查
+            return roleRepository.findByScopeAndHospitalIdAndSessionType(SCOPE_PATIENT, hospitalId, type)
+                    .orElseThrow(() -> e);
+        }
+    }
+
+    /**
+     * 解析患者系统提示词（角色禁用或医院为空时回退模板）
+     *
+     * @param hospitalId 医院 ID
+     * @param sessionType 会话类型
+     * @return 系统提示词
+     */
+    @Transactional
+    public String resolvePatientSystemPrompt(Long hospitalId, String sessionType) {
+        Role role = resolvePatientRole(hospitalId, sessionType);
+        if (role != null && Boolean.TRUE.equals(role.getEnabled())
+                && role.getSystemPrompt() != null && !role.getSystemPrompt().isBlank()) {
+            return role.getSystemPrompt();
+        }
+        return promptTemplate(normalizeSessionType(sessionType));
+    }
+
+    private String normalizeSessionType(String type) {
+        String normalized = type == null ? "CHAT" : type.trim().toUpperCase();
+        return switch (normalized) {
+            case "TRIAGE", "RAG", "CHAT" -> normalized;
+            default -> "CHAT";
+        };
+    }
+
+    private String promptTemplate(String type) {
+        return switch (type) {
+            case "TRIAGE" -> aiProperties.getPrompt().getTriage();
+            case "RAG" -> aiProperties.getPrompt().getRag();
+            default -> aiProperties.getPrompt().getChat();
+        };
+    }
+
+    private String patientRoleName(String type) {
+        return switch (type) {
+            case "TRIAGE" -> "AI 导诊";
+            case "RAG" -> "知识库问答";
+            default -> "患者闲聊";
+        };
+    }
+
+    private String patientRoleAvatar(String type) {
+        return switch (type) {
+            case "TRIAGE" -> "🩺";
+            case "RAG" -> "📖";
+            default -> "💬";
+        };
+    }
+
+    private String patientRoleDescription(String type) {
+        return switch (type) {
+            case "TRIAGE" -> "患者导诊人设（按医院维护）";
+            case "RAG" -> "患者知识库问答人设（按医院维护）";
+            default -> "患者闲聊人设（按医院维护）";
+        };
+    }
+
+    private int patientRoleSort(String type) {
+        return switch (type) {
+            case "CHAT" -> 0;
+            case "TRIAGE" -> 1;
+            default -> 2;
+        };
     }
 
     // ==================== 管理：增删改 ====================
@@ -211,14 +325,14 @@ public class AssistantRoleService {
     // ==================== 私有辅助 ====================
 
     /**
-     * 判断指定角色是否存在且已启用。
+     * 判断指定角色是否存在、已启用且属于员工角色域。
      */
     private boolean isEnabled(String roleId) {
         if (roleId == null || roleId.isBlank()) {
             return false;
         }
         return roleRepository.findById(roleId.trim())
-                .map(r -> Boolean.TRUE.equals(r.getEnabled()))
+                .map(r -> Boolean.TRUE.equals(r.getEnabled()) && SCOPE_STAFF.equals(r.getScope()))
                 .orElse(false);
     }
 

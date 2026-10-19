@@ -10,12 +10,14 @@ import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
 import com.aiassistant.entity.PendingAction;
+import com.aiassistant.entity.Role;
 import com.aiassistant.rag.KnowledgeReferencesBuilder;
 import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.safety.OutputSafetyFilter;
 import com.aiassistant.service.ActionExecutor;
+import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.PatientChatService;
 import com.aiassistant.service.PendingActionService;
 import com.aiassistant.tool.PatientTools;
@@ -67,7 +69,7 @@ import java.util.stream.Collectors;
  *         由 Spring MVC 自动适配为 HTTP SSE 流。</li>
  *     <li><b>会话隔离</b>：会话按 (userId, identity=patient) 绑定，读写一律限定当前登录患者，口径与员工侧一致。</li>
  *     <li><b>会话类型</b>：CHAT=闲聊 / TRIAGE=导诊（装配患者工具）/ RAG=知识库（知识库人设提示词 + 本院检索片段拼接），
- *         系统提示词取自 {@link AiProperties}。</li>
+ *         系统提示词由 {@link AssistantRoleService} 按医院角色库解析，Nacos {@link AiProperties} 仅作模板兜底。</li>
  *     <li><b>免责与降级</b>：每次流式回答（AI 或本地降级）末尾强制追加免责声明；模型不可用或流异常时降级本地回复引擎，对话不中断。</li>
  *     <li><b>输入输出风控</b>：命中敏感词规则的输入直接拦截；输出侧仅扫描生成正文，命中即丢弃生成内容并持久化标准文案。</li>
  *     <li><b>SSE 加固</b>：AI 生成 120 秒无新 token 按超时结束（error 事件输出固定文案）；客户端断开时记录日志并按已产生的部分内容（附免责）落库。</li>
@@ -114,6 +116,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final ObjectMapper objectMapper;
     private final KnowledgeVectorStore knowledgeVectorStore;
     private final KnowledgeReferencesBuilder knowledgeReferencesBuilder;
+    private final AssistantRoleService assistantRoleService;
     private final MeterRegistry meterRegistry;
 
     /** 当前活跃患者 SSE 流数（Gauge 底层数据源） */
@@ -177,7 +180,13 @@ public class PatientChatServiceImpl implements PatientChatService {
                 .map(m -> (Message) ("user".equals(m.getRole())
                         ? new UserMessage(m.getContent()) : new AssistantMessage(m.getContent())))
                 .toList();
-        String systemPrompt = resolvePrompt(session.getSessionType());
+        Role patientRole = assistantRoleService.resolvePatientRole(user.getHospitalId(), session.getSessionType());
+        if (patientRole != null && (session.getRoleId() == null || session.getRoleId().isBlank())) {
+            session.setRoleId(patientRole.getId());
+            sessionRepository.save(session);
+        }
+        String systemPrompt = assistantRoleService.resolvePatientSystemPrompt(
+                user.getHospitalId(), session.getSessionType());
         String referenceJson = "";
         if (TYPE_RAG.equals(session.getSessionType())) {
             List<Document> hits = knowledgeVectorStore.search(user.getHospitalId(), request.getMessage(),
@@ -476,7 +485,8 @@ public class PatientChatServiceImpl implements PatientChatService {
         log.info("患者确认写操作 actionId={}, tool={}, 会话={}, 结果={}",
                 actionId, action.getToolName(), session.getSessionId(), resultText);
         return new PatientChatContext(session, user, contextMessages,
-                resolvePrompt(session.getSessionType()), confirmMessage, "", null);
+                assistantRoleService.resolvePatientSystemPrompt(user.getHospitalId(), session.getSessionType()),
+                confirmMessage, "", null);
     }
 
     /**
@@ -626,22 +636,6 @@ public class PatientChatServiceImpl implements PatientChatService {
             case TYPE_TRIAGE, TYPE_RAG, TYPE_CHAT -> normalized;
             default -> TYPE_CHAT;
         };
-    }
-
-    /**
-     * 按会话类型解析系统提示词（导诊/知识库/闲聊三分支）
-     *
-     * @param sessionType 会话类型
-     * @return 对应人设的系统提示词
-     */
-    private String resolvePrompt(String sessionType) {
-        if (TYPE_TRIAGE.equals(sessionType)) {
-            return aiProperties.getPrompt().getTriage();
-        }
-        if (TYPE_RAG.equals(sessionType)) {
-            return aiProperties.getPrompt().getRag();
-        }
-        return aiProperties.getPrompt().getChat();
     }
 
     /**
