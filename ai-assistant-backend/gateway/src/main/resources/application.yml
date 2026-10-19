@@ -11,7 +11,8 @@ spring:
     gateway:
       server:
         webflux:
-          trusted-proxies: ".*"   # 信任上游并透传/追加 X-Forwarded-For（审计真实 IP 依赖；本机演示全信任）
+          # 仅信任本机回环代理；部署在 Nginx/LB 之后需通过环境变量 GATEWAY_TRUSTED_PROXIES 指定其网段
+          trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:127.0.0.1,::1}
       routes:
         - id: login-ratelimited
           uri: lb://auth-service
