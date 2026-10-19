@@ -4,7 +4,9 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -26,6 +28,13 @@ public class AssistantProperties {
 
     /** 模型定义集合，key 为模型ID（如 openai、qwen、ollama） */
     private Map<String, ModelProperties> models = new LinkedHashMap<>();
+
+    /** 主模型失败时的备用模型顺序 */
+    private List<String> fallbackModelIds = new ArrayList<>();
+
+    /** 各场景温度 */
+    private Map<String, Double> sceneTemperature = new LinkedHashMap<>(Map.of(
+            "chat", 0.7, "triage", 0.2, "rag", 0.2));
 
     /**
      * 解析实际使用的模型ID：请求模型存在则用之，否则回退默认模型。
