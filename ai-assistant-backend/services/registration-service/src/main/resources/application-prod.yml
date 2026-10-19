@@ -1,0 +1,5 @@
+# 生产 profile：Nacos 配置必须可达，禁止 optional 静默降级
+spring:
+  config:
+    import:
+      - nacos:common-shared.yaml?group=DEFAULT_GROUP
