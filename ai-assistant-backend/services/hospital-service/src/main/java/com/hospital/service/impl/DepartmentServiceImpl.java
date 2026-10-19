@@ -92,23 +92,24 @@ public class DepartmentServiceImpl implements DepartmentService {
 
     @Override
     public DepartmentVO get(Long id) {
-        Department d = departmentMapper.selectById(id);
-        if (d == null) {
-            throw new BusinessException("科室不存在");
-        }
+        Department d = requireDepartment(id);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(d.getHospitalId(), d.getId(), null, "无权操作该科室");
         return enrich(List.of(d)).get(0);
     }
 
     /**
-     * 新增科室（状态为空默认启用）
+     * 新增科室（状态为空默认启用）；非 ALL 范围强制归属本人医院
      *
      * @param dto 科室保存入参
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void create(DepartmentSaveDTO dto) {
+        DataScope scope = dataScopeResolver.resolveRequired();
         Department d = new Department();
-        d.setHospitalId(dto.getHospitalId());
+        // 医院归属由数据范围决定，忽略前端传值
+        d.setHospitalId(scope.isAll() ? dto.getHospitalId() : scope.getHospitalId());
         d.setName(dto.getName());
         d.setDirectorUserId(dto.getDirectorUserId());
         d.setStatus(dto.getStatus() == null ? StatusConstants.ENABLED : dto.getStatus());
@@ -120,11 +121,11 @@ public class DepartmentServiceImpl implements DepartmentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void update(Long id, DepartmentSaveDTO dto) {
-        Department d = departmentMapper.selectById(id);
-        if (d == null) {
-            throw new BusinessException("科室不存在");
-        }
-        d.setHospitalId(dto.getHospitalId());
+        Department d = requireDepartment(id);
+        DataScope scope = dataScopeResolver.resolveRequired();
+        scope.assertCanAccess(d.getHospitalId(), d.getId(), null, "无权操作该科室");
+        // 医院归属由数据范围决定，忽略前端传值
+        d.setHospitalId(scope.isAll() ? dto.getHospitalId() : scope.getHospitalId());
         d.setName(dto.getName());
         d.setDirectorUserId(dto.getDirectorUserId());
         d.setStatus(dto.getStatus());
@@ -135,10 +136,9 @@ public class DepartmentServiceImpl implements DepartmentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
-        Department d = departmentMapper.selectById(id);
-        if (d == null) {
-            throw new BusinessException("科室不存在");
-        }
+        Department d = requireDepartment(id);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(d.getHospitalId(), d.getId(), null, "无权操作该科室");
         departmentMapper.deleteById(id);
     }
 
@@ -152,13 +152,26 @@ public class DepartmentServiceImpl implements DepartmentService {
     @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long id, Integer status) {
         StatusValidator.checkEnabledDisabled(status, "非法的状态值");
+        Department d = requireDepartment(id);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(d.getHospitalId(), d.getId(), null, "无权操作该科室");
+        d.setStatus(status);
+        d.setUpdateTime(LocalDateTime.now());
+        departmentMapper.updateById(d);
+    }
+
+    /**
+     * 按 ID 查询科室，不存在时抛出业务异常
+     *
+     * @param id 科室 ID
+     * @return 科室实体
+     */
+    private Department requireDepartment(Long id) {
         Department d = departmentMapper.selectById(id);
         if (d == null) {
             throw new BusinessException("科室不存在");
         }
-        d.setStatus(status);
-        d.setUpdateTime(LocalDateTime.now());
-        departmentMapper.updateById(d);
+        return d;
     }
 
     @Override

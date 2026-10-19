@@ -85,15 +85,19 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
 
     @Override
     public ScheduleVO get(Long id) {
-        DoctorSchedule s = scheduleMapper.selectById(id);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(id);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权查看该排班");
         return enrich(List.of(s)).get(0);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ScheduleVO save(ScheduleSaveDTO dto) {
+        DataScope scope = dataScopeResolver.resolveRequired();
         UserBriefDTO doctor = loadDoctor(dto.getDoctorUserId());
+        // 医院/科室由医生归属推导后仍需落在操作人范围内（忽略前端传值）
+        scope.assertCanAccess(doctor.getHospitalId(), doctor.getDepartmentId(), doctor.getId(), "无权操作该排班");
         DoctorSchedule s = new DoctorSchedule();
         copyFromDto(s, dto, doctor);
         s.setStatus(1);
@@ -108,9 +112,12 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ScheduleVO update(Long id, ScheduleSaveDTO dto) {
-        DoctorSchedule s = scheduleMapper.selectById(id);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(id);
+        DataScope scope = dataScopeResolver.resolveRequired();
+        scope.assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
         UserBriefDTO doctor = loadDoctor(dto.getDoctorUserId());
+        // 改派医生同样不得越出操作人范围
+        scope.assertCanAccess(doctor.getHospitalId(), doctor.getDepartmentId(), doctor.getId(), "无权操作该排班");
         // 若出诊医生/日期/时段/号源总数变化 → 重生成号源（作废空闲号源，保留占用）
         boolean scheduleChanged = !Objects.equals(s.getDoctorUserId(), dto.getDoctorUserId())
                 || !Objects.equals(s.getScheduleDate(), dto.getScheduleDate())
@@ -128,8 +135,9 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void remove(Long id) {
-        DoctorSchedule s = scheduleMapper.selectById(id);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(id);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
         // 停用排班
         s.setStatus(0);
         s.setUpdateTime(LocalDateTime.now());
@@ -149,9 +157,20 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void generateSources(Long scheduleId) {
-        DoctorSchedule s = scheduleMapper.selectById(scheduleId);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(scheduleId);
         numberSourceService.generateForSchedule(s);
+    }
+
+    /**
+     * 按 ID 查询排班，不存在时抛出业务异常
+     *
+     * @param id 排班 ID
+     * @return 排班实体
+     */
+    private DoctorSchedule requireSchedule(Long id) {
+        DoctorSchedule s = scheduleMapper.selectById(id);
+        if (s == null) throw new BusinessException("排班不存在");
+        return s;
     }
 
     @Override

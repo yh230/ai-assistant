@@ -88,13 +88,26 @@ public class NumberSourceServiceImpl implements NumberSourceService {
 
     @Override
     public NumberSourceVO detail(Long scheduleId) {
-        DoctorSchedule s = scheduleMapper.selectById(scheduleId);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(scheduleId);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权查看该号源");
         List<NumberSource> sources = numberSourceMapper.selectList(
                 new LambdaQueryWrapper<NumberSource>().eq(NumberSource::getScheduleId, scheduleId)
                         .orderByAsc(NumberSource::getSeqNo));
         Map<Long, String> uNames = doctorNames(List.of(s.getDoctorUserId()));
         return buildPool(s, sources, uNames);
+    }
+
+    /**
+     * 按 ID 查询排班，不存在时抛出业务异常
+     *
+     * @param scheduleId 排班 ID
+     * @return 排班实体
+     */
+    private DoctorSchedule requireSchedule(Long scheduleId) {
+        DoctorSchedule s = scheduleMapper.selectById(scheduleId);
+        if (s == null) throw new BusinessException("排班不存在");
+        return s;
     }
 
     @Override
