@@ -29,8 +29,8 @@ Thumbs.db
 .workbuddy/
 docs/superpowers/
 
-# 本地架构文档（不入库，仓库对外文档以 README 为准）
-ARCHITECTURE.md
+# 本地架构文档（不入库；对外架构说明见 docs/design/architecture.md）
+/ARCHITECTURE.md
 
 # 本机密钥配置（真实值，不入库）
 application-local.yml

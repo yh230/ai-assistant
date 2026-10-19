@@ -14,34 +14,77 @@
 [![CI](https://github.com/yh230/ai-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/yh230/ai-assistant/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 目录
+## 这是什么
 
-- [项目简介](#项目简介)
-- [功能特性](#功能特性)
-- [系统架构](#系统架构)
-- [技术栈](#技术栈)
-- [项目结构](#项目结构)
-- [环境要求](#环境要求)
-- [快速开始](#快速开始)
-- [端口一览](#端口一览)
-- [默认账号](#默认账号)
-- [生产部署安全前置](#生产部署安全前置)
-- [自动化测试](#自动化测试)
-- [构建](#构建)
-- [常见问题](#常见问题)
-- [贡献](#贡献)
-- [许可](#许可)
-
-## 项目简介
-
-一个**学习 / 展示用途**的完整案例：把「Spring Cloud 微服务实践」与「大模型应用落地（Tool Calling / RAG / SSE 流式）」放在同一套可运行的医院业务系统中。员工端与管理端面向医院员工，患者端面向患者账号。
+一个**学习 / 展示用途**的完整案例：把「Spring Cloud 微服务实践」与「大模型应用落地（Tool Calling / RAG / SSE 流式）」放进同一套可运行的医院业务系统。员工端与管理端面向医院员工，患者端面向患者账号。
 
 > AI 输出仅辅助参考，**不提供诊断与处方**；产品层强制附带免责文案，并内置输入/输出双向风控。
 
-- 员工端：`http://localhost:5173` （聊天 / 人设 / 天气 / 医院业务 / 系统管理）
-- 患者端：`http://localhost:5173/patient/login` （注册登录 → AI 导诊 / 知识库问答 / 闲聊）
+## 核心能力
 
-## 功能特性
+| 能力 | 入口 | 技术看点 |
+|------|------|----------|
+| AI 导诊 | 患者端 | 真实科室 Tool Calling、急症红线、免责兜底 |
+| 智能挂号 | 患者端 | 写工具 + 二次确认状态机 + 租户校验 |
+| RAG 知识库 | 患者端 / 管理端 | 结构切片、混合检索、引用与 groundedness |
+| 员工聊天 | 员工端 | 人设库、模型故障转移、token 预算与摘要 |
+| 医院业务 | 管理端 | 多医院数据隔离、排班号源、预约状态机 |
+| 工程底座 | 全链路 | 双身份 JWT、网关限流、Kafka、可观测性 |
+
+## 快速体验
+
+Windows：
+
+```bat
+mysql -uroot -p < sql/init.sql
+scripts\start-nacos.bat
+scripts\start-services.bat
+```
+
+macOS / Linux：
+
+```bash
+mysql -uroot -p < sql/init.sql
+scripts/start-nacos.sh
+scripts/start-services.sh
+```
+
+前端：`cd ai-assistant-frontend && npm ci && npm run dev`，访问 `http://localhost:5173`（员工端）或 `http://localhost:5173/patient/login`（患者端）。
+
+> 完整环境要求、Nacos 配置与密钥设置见下方 [快速开始](#快速开始)。
+
+## 架构一览
+
+```mermaid
+flowchart LR
+  U[员工端 / 患者端] --> G[Gateway :8080]
+  G --> A[auth-service :9200]
+  G --> S[system-service :9201]
+  G --> H[hospital-service :9202]
+  G --> R[registration-service :9203]
+  G --> C[ai-chat-service :9204]
+  A --> M[(MySQL 四库)]
+  S --> M
+  H --> M
+  R --> M
+  C --> M
+  A --> D[(Redis)]
+  C --> K[Kafka]
+  C --> E[(Elasticsearch 可选)]
+```
+
+> 详细服务边界、数据归属与调用链见 [架构说明](docs/design/architecture.md)。
+
+## 文档
+
+- [架构说明](docs/design/architecture.md)
+- [阅读路线](docs/design/reading-guide.md)
+- [AI 评测](docs/design/evaluation.md)
+- [E2E 套件](ai-assistant-e2e/README.md)
+- [安全策略](SECURITY.md)
+- [贡献指南](CONTRIBUTING.md)
+
+## 功能明细
 
 **AI 能力**
 
