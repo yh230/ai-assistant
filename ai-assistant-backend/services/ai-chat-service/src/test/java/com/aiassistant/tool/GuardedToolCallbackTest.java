@@ -95,7 +95,7 @@ class GuardedToolCallbackTest {
             return "late";
         });
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
-                Duration.ofMillis(100), meterRegistry);
+                Duration.ofMillis(200), meterRegistry);
 
         String result = guarded.call("{}", null);
 
@@ -103,6 +103,21 @@ class GuardedToolCallbackTest {
         assertTrue(error.hasNonNull("error"));
         assertTrue(error.get("error").asText().contains("超时"));
         assertEquals(1.0, counterCount("demo", GuardedToolCallback.RESULT_TIMEOUT));
+    }
+
+    @Test
+    void tagsStructuredErrorResultAsValidationError() throws Exception {
+        ToolCallback delegate = new StubToolCallback("demo",
+                input -> "{\"error\":\"科室ID不合法，请先查询科室列表获取正确ID\"}");
+        GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
+                Duration.ofSeconds(1), meterRegistry);
+
+        String result = guarded.call("{}", null);
+
+        JsonNode payload = OBJECT_MAPPER.readTree(result);
+        assertTrue(payload.hasNonNull("error"));
+        assertEquals(1.0, counterCount("demo", GuardedToolCallback.RESULT_VALIDATION_ERROR));
+        assertEquals(0.0, counterCount("demo", GuardedToolCallback.RESULT_SUCCESS));
     }
 
     @Test

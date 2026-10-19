@@ -4,7 +4,8 @@ import com.aiassistant.service.PendingActionService;
 import com.api.client.OrgClient;
 import com.api.client.RegistrationClient;
 import com.api.client.UserClient;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.api.dto.SourceInfoDTO;
+import com.common.result.Result;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,11 +17,15 @@ import org.springframework.ai.chat.model.ToolContext;
 
 import java.time.LocalDate;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * 患者侧 AI 工具集单元测试（参数校验与失败关闭：非法输入只返回结构化错误，不触达业务服务）
@@ -47,7 +52,22 @@ class PatientToolsTest {
 
     private static final LocalDate TODAY = LocalDate.now();
 
-    private final ObjectMapper parser = new ObjectMapper();
+    @Test
+    void queryNumberSourcesReturnsOnlyAvailableSources() {
+        ToolContext context = contextWithHospital();
+        SourceInfoDTO available = sourceWithRemaining(3);
+        SourceInfoDTO exhausted = sourceWithRemaining(0);
+        SourceInfoDTO unknown = sourceWithRemaining(null);
+        String date = TODAY.plusDays(1).toString();
+        when(registrationClient.sources(100L, date, 1, 1L))
+                .thenReturn(Result.success(List.of(available, exhausted, unknown)));
+
+        Object result = patientTools.queryNumberSources(100L, date, 1, context);
+
+        List<?> sources = assertInstanceOf(List.class, result);
+        assertEquals(1, sources.size(), "仅返回余量大于 0 的号源");
+        assertSame(available, sources.get(0));
+    }
 
     @Test
     void queryNumberSourcesFailsClosedWhenHospitalMissing() throws Exception {
@@ -113,10 +133,9 @@ class PatientToolsTest {
     void bookAppointmentRejectsNonPositiveDoctor() throws Exception {
         ToolContext context = contextWithSession();
 
-        String result = patientTools.bookAppointment(100L, 0L, TODAY.plusDays(1).toString(), 1, null, context);
+        Object result = patientTools.bookAppointment(100L, 0L, TODAY.plusDays(1).toString(), 1, null, context);
 
-        assertEquals("医生ID不合法，请先查询该科室号源获取正确医生ID",
-                parser.readTree(result).get("error").asText());
+        assertEquals("医生ID不合法，请先查询该科室号源获取正确医生ID", errorMessage(result));
         verifyNoInteractions(pendingActionService);
     }
 
@@ -124,9 +143,9 @@ class PatientToolsTest {
     void bookAppointmentRejectsMissingPeriod() throws Exception {
         ToolContext context = contextWithSession();
 
-        String result = patientTools.bookAppointment(100L, 200L, TODAY.plusDays(1).toString(), null, null, context);
+        Object result = patientTools.bookAppointment(100L, 200L, TODAY.plusDays(1).toString(), null, null, context);
 
-        assertTrue(parser.readTree(result).get("error").asText().contains("时段"));
+        assertTrue(errorMessage(result).contains("时段"));
         verifyNoInteractions(pendingActionService);
     }
 
@@ -134,9 +153,9 @@ class PatientToolsTest {
     void bookAppointmentRejectsNonPositiveSeqNo() throws Exception {
         ToolContext context = contextWithSession();
 
-        String result = patientTools.bookAppointment(100L, 200L, TODAY.plusDays(1).toString(), 1, 0, context);
+        Object result = patientTools.bookAppointment(100L, 200L, TODAY.plusDays(1).toString(), 1, 0, context);
 
-        assertTrue(parser.readTree(result).get("error").asText().contains("序号"));
+        assertTrue(errorMessage(result).contains("序号"));
         verifyNoInteractions(pendingActionService);
     }
 
@@ -144,9 +163,9 @@ class PatientToolsTest {
     void bookAppointmentRejectsDateOutOfWindow() throws Exception {
         ToolContext context = contextWithSession();
 
-        String result = patientTools.bookAppointment(100L, 200L, TODAY.plusDays(20).toString(), 1, null, context);
+        Object result = patientTools.bookAppointment(100L, 200L, TODAY.plusDays(20).toString(), 1, null, context);
 
-        assertTrue(parser.readTree(result).get("error").asText().contains("14"));
+        assertTrue(errorMessage(result).contains("14"));
         verifyNoInteractions(pendingActionService);
     }
 
@@ -154,24 +173,36 @@ class PatientToolsTest {
     void cancelAppointmentRejectsNonPositiveRegistrationId() throws Exception {
         ToolContext context = contextWithSession();
 
-        String result = patientTools.cancelAppointment(0L, context);
+        Object result = patientTools.cancelAppointment(0L, context);
 
-        assertTrue(parser.readTree(result).get("error").asText().contains("预约记录ID"));
+        assertTrue(errorMessage(result).contains("预约记录ID"));
         verifyNoInteractions(pendingActionService);
     }
 
     /**
-     * 断言返回值是含 error 字段的 JSON 字符串并返回错误文案
+     * 断言返回值是含 error 字段的错误 Map 并返回错误文案
      *
      * @param result 工具返回值
      * @return 错误文案
-     * @throws Exception JSON 解析失败
      */
-    private String errorMessage(Object result) throws Exception {
-        String json = assertInstanceOf(String.class, result);
-        JsonNode node = parser.readTree(json);
-        assertTrue(node.hasNonNull("error"), "非法参数应返回结构化错误 JSON：" + json);
-        return node.get("error").asText();
+    private String errorMessage(Object result) {
+        Map<?, ?> payload = assertInstanceOf(Map.class, result);
+        Object error = payload.get("error");
+        assertTrue(error != null && !error.toString().isBlank(),
+                "非法参数应返回含 error 字段的对象：" + result);
+        return error.toString();
+    }
+
+    /**
+     * 构造指定余量的号源
+     *
+     * @param remaining 余量
+     * @return 号源对象
+     */
+    private SourceInfoDTO sourceWithRemaining(Integer remaining) {
+        SourceInfoDTO source = new SourceInfoDTO();
+        source.setRemainingCount(remaining);
+        return source;
     }
 
     /**

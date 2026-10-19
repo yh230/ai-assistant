@@ -109,6 +109,12 @@ public class PatientChatServiceImpl implements PatientChatService {
     /** 写工具名称（确认续答链路不装配，防止确认后再次签发待确认操作） */
     private static final List<String> WRITE_TOOL_NAMES = List.of("bookAppointment", "cancelAppointment");
 
+    /** 写工具包装层超时倍数：须大于下游 Feign 超时，确保超时由下游先触发 */
+    private static final int WRITE_TOOL_TIMEOUT_MULTIPLIER = 3;
+
+    /** 写工具包装层最小超时（秒），避免基础配置过小导致包装层抢跑 */
+    private static final int WRITE_TOOL_MIN_TIMEOUT_SECONDS = 15;
+
     // ==================== 依赖 ====================
 
     private final AiProperties aiProperties;
@@ -341,8 +347,15 @@ public class PatientChatServiceImpl implements PatientChatService {
      * 避免确认后续答再次签发待确认操作。
      * <p>
      * 每个回调再包一层 {@link GuardedToolCallback}：本次请求内所有工具共享一个剩余次数计数器
-     * （上限取 {@code ai.chat.tool-max-iterations}），单次调用超时取 {@code ai.chat.tool-timeout-seconds}，
-     * 超限/超时/异常统一转为结构化错误 JSON 并记录 {@code ai.tool.calls} 指标。
+     * （上限取 {@code ai.chat.tool-max-iterations}），超限/超时/异常统一转为结构化错误 JSON 并记录
+     * {@code ai.tool.calls} 指标。
+     * <p>
+     * <b>超时取舍</b>：只读工具使用 {@code ai.chat.tool-timeout-seconds}；写工具（预约/退号）使用
+     * {@code max(3 × tool-timeout-seconds, 15 秒)}。写工具会创建待确认操作（pending action），
+     * 若包装层比下游 Feign 超时更早触发，模型会收到超时错误，但下游可能仍在继续执行并最终落库，
+     * 造成“模型认为失败、系统实际成功”的语义不一致。放大包装层超时让下游 Feign 先超时并返回明确错误，
+     * 保证先失败的一方是真正执行写操作的一方。代价是超时写调用会占用工具执行线程更久，
+     * 线程数由 GuardedToolCallback 的固定大小守护线程池封顶。
      * 写工具识别基于包装后透传的 {@code getToolDefinition().name()}，不因包装失效。
      *
      * @param ctx               患者聊天上下文
@@ -355,13 +368,29 @@ public class PatientChatServiceImpl implements PatientChatService {
         }
         // 每次请求独立计数器：同一次回答内所有工具累计调用次数受同一上限约束
         AtomicInteger remainingToolCalls = new AtomicInteger(resolveToolMaxIterations());
-        int toolTimeoutSeconds = aiProperties.getChat().getToolTimeoutSeconds();
+        int baseTimeoutSeconds = aiProperties.getChat().getToolTimeoutSeconds();
         return Arrays.stream(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
                 .filter(callback -> includeWriteTools
                         || !WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()))
                 .map(callback -> (ToolCallback) new GuardedToolCallback(callback, remainingToolCalls,
-                        toolTimeoutSeconds, meterRegistry))
+                        resolveToolTimeout(callback.getToolDefinition().name(), baseTimeoutSeconds), meterRegistry))
                 .toList();
+    }
+
+    /**
+     * 解析单个工具的包装层超时：写工具放大到 3 倍且不低于 15 秒，只读工具使用基础配置。
+     *
+     * @param toolName          工具名称
+     * @param baseTimeoutSeconds 基础超时（秒，配置非正时回退 1 秒，与 GuardedToolCallback 语义一致）
+     * @return 包装层超时
+     */
+    private Duration resolveToolTimeout(String toolName, int baseTimeoutSeconds) {
+        long effectiveBase = baseTimeoutSeconds > 0 ? baseTimeoutSeconds : 1L;
+        if (WRITE_TOOL_NAMES.contains(toolName)) {
+            return Duration.ofSeconds(Math.max(effectiveBase * WRITE_TOOL_TIMEOUT_MULTIPLIER,
+                    WRITE_TOOL_MIN_TIMEOUT_SECONDS));
+        }
+        return Duration.ofSeconds(effectiveBase);
     }
 
     /**

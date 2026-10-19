@@ -1,5 +1,6 @@
 package com.aiassistant.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +29,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *         超出上限不再执行底层工具，直接返回结构化错误，交由模型基于已有信息作答。</li>
  *     <li><b>调用超时</b>：单次调用在独立线程执行，超时即取消并返回结构化错误，避免拖垮模型流。</li>
  *     <li><b>异常兜底</b>：底层工具抛出的任何异常（含堆栈）不外泄，统一转为 {@code {"error":"..."}} JSON。</li>
- *     <li><b>可观测</b>：每次调用记录 {@code ai.tool.calls{tool,result}}，result 取 success/limit/timeout/error。</li>
+ *     <li><b>可观测</b>：每次调用记录 {@code ai.tool.calls{tool,result}}，result 取
+ *         success/validation_error/limit/timeout/error；底层工具正常返回但结果是错误 JSON（如参数校验失败）
+ *         时记为 {@code validation_error}，避免把校验失败混入成功。</li>
  * </ul>
  * 工具定义（{@link #getToolDefinition()}）原样透传，确保写工具识别与工具描述不丢失。
  *
@@ -44,6 +47,9 @@ public class GuardedToolCallback implements ToolCallback {
     /** 结果标签：成功 */
     public static final String RESULT_SUCCESS = "success";
 
+    /** 结果标签：参数校验失败（底层工具返回结构化错误 JSON） */
+    public static final String RESULT_VALIDATION_ERROR = "validation_error";
+
     /** 结果标签：超出调用次数上限 */
     public static final String RESULT_LIMIT = "limit";
 
@@ -56,12 +62,23 @@ public class GuardedToolCallback implements ToolCallback {
     /** 结构化错误序列化器（仅用于错误响应，线程安全） */
     private static final ObjectMapper ERROR_MAPPER = new ObjectMapper();
 
-    /** 工具执行线程池（守护线程，避免超时后阻塞模型线程；线程数随并发调用增长） */
-    private static final ExecutorService TOOL_EXECUTOR = Executors.newCachedThreadPool(runnable -> {
-        Thread thread = new Thread(runnable, "ai-tool-guard");
-        thread.setDaemon(true);
-        return thread;
-    });
+    /** 工具执行线程池线程数：固定上限，防止不响应中断的底层调用无限累积线程 */
+    private static final int TOOL_EXECUTOR_THREADS = 8;
+
+    /**
+     * 工具执行线程池（固定 8 个守护线程）
+     * <p>
+     * 超时只取消 Future 并中断执行线程；若底层 HTTP 客户端不响应中断，线程会继续占用至其自身超时。
+     * 使用无界 cached pool 时这类线程会随调用次数无限增长，故改为固定大小守护线程池，
+     * 把线程占用上界钉死在 {@value #TOOL_EXECUTOR_THREADS} 个。代价是并发工具调用超过该数量时
+     * 后续任务在队列中排队并更早触发包装层超时（返回结构化超时错误），属于用少量吞吐换资源可预测性。
+     */
+    private static final ExecutorService TOOL_EXECUTOR = Executors.newFixedThreadPool(
+            TOOL_EXECUTOR_THREADS, runnable -> {
+                Thread thread = new Thread(runnable, "ai-tool-guard");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     /** 被包装的原始工具回调 */
     private final ToolCallback delegate;
@@ -134,7 +151,8 @@ public class GuardedToolCallback implements ToolCallback {
         Future<String> future = TOOL_EXECUTOR.submit(() -> delegate.call(toolInput, toolContext));
         try {
             String result = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            record(toolName, RESULT_SUCCESS);
+            // 底层工具正常返回但结果是错误 JSON（参数校验失败）时单独打标，避免污染 success
+            record(toolName, isErrorResult(result) ? RESULT_VALIDATION_ERROR : RESULT_SUCCESS);
             return result;
         } catch (TimeoutException e) {
             future.cancel(true);
@@ -164,6 +182,31 @@ public class GuardedToolCallback implements ToolCallback {
     private String resolveToolName() {
         ToolDefinition definition = delegate.getToolDefinition();
         return definition == null || definition.name() == null ? "unknown" : definition.name();
+    }
+
+    /**
+     * 判断底层工具返回值是否为结构化错误（顶层 JSON 对象且含非空 error 字段）
+     * <p>
+     * 仅用于指标归类，解析失败或非 JSON 一律按正常结果处理，不影响回传模型的内容。
+     *
+     * @param result 底层工具返回的 JSON 字符串
+     * @return 是错误对象时返回 true
+     */
+    private boolean isErrorResult(String result) {
+        if (result == null) {
+            return false;
+        }
+        String trimmed = result.trim();
+        if (!trimmed.startsWith("{")) {
+            return false;
+        }
+        try {
+            JsonNode node = ERROR_MAPPER.readTree(trimmed);
+            return node != null && node.isObject() && node.hasNonNull("error");
+        } catch (Exception e) {
+            log.debug("工具返回内容非合法 JSON，按正常结果处理: {}", e.getMessage());
+            return false;
+        }
     }
 
     /**

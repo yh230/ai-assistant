@@ -31,7 +31,8 @@ import java.util.Map;
  * 只读工具（科室/号源/我的预约）直接查询业务服务；写工具（预约/退号）不直接执行，
  * 仅落待确认操作（pending_action），患者二次确认后经 ActionExecutor 执行。
  * 参数校验前置：日期限定今天至今天+14 天，时段仅 1/2，科室/医生/序号必须为正整数，
- * 非法输入与缺失身份一律返回 {@code {"error":"..."}} 结构化 JSON，原始异常与堆栈不出工具边界；
+ * 非法输入与缺失身份一律返回含 {@code error} 字段的 Map（由 Spring AI 序列化为 JSON 对象），
+ * 原始异常与堆栈不出工具边界；
  * 患者身份与医院范围经 ToolContext 注入（patientId/hospitalId/sessionId），不从模型参数获取。
  *
  * @author yh
@@ -98,7 +99,7 @@ public class PatientTools {
      * @param date 出诊日期（yyyy-MM-dd）
      * @param period 时段（1=上午 2=下午，可空表示全天）
      * @param context 工具上下文，hospitalId 由调用方经 ToolContext 注入
-     * @return 有余量的号源列表；参数不合法时为 {@code {"error":"..."}} JSON
+     * @return 有余量的号源列表；参数/身份不合法时为含 {@code error} 字段的错误 Map
      * @throws RuntimeException 号源查询服务不可用时抛出友好文案（由 GuardedToolCallback 转为结构化错误）
      */
     @Tool(description = "查询某科室指定日期的号源余量。参数：departmentId=科室ID（取自科室列表），date=日期（yyyy-MM-dd，今天起14天内），period=时段（1=上午 2=下午，可空表示全天）")
@@ -113,12 +114,12 @@ public class PatientTools {
         if (invalid != null) {
             log.warn("AI 工具调用：查询号源参数不合法 departmentId={} date={} period={}，原因={}",
                     departmentId, date, period, invalid);
-            return errorJson(invalid);
+            return error(invalid);
         }
         Long hospitalId = resolveHospitalId(context);
         if (hospitalId == null) {
             log.warn("AI 工具调用：查询号源缺少所属医院");
-            return errorJson("暂时无法确定所属医院，请稍后重试");
+            return error("暂时无法确定所属医院，请稍后重试");
         }
         log.info("AI 工具调用：查询号源 departmentId={} date={} period={} hospitalId={}",
                 departmentId, date, period, hospitalId);
@@ -146,13 +147,13 @@ public class PatientTools {
      * @param period 时段（1=上午 2=下午）
      * @param seqNo 就诊序号（可空，空则由挂号中心自动分配）
      * @param context 工具上下文，sessionId/patientId 由调用方经 ToolContext 注入
-     * @return 提示模型已生成确认请求的文案；参数不合法时为 {@code {"error":"..."}} JSON
+     * @return 成功时为提示模型已生成确认请求的文案；参数/身份不合法时为含 {@code error} 字段的错误 Map
      */
     @Tool(description = """
             为当前患者发起预约挂号（写操作，系统会要求患者二次确认后才会真正执行）。
             参数：departmentId=科室ID，doctorUserId=医生用户ID（取自号源查询结果），\
             date=就诊日期（yyyy-MM-dd，今天起14天内），period=时段（1=上午 2=下午），seqNo=就诊序号（可空）""")
-    public String bookAppointment(Long departmentId, Long doctorUserId, String date, Integer period,
+    public Object bookAppointment(Long departmentId, Long doctorUserId, String date, Integer period,
                                   Integer seqNo, ToolContext context) {
         String invalid = validateDepartmentId(departmentId);
         if (invalid == null) {
@@ -170,13 +171,13 @@ public class PatientTools {
         if (invalid != null) {
             log.warn("AI 工具调用：预约挂号参数不合法 departmentId={} doctorUserId={} date={} period={} seqNo={}，原因={}",
                     departmentId, doctorUserId, date, period, seqNo, invalid);
-            return errorJson(invalid);
+            return error(invalid);
         }
         String sessionId = resolveContextString(context, "sessionId");
         Long patientId = resolvePatientId(context);
         if (sessionId == null || patientId == null) {
             log.warn("AI 工具调用：预约挂号缺少会话或患者身份");
-            return errorJson("暂时无法确定当前会话或患者身份，请稍后重试");
+            return error("暂时无法确定当前会话或患者身份，请稍后重试");
         }
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("departmentId", departmentId);
@@ -201,19 +202,19 @@ public class PatientTools {
      *
      * @param registrationId 预约记录ID（取自我的预约列表）
      * @param context 工具上下文，sessionId/patientId 由调用方经 ToolContext 注入
-     * @return 提示模型已生成退号确认请求的文案；参数不合法时为 {@code {"error":"..."}} JSON
+     * @return 成功时为提示模型已生成退号确认请求的文案；参数/身份不合法时为含 {@code error} 字段的错误 Map
      */
     @Tool(description = "为当前患者取消预约退号（写操作，系统会要求患者二次确认后才会真正执行）。参数：registrationId=预约记录ID（取自我的预约列表）")
-    public String cancelAppointment(Long registrationId, ToolContext context) {
+    public Object cancelAppointment(Long registrationId, ToolContext context) {
         if (registrationId == null || registrationId <= 0) {
             log.warn("AI 工具调用：退号参数不合法 registrationId={}", registrationId);
-            return errorJson("预约记录ID不合法，请先查询我的预约获取正确的记录ID");
+            return error("预约记录ID不合法，请先查询我的预约获取正确的记录ID");
         }
         String sessionId = resolveContextString(context, "sessionId");
         Long patientId = resolvePatientId(context);
         if (sessionId == null || patientId == null) {
             log.warn("AI 工具调用：退号缺少会话或患者身份");
-            return errorJson("暂时无法确定当前会话或患者身份，请稍后重试");
+            return error("暂时无法确定当前会话或患者身份，请稍后重试");
         }
         Map<String, Object> args = Map.of("registrationId", registrationId);
         String summary = "取消预约退号（预约记录ID：" + registrationId + "）";
@@ -370,21 +371,18 @@ public class PatientTools {
     }
 
     /**
-     * 构造结构化错误 JSON（序列化失败时回退固定 JSON，保证模型始终收到合法结构）
+     * 构造结构化错误返回值
+     * <p>
+     * 直接返回 Map 而非 JSON 字符串：工具返回值若为 String，会被 Spring AI 结果转换器再包一层引号，
+     * 模型收到的是被转义的字符串而非 JSON 对象；返回 Map 可让转换器序列化为真正的 JSON 对象。
      *
      * @param message 错误文案
-     * @return {@code {"error":"..."}} JSON 字符串
+     * @return 含 {@code error} 字段的错误 Map
      */
-    private String errorJson(String message) {
-        try {
-            String json = objectMapper.writeValueAsString(Map.of("error", message));
-            if (json != null) {
-                return json;
-            }
-        } catch (Exception e) {
-            log.warn("工具错误 JSON 序列化失败: {}", e.getMessage());
-        }
-        return "{\"error\":\"工具参数不合法，请稍后重试\"}";
+    private Map<String, String> error(String message) {
+        Map<String, String> payload = new LinkedHashMap<>();
+        payload.put("error", message);
+        return payload;
     }
 
     /**
