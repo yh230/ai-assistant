@@ -184,6 +184,8 @@ const qrStatus = ref('loading')
 let qrTimer = null
 // 扫码生成代次：每次 startQr/stopQrTimer 递增，用于丢弃过期异步结果
 let qrSeq = 0
+// 二维码指向的公开访问地址（手机需可访问，默认当前站点）
+const publicBase = import.meta.env.VITE_PUBLIC_BASE_URL || window.location.origin
 
 const loginForm = reactive({ phone: '', password: '' })
 const smsForm = reactive({ phone: '', code: '' })
@@ -345,7 +347,7 @@ async function startQr() {
     // 生成期间又切页签/重开则丢弃本次结果，避免遗留轮询
     if (seq !== qrSeq || tab.value !== 'qr') return
     qrSceneId.value = sceneId
-    const url = `${location.origin}/qr-confirm?scene=${sceneId}`
+    const url = `${publicBase}/qr-confirm?scene=${sceneId}`
     await QRCode.toCanvas(qrCanvas.value, url, { width: 200 })
     if (seq !== qrSeq || tab.value !== 'qr') return
     qrStatus.value = 'waiting'

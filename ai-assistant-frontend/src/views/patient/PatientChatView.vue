@@ -3,6 +3,7 @@
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="topbar-brand">
+        <el-button class="mobile-menu-btn" :icon="Menu" circle text title="会话列表" @click="sidebarOpen = !sidebarOpen" />
         <span class="brand-badge">医</span>
         <div class="brand-text">
           <div class="brand-name">AI 医院助手</div>
@@ -21,8 +22,11 @@
     </header>
 
     <div class="chat-body">
-      <!-- 会话侧边栏 -->
-      <div class="session-panel">
+      <!-- 移动端抽屉遮罩 -->
+      <div v-if="isMobile && sidebarOpen" class="session-mask" @click="sidebarOpen = false"></div>
+
+      <!-- 会话侧边栏（≤768px 为抽屉） -->
+      <div class="session-panel" :class="{ open: sidebarOpen }">
         <div class="session-header">
           <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu">新对话</el-button>
           <div v-if="showTypeMenu" class="type-menu">
@@ -147,7 +151,7 @@
     </el-dialog>
 
     <!-- 通知抽屉（站内信） -->
-    <el-drawer v-model="notifyVisible" title="我的通知" size="360px">
+    <el-drawer v-model="notifyVisible" title="我的通知" :size="isMobile ? '100%' : '360px'">
       <div class="notify-actions">
         <el-button size="small" text :disabled="unreadCount === 0" @click="markAllRead">全部已读</el-button>
       </div>
@@ -168,7 +172,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Close, ChatDotRound, Position, VideoPause, Bell } from '@element-plus/icons-vue'
+import { Plus, Close, ChatDotRound, Position, VideoPause, Bell, Menu } from '@element-plus/icons-vue'
 import { patientAuth, clearPatientAuth } from '../../store/patientAuth'
 import {
   patientSessions,
@@ -214,6 +218,16 @@ const confirmLoading = ref(false)
 const inputRef = ref(null)
 const messageListRef = ref(null)
 let currentController = null
+
+// 移动端（≤768px）会话抽屉
+const mediaQuery = window.matchMedia('(max-width: 768px)')
+const isMobile = ref(mediaQuery.matches)
+const sidebarOpen = ref(false)
+
+function onMediaChange(event) {
+  isMobile.value = event.matches
+  if (!event.matches) sidebarOpen.value = false
+}
 
 // 通知（站内信）状态
 const unreadCount = ref(0)
@@ -300,6 +314,7 @@ async function createSession(type) {
     inputText.value = ''
     await loadSessions()
     nextTick(() => inputRef.value?.focus())
+    if (isMobile.value) sidebarOpen.value = false
   } catch (e) {
     msg('新建会话失败：' + e.message)
   }
@@ -308,7 +323,10 @@ async function createSession(type) {
 // 加载会话历史
 async function loadSession(s) {
   if (loading.value) return
-  if (currentSessionId.value === s.sessionId) return
+  if (currentSessionId.value === s.sessionId) {
+    if (isMobile.value) sidebarOpen.value = false
+    return
+  }
   try {
     currentSessionId.value = s.sessionId
     currentSessionType.value = s.sessionType || 'CHAT'
@@ -319,6 +337,7 @@ async function loadSession(s) {
       createdAt: m.createdAt,
       references: parseReferences(m.referenceJson)
     }))
+    if (isMobile.value) sidebarOpen.value = false
     nextTick(scrollToBottom)
   } catch (e) {
     msg('加载会话历史失败：' + e.message)
@@ -595,11 +614,13 @@ onMounted(() => {
   loadSessions()
   loadUnread()
   document.addEventListener('click', onDocumentClick)
+  mediaQuery.addEventListener('change', onMediaChange)
   nextTick(() => inputRef.value?.focus())
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick)
+  mediaQuery.removeEventListener('change', onMediaChange)
   if (currentController) currentController.abort()
 })
 </script>
@@ -1145,5 +1166,70 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 6px;
+}
+
+/* 移动端会话抽屉（≤768px） */
+.mobile-menu-btn {
+  display: none;
+  flex-shrink: 0;
+}
+
+.session-mask {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .patient-chat {
+    height: 100dvh;
+  }
+
+  .mobile-menu-btn {
+    display: inline-flex;
+  }
+
+  .topbar {
+    padding: 8px 12px;
+  }
+
+  .brand-sub,
+  .user-phone {
+    display: none;
+  }
+
+  .session-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(15, 23, 42, 0.35);
+  }
+
+  .session-panel {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 82vw;
+    max-width: 320px;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .session-panel.open {
+    transform: translateX(0);
+  }
+
+  .chat-area {
+    width: 100%;
+  }
+
+  .message-list {
+    padding: 16px 12px;
+  }
+
+  .input-area {
+    padding: 8px 12px 12px;
+  }
 }
 </style>
