@@ -18,6 +18,7 @@ import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.UserMemoryBuilder;
 import com.aiassistant.service.WeatherService;
+import com.aiassistant.service.support.ChatMessagePersister;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
 import com.common.constant.SecurityConstants;
@@ -107,6 +108,7 @@ public class ChatServiceImpl implements ChatService {
     private final WeatherService weatherService;
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
+    private final ChatMessagePersister messagePersister;
 
     @Value("${ai.local-fallback:true}")
     private boolean useLocalFallback;
@@ -163,7 +165,10 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 结束事件。
+     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 落库 + 结束事件。
+     * <p>
+     * 落库作为流内节点在 done 之前完成（不再 fire-and-forget），保证 done 到达时消息已可见；
+     * AI 与本地降级 token 统一累积进同一个 {@code full}，客户端取消时按已产生的部分内容落库一次。
      *
      * @param ctx 聊天上下文
      * @return SSE 事件流
@@ -174,25 +179,45 @@ public class ChatServiceImpl implements ChatService {
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
+        StringBuilder full = new StringBuilder();
+        AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
-                ? buildAiContentFlux(ctx, usedFallback)
-                : buildLocalContentFlux(ctx);
+                ? buildAiContentFlux(ctx, full, usedFallback)
+                : buildLocalChunkFlux(ctx.sessionId(),
+                        generateLocalResponse(ctx.userMessage(), ctx.history()), full);
+
+        Mono<Void> persist = Mono.defer(() -> {
+            if (!persisted.compareAndSet(false, true)) {
+                return Mono.empty();
+            }
+            return messagePersister.persistAssistant(ctx.sessionId(), full.toString(), null);
+        });
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
                 ServerSentEvent.builder(toJson(Map.of("localFallback", usedFallback.get())))
                         .event(ChatConstants.EVENT_DONE)
                         .build());
 
-        return Flux.concat(Mono.just(sessionEvent), contentFlux, doneEvent);
+        return Flux.concat(Mono.just(sessionEvent), contentFlux, persist.then(doneEvent))
+                .doOnCancel(() -> {
+                    if (persisted.compareAndSet(false, true) && full.length() > 0) {
+                        messagePersister.persistBlocking(ctx.sessionId(), full.toString(), null);
+                    }
+                });
     }
 
     /**
-     * 构建 AI 模型流式内容（逐 token 推送，失败时降级本地引擎）。
+     * 构建 AI 模型流式内容（逐 token 推送并累积，失败时降级本地引擎继续累积）。
+     *
+     * @param ctx          聊天上下文
+     * @param full         回复内容累积器（AI token 与降级 token 共用）
+     * @param usedFallback 降级标记
+     * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, AtomicBoolean usedFallback) {
+    private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuilder full,
+                                                            AtomicBoolean usedFallback) {
         ChatClient client = chatClientFactory.getChatClient(ctx.modelId());
-        StringBuilder fullResponse = new StringBuilder();
 
         return client.prompt()
                 .system(ctx.systemPrompt())
@@ -201,43 +226,33 @@ public class ChatServiceImpl implements ChatService {
                 .content()
                 .publishOn(Schedulers.boundedElastic())
                 .map(token -> {
-                    fullResponse.append(token);
+                    full.append(token);
                     return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
                 })
                 .onErrorResume(ex -> {
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
                     return buildLocalChunkFlux(ctx.sessionId(),
-                            generateLocalResponse(ctx.userMessage(), ctx.history()));
-                })
-                .doOnComplete(() -> persistReplyAsync(ctx.sessionId(), fullResponse.toString()));
+                            generateLocalResponse(ctx.userMessage(), ctx.history()), full);
+                });
     }
 
     /**
-     * 构建本地降级流式内容（按字符切片，模拟打字机效果）。
-     */
-    private Flux<ServerSentEvent<String>> buildLocalContentFlux(ChatContext ctx) {
-        String localReply = generateLocalResponse(ctx.userMessage(), ctx.history());
-        return buildLocalChunkFlux(ctx.sessionId(), localReply);
-    }
-
-    /**
-     * 将文本切片为 SSE token 流（本地降级复用）。
+     * 将文本切片为 SSE token 流（本地降级复用）：仅向累积器追加 token，不落库。
      *
-     * @param sessionId 会话ID（用于落库）
+     * @param sessionId 会话ID（透传，便于日志定位）
      * @param text      完整文本
+     * @param full      回复内容累积器
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String sessionId, String text) {
-        StringBuilder fullResponse = new StringBuilder(text);
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String sessionId, String text, StringBuilder full) {
         List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
         return Flux.fromIterable(chunks)
                 .delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS))
                 .map(chunk -> {
-                    fullResponse.append(chunk);
+                    full.append(chunk);
                     return ServerSentEvent.builder(chunk).event(ChatConstants.EVENT_TOKEN).build();
-                })
-                .doOnComplete(() -> persistReplyAsync(sessionId, fullResponse.toString()));
+                });
     }
 
     /**
@@ -620,17 +635,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 异步落库 AI 回复（卸载到弹性线程池，避免阻塞响应流）。
-     */
-    private void persistReplyAsync(String sessionId, String content) {
-        if (content == null || content.isBlank()) {
-            return;
-        }
-        Schedulers.boundedElastic().schedule(() -> saveAssistantMessage(sessionId, content));
-    }
-
-    /**
-     * 落库 AI 回复（事务内）并更新会话时间。
+     * 落库 AI 回复（事务内）并更新会话时间（非流式兼容接口使用）。
      */
     private void saveAssistantMessage(String sessionId, String content) {
         new TransactionTemplate(txManager).executeWithoutResult(status -> {

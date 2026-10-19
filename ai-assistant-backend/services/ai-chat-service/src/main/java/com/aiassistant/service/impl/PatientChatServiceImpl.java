@@ -20,6 +20,7 @@ import com.aiassistant.service.ActionExecutor;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.PatientChatService;
 import com.aiassistant.service.PendingActionService;
+import com.aiassistant.service.support.ChatMessagePersister;
 import com.aiassistant.tool.PatientTools;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
@@ -118,6 +119,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final KnowledgeReferencesBuilder knowledgeReferencesBuilder;
     private final AssistantRoleService assistantRoleService;
     private final MeterRegistry meterRegistry;
+    private final ChatMessagePersister messagePersister;
 
     /** 当前活跃患者 SSE 流数（Gauge 底层数据源） */
     private final AtomicInteger patientSseActive = new AtomicInteger();
@@ -202,7 +204,10 @@ public class PatientChatServiceImpl implements PatientChatService {
 
     /**
      * 构建完整回复流：会话事件 + 急症短路分支或内容流（AI 或本地降级，末尾追加免责 token）
-     * + 输出侧风控兜底 + references 事件 + 写操作确认事件 + 结束事件
+     * + 输出侧风控兜底 + 落库 + references 事件 + 写操作确认事件 + 结束事件
+     * <p>
+     * 落库作为流内节点在 references/done 之前完成（不再 fire-and-forget），done 到达时消息已可见；
+     * {@code persist} 为冷 Mono，此处仅订阅一次。
      *
      * @param ctx 患者聊天上下文
      * @return SSE 事件流
@@ -236,6 +241,8 @@ public class PatientChatServiceImpl implements PatientChatService {
                 ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, true))
                 : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
 
+        Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
+
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
                 ServerSentEvent.builder(toJson(Map.of("localFallback", fallback.get())))
                         .event(ChatConstants.EVENT_DONE)
@@ -253,11 +260,36 @@ public class PatientChatServiceImpl implements PatientChatService {
                         }));
 
         return Flux.concat(Mono.just(sessionEvent), contentFlux,
-                outputSafetyGuard(ctx, sessionId, full, persisted, fallback, blocked),
-                referencesEvent,
-                buildConfirmRequiredEvent(sessionId), doneEvent)
+                        outputSafetyGuard(full, blocked),
+                        persist.then(Mono.<ServerSentEvent<String>>empty()),
+                        referencesEvent,
+                        buildConfirmRequiredEvent(sessionId), doneEvent)
                 .doOnCancel(() -> handleClientCancel(sessionId, full, persisted))
                 .doFinally(signal -> patientSseActive.decrementAndGet());
+    }
+
+    /**
+     * 构建落库节点：按输出风控/降级状态计算持久化正文与引用，首次订阅时标记已落库
+     *
+     * @param ctx       患者聊天上下文
+     * @param full      回复正文累积器
+     * @param persisted 已持久化标记（客户端断开兜底落库去重用）
+     * @param fallback  降级标记（降级回复不持久化引用）
+     * @param blocked   输出侧拦截标记
+     * @return 落库完成信号
+     */
+    private Mono<Void> buildPersistMono(PatientChatContext ctx, StringBuilder full, AtomicBoolean persisted,
+                                        AtomicBoolean fallback, AtomicBoolean blocked) {
+        return Mono.defer(() -> {
+            if (!persisted.compareAndSet(false, true)) {
+                return Mono.empty();
+            }
+            String body = blocked.get() ? safetyFilter.blockedMessage()
+                    : full + "\n\n" + aiProperties.getDisclaimer();
+            String referenceJson = (!blocked.get() && !fallback.get() && !ctx.referenceJson().isEmpty())
+                    ? ctx.referenceJson() : null;
+            return messagePersister.persistAssistant(ctx.session().getSessionId(), body, referenceJson);
+        });
     }
 
     /**
@@ -370,43 +402,31 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 输出侧风控兜底：内容流结束后对累计正文做敏感词校验，命中则丢弃生成内容改持久化标准文案并追加 error 事件
+     * 输出侧风控兜底：内容流结束后对累计正文做敏感词校验，命中则丢弃生成内容并追加 error 事件
      * <p>
      * 判定仅扫描模型/本地生成的正文（不含免责文案与固定前置话术，防关键词与免责重叠致全量误拦）；
-     * token 已流出的场景前端以 error 文案为准；未命中则按「正文 + 免责」持久化（AI 与本地降级分支同款），
-     * 模型作答未降级时引用 JSON 随消息一并持久化
+     * 本节点只负责检测并置位 blocked（落库由下游 persist 节点按 blocked 状态改用标准文案），不再直接持久化
      *
-     * @param ctx       患者聊天上下文
-     * @param sessionId 会话ID
-     * @param full      回复正文累积器
-     * @param persisted 已持久化标记（客户端断开兜底落库去重用）
-     * @param fallback  降级标记（降级回复不持久化引用）
-     * @param blocked   输出侧拦截标记（供 references 事件下发判定）
+     * @param full    回复正文累积器
+     * @param blocked 输出侧拦截标记（供落库正文与 references 事件下发判定）
      * @return 命中时输出 error 事件流，未命中则为空流
      */
-    private Mono<ServerSentEvent<String>> outputSafetyGuard(PatientChatContext ctx, String sessionId,
-                                                            StringBuilder full, AtomicBoolean persisted,
-                                                            AtomicBoolean fallback, AtomicBoolean blocked) {
+    private Mono<ServerSentEvent<String>> outputSafetyGuard(StringBuilder full, AtomicBoolean blocked) {
         return Mono.defer(() -> {
             String body = full.toString();
             if (safetyFilter.blockedInput(body)) {
                 blocked.set(true);
-                persisted.set(true);
-                persistReplyAsync(sessionId, safetyFilter.blockedMessage(), null);
-                log.warn("输出侧命中风控敏感词，已拦截并改持久化标准文案 sessionId={}", sessionId);
+                log.warn("输出侧命中风控敏感词，已拦截并按标准文案落库");
                 return Mono.just(ServerSentEvent.builder(toJson(Map.of("message", safetyFilter.blockedMessage())))
                         .event(ChatConstants.EVENT_ERROR)
                         .build());
             }
-            persisted.set(true);
-            String referenceJson = (!fallback.get() && !ctx.referenceJson().isEmpty()) ? ctx.referenceJson() : null;
-            persistReplyAsync(sessionId, body + "\n\n" + aiProperties.getDisclaimer(), referenceJson);
             return Mono.empty();
         });
     }
 
     /**
-     * SSE 客户端断开处理：记录日志；本次回复尚未落库且已产生部分内容时，按部分内容（附免责）落库
+     * SSE 客户端断开处理：记录日志；本次回复尚未落库且已产生部分内容时，按部分内容（附免责）同步落库
      *
      * @param sessionId 会话ID
      * @param full      回复正文累积器
@@ -415,7 +435,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private void handleClientCancel(String sessionId, StringBuilder full, AtomicBoolean persisted) {
         log.info("SSE 客户端断开: sessionId={}", sessionId);
         if (persisted.compareAndSet(false, true) && full.length() > 0) {
-            persistReplyAsync(sessionId, full + "\n\n" + aiProperties.getDisclaimer(), null);
+            messagePersister.persistBlocking(sessionId, full + "\n\n" + aiProperties.getDisclaimer(), null);
         }
     }
 
@@ -490,7 +510,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 构建确认续答流：AI 内容（仅只读工具，不再签发待确认操作）+ 输出侧风控兜底 + 结束事件
+     * 构建确认续答流：AI 内容（仅只读工具，不再签发待确认操作）+ 输出侧风控兜底 + 落库 + 结束事件
      *
      * @param ctx 患者聊天上下文
      * @return SSE 事件流
@@ -507,12 +527,17 @@ public class PatientChatServiceImpl implements PatientChatService {
                 ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, false))
                 : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
 
+        Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
+
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
                 ServerSentEvent.builder(toJson(Map.of("localFallback", fallback.get())))
                         .event(ChatConstants.EVENT_DONE)
                         .build());
 
-        return Flux.concat(contentFlux, outputSafetyGuard(ctx, sessionId, full, persisted, fallback, blocked), doneEvent)
+        return Flux.concat(contentFlux,
+                        outputSafetyGuard(full, blocked),
+                        persist.then(Mono.<ServerSentEvent<String>>empty()),
+                        doneEvent)
                 .doOnCancel(() -> handleClientCancel(sessionId, full, persisted))
                 .doFinally(signal -> patientSseActive.decrementAndGet());
     }
@@ -700,39 +725,6 @@ public class PatientChatServiceImpl implements PatientChatService {
         new TransactionTemplate(txManager).executeWithoutResult(status ->
                 messageRepository.save(ChatMessage.builder()
                         .sessionId(sessionId).role(role).content(content).build()));
-    }
-
-    /**
-     * 异步落库 AI 回复（卸载到弹性线程池，避免阻塞响应流）
-     *
-     * @param sessionId     会话ID
-     * @param content       回复内容
-     * @param referenceJson 引用来源 JSON（无来源传 null）
-     */
-    private void persistReplyAsync(String sessionId, String content, String referenceJson) {
-        if (content == null || content.isBlank()) {
-            return;
-        }
-        Schedulers.boundedElastic().schedule(() -> saveAssistantMessage(sessionId, content, referenceJson));
-    }
-
-    /**
-     * 落库 AI 回复并刷新会话更新时间（事务内）
-     *
-     * @param sessionId     会话ID
-     * @param content       回复内容
-     * @param referenceJson 引用来源 JSON（无来源传 null）
-     */
-    private void saveAssistantMessage(String sessionId, String content, String referenceJson) {
-        new TransactionTemplate(txManager).executeWithoutResult(status -> {
-            messageRepository.save(ChatMessage.builder()
-                    .sessionId(sessionId).role("assistant").content(content)
-                    .referenceJson(referenceJson).build());
-            sessionRepository.findBySessionId(sessionId).ifPresent(s -> {
-                s.setUpdatedAt(LocalDateTime.now());
-                sessionRepository.save(s);
-            });
-        });
     }
 
     // ==================== 本地回复引擎（降级方案） ====================
