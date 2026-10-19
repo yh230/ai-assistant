@@ -97,7 +97,13 @@ public class AvailabilityAwareEmbeddingModel implements EmbeddingModel {
 
     @Override
     public EmbeddingResponse call(ModelRequest request) {
-        return call((EmbeddingRequest) request);
+        // 防止盲目强转：非 EmbeddingRequest 时给出明确错误而非 ClassCastException
+        if (!(request instanceof EmbeddingRequest embeddingRequest)) {
+            throw new IllegalArgumentException("不支持的请求类型: "
+                    + (request == null ? "null" : request.getClass().getName())
+                    + "，仅支持 EmbeddingRequest");
+        }
+        return call(embeddingRequest);
     }
 
     /**

@@ -26,9 +26,24 @@ class KnowledgeContextBuilderTest {
                 new KnowledgeStore.ScoredChunk("门诊.md", 1L, 0, "门诊时间", "周一至周五 8:00-17:00", 0.9));
         List<Message> result = new KnowledgeContextBuilder().inject(history, hits);
         assertEquals(3, result.size());
-        assertTrue(result.get(1).getText().contains("<knowledge>"));
-        assertTrue(result.get(1).getText().contains("门诊时间"));
+        String injected = result.get(1).getText();
+        assertTrue(injected.startsWith("【知识库片段】"));
+        assertTrue(injected.contains("<knowledge>"));
+        assertTrue(injected.contains("门诊时间"));
         assertEquals("门诊时间？", result.get(2).getText());
+    }
+
+    @Test
+    void injectsNoHitMessageBeforeLastUserMessage() {
+        List<Message> history = List.of(new UserMessage("旧问题"), new UserMessage("医保报销比例？"));
+        KnowledgeContextBuilder builder = new KnowledgeContextBuilder();
+        List<Message> result = builder.injectNoHit(history);
+        assertEquals(3, result.size());
+        assertEquals(builder.noHitMessage(), result.get(1).getText());
+        assertTrue(result.get(1).getText().contains("【知识库片段】"));
+        assertTrue(result.get(1).getText().contains("未检索到相关内容"));
+        assertFalse(result.get(1).getText().contains("<knowledge>"));
+        assertEquals("医保报销比例？", result.get(2).getText());
     }
 
     @Test
@@ -87,7 +102,8 @@ class KnowledgeContextBuilderTest {
         assertEquals(5, result.size());
         assertEquals("历史问题", result.get(0).getText());
         assertEquals("历史回答", result.get(1).getText());
-        assertTrue(result.get(2).getText().startsWith("<knowledge>"));
+        assertTrue(result.get(2).getText().startsWith("【知识库片段】"));
+        assertTrue(result.get(2).getText().contains("<knowledge>"));
         assertEquals("当前问题", result.get(3).getText());
         assertEquals("流式回复", result.get(4).getText());
     }
@@ -100,7 +116,8 @@ class KnowledgeContextBuilderTest {
         List<Message> result = new KnowledgeContextBuilder().inject(history, hits);
         assertEquals(2, result.size());
         assertEquals("只有助手消息", result.get(0).getText());
-        assertTrue(result.get(1).getText().startsWith("<knowledge>"));
+        assertTrue(result.get(1).getText().startsWith("【知识库片段】"));
+        assertTrue(result.get(1).getText().contains("<knowledge>"));
     }
 
     @Test
@@ -119,7 +136,8 @@ class KnowledgeContextBuilderTest {
         assertEquals(4, result.size());
         assertEquals("旧问题", result.get(0).getText());
         assertEquals("旧回答", result.get(1).getText());
-        assertTrue(result.get(2).getText().startsWith("<knowledge>"));
+        assertTrue(result.get(2).getText().startsWith("【知识库片段】"));
+        assertTrue(result.get(2).getText().contains("<knowledge>"));
         assertEquals("新问题", result.get(3).getText());
     }
 

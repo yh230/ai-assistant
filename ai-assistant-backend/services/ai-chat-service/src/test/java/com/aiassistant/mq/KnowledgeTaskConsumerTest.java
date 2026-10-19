@@ -98,6 +98,7 @@ class KnowledgeTaskConsumerTest {
         event.setHospitalId(1L);
         KnowledgeDocument doc = document(KnowledgeDocument.STATUS_PENDING);
         doc.setChunkCount(5);
+        doc.setErrorMsg("上次处理失败");
         List<Document> chunks = List.of(
                 Document.builder().id("9:0").text("第一片").build(),
                 Document.builder().id("9:1").text("第二片").build());
@@ -109,7 +110,8 @@ class KnowledgeTaskConsumerTest {
 
         verify(knowledgeStore).upsertDocument(1L, 9L, "guide.md", 5, chunks);
         verify(documentRepository).save(argThat(d -> d.getChunkCount() == 2
-                && d.getStatus() == KnowledgeDocument.STATUS_READY));
+                && d.getStatus() == KnowledgeDocument.STATUS_READY
+                && "".equals(d.getErrorMsg())));
         verify(ack).acknowledge();
     }
 
