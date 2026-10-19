@@ -17,14 +17,14 @@
         <span class="scope-hint">{{ scopeHint }}</span>
       </div>
 
+      <!-- TODO: 若后续希望只在未绑院时提示，需在 auth-service 的 UserInfoVO 中补充 hospitalId 字段 -->
       <el-alert
-        v-if="scope === 'PATIENT' && !boundHospitalId"
+        v-if="scope === 'PATIENT'"
         class="scope-alert"
         type="info"
         :closable="false"
         show-icon
-        title="患者角色按医院隔离"
-        description="已绑定医院的账号由服务端自动使用所属医院；平台管理员（未绑院）需在管理员账号下指定医院，前端不提供医院选择，以避免越权。"
+        description="患者角色按医院隔离，已绑定医院的账号由服务端自动使用所属医院。"
       />
 
       <el-table v-if="roles.length > 0" :data="roles" stripe>
@@ -87,9 +87,15 @@
         </el-form-item>
 
         <el-form-item v-if="scope === 'PATIENT'" label="会话类型" required>
-          <el-select v-model="form.sessionType" placeholder="请选择会话类型" style="width: 200px">
+          <el-select
+            v-model="form.sessionType"
+            :disabled="isEdit"
+            placeholder="请选择会话类型"
+            style="width: 200px"
+          >
             <el-option v-for="t in SESSION_TYPES" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
+          <span class="form-hint" v-if="isEdit">会话类型创建后不可修改</span>
         </el-form-item>
 
         <el-form-item label="描述">
@@ -123,7 +129,6 @@
 import { ref, computed, onMounted } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { getAdminRoles, createRole, updateRole, deleteRole } from '../api/role'
-import { useAuth } from '../store/auth'
 import { confirm as showConfirm, toast } from '../utils/message'
 
 // 会话类型显示名（与患者端口径一致）
@@ -134,12 +139,9 @@ const SESSION_TYPES = [
   { value: 'RAG', label: '知识库问答' }
 ]
 
-const { userInfo } = useAuth()
-
 // 角色域：STAFF-员工，PATIENT-患者
 const scope = ref('STAFF')
-// 当前账号绑定的医院（未绑院时为空，患者角色由服务端按登录人医院隔离）
-const boundHospitalId = computed(() => userInfo.value?.hospitalId || null)
+// 患者模式下前端无法判断账号是否绑院，仅展示按院隔离的通用说明（见模板 TODO）
 const scopeHint = computed(() =>
   scope.value === 'PATIENT' ? '患者角色按医院隔离，同一医院每种会话类型一份' : '员工角色全局共用，聊天时供员工选择'
 )
@@ -219,7 +221,8 @@ async function save() {
   if (!form.value.systemPrompt.trim()) return toast.warn('请填写系统提示词')
   if (scope.value === 'PATIENT' && !form.value.sessionType) return toast.warn('请选择会话类型')
 
-  // 提交载荷：始终带 scope；sessionType 仅患者域携带，医院 ID 由服务端按登录人解析
+  // 提交载荷：始终带 scope；sessionType 仅在新增患者角色时携带（后端更新不应用该字段，UI 亦置为只读），
+  // 医院 ID 由服务端按登录人解析
   const payload = {
     id: form.value.id.trim(),
     name: form.value.name.trim(),
@@ -230,7 +233,7 @@ async function save() {
     enabled: form.value.enabled,
     scope: scope.value
   }
-  if (scope.value === 'PATIENT') payload.sessionType = form.value.sessionType
+  if (scope.value === 'PATIENT' && !isEdit.value) payload.sessionType = form.value.sessionType
 
   saving.value = true
   try {
