@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -52,27 +54,40 @@ class SimpleKnowledgeStoreTest {
     /** 模拟嵌入模型 */
     private EmbeddingModel embeddingModel;
 
+    /** 所有嵌入重载共享的调用计数，供失败注入用例确定性定位“第二次 upsert” */
+    private final AtomicInteger embedInvocations = new AtomicInteger();
+
+    /** 从第几次嵌入调用开始抛错（Integer.MAX_VALUE 表示不注入失败） */
+    private volatile int failEmbeddingFrom = Integer.MAX_VALUE;
+
     @BeforeEach
     void setUp() {
         embeddingModel = mock(EmbeddingModel.class);
+        embedInvocations.set(0);
+        failEmbeddingFrom = Integer.MAX_VALUE;
         // Spring AI 1.0.9 的 SimpleVectorStore 按切片调用 embed(Document)、按查询调用 embed(String)；
-        // 其它版本/实现可能走批量重载，因此三类重载与 dimensions() 全部桩掉。
-        when(embeddingModel.embed(any(Document.class)))
-                .thenAnswer(invocation -> vectorFor(invocation.getArgument(0, Document.class).getText()));
-        when(embeddingModel.embed(anyString()))
-                .thenAnswer(invocation -> vectorFor(invocation.getArgument(0, String.class)));
-        when(embeddingModel.embed(anyList()))
-                .thenAnswer(invocation -> {
-                    List<?> texts = invocation.getArgument(0);
-                    return texts.stream().map(text -> vectorFor(String.valueOf(text))).toList();
-                });
-        when(embeddingModel.embed(anyList(), any(EmbeddingOptions.class), any(BatchingStrategy.class)))
-                .thenAnswer(invocation -> {
-                    List<?> documents = invocation.getArgument(0);
-                    return documents.stream()
-                            .map(document -> vectorFor(((Document) document).getText()))
-                            .toList();
-                });
+        // 其它版本/实现可能走批量重载，因此所有重载与 dimensions() 全部桩掉，
+        // 并共享同一个调用计数与失败开关：无论实际走哪个重载，行为都一致。
+        doAnswer(invocation -> {
+            checkEmbeddingFailure();
+            return vectorFor(invocation.getArgument(0, Document.class).getText());
+        }).when(embeddingModel).embed(any(Document.class));
+        doAnswer(invocation -> {
+            checkEmbeddingFailure();
+            return vectorFor(invocation.getArgument(0, String.class));
+        }).when(embeddingModel).embed(anyString());
+        doAnswer(invocation -> {
+            checkEmbeddingFailure();
+            List<?> texts = invocation.getArgument(0);
+            return texts.stream().map(text -> vectorFor(String.valueOf(text))).toList();
+        }).when(embeddingModel).embed(anyList());
+        doAnswer(invocation -> {
+            checkEmbeddingFailure();
+            List<?> documents = invocation.getArgument(0);
+            return documents.stream()
+                    .map(document -> vectorFor(((Document) document).getText()))
+                    .toList();
+        }).when(embeddingModel).embed(anyList(), any(EmbeddingOptions.class), any(BatchingStrategy.class));
         when(embeddingModel.dimensions()).thenReturn(DIMENSIONS);
     }
 
@@ -218,17 +233,28 @@ class SimpleKnowledgeStoreTest {
         SimpleKnowledgeStore store = store();
         store.upsertDocument(8L, 80L, "old.md", 0, List.of(chunk("旧内容一"), chunk("旧内容二")));
 
-        // 第二次嵌入调用抛错：add 在删除旧 ID 之前失败，内存中必须仍保留旧切片
-        when(embeddingModel.embed(any(Document.class)))
-                .thenThrow(new IllegalStateException("embedding failed"));
+        // 首次 upsert 完成后，让后续任意一次嵌入调用（即第二次 upsert 使用的任一重载）抛错：
+        // 共享计数保证无论 SimpleVectorStore 走 embed(Document)/embed(String)/批量重载都会失败。
+        failEmbeddingFrom = embedInvocations.get();
         assertThrows(IllegalStateException.class, () -> store.upsertDocument(
                 8L, 80L, "old.md", 2, List.of(chunk("新内容一"), chunk("新内容二"))));
 
+        // 恢复嵌入，使后续检索（embed(String)）可以正常执行
+        failEmbeddingFrom = Integer.MAX_VALUE;
         List<KnowledgeStore.ScoredChunk> hits = store.search(8L, "任意问题", 10, 0.0);
         assertEquals(2, hits.size());
         assertTrue(hits.stream().anyMatch(hit -> "旧内容一".equals(hit.content())));
         assertTrue(hits.stream().anyMatch(hit -> "旧内容二".equals(hit.content())));
         assertTrue(hits.stream().noneMatch(hit -> hit.content().startsWith("新内容")));
+    }
+
+    /**
+     * 记录一次嵌入调用，并在超过失败阈值时抛错（所有重载共用）
+     */
+    private void checkEmbeddingFailure() {
+        if (embedInvocations.incrementAndGet() > failEmbeddingFrom) {
+            throw new IllegalStateException("embedding failed");
+        }
     }
 
     /**
