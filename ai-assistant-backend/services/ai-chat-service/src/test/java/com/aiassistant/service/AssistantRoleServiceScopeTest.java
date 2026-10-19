@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -64,5 +65,63 @@ class AssistantRoleServiceScopeTest {
         assertEquals(1L, saved.getHospitalId());
         assertEquals("PATIENT", saved.getScope());
         assertEquals("TRIAGE", saved.getSessionType());
+    }
+
+    @Test
+    void rejectsCrossHospitalPatientDelete() {
+        when(roleRepository.findById("pat_2_CHAT")).thenReturn(Optional.of(patientRole(2L)));
+
+        assertThrows(IllegalArgumentException.class, () -> service.deleteForScope("pat_2_CHAT", 1L));
+        verify(roleRepository, never()).delete(any());
+    }
+
+    @Test
+    void allowsSameHospitalPatientDelete() {
+        Role role = patientRole(1L);
+        when(roleRepository.findById("pat_1_CHAT")).thenReturn(Optional.of(role));
+
+        service.deleteForScope("pat_1_CHAT", 1L);
+
+        verify(roleRepository).delete(role);
+    }
+
+    @Test
+    void allowsUnboundOperatorPatientDelete() {
+        Role role = patientRole(2L);
+        when(roleRepository.findById("pat_2_CHAT")).thenReturn(Optional.of(role));
+
+        service.deleteForScope("pat_2_CHAT", null);
+
+        verify(roleRepository).delete(role);
+    }
+
+    @Test
+    void rejectsCrossHospitalPatientDetail() {
+        when(roleRepository.findById("pat_2_CHAT")).thenReturn(Optional.of(patientRole(2L)));
+
+        assertThrows(IllegalArgumentException.class, () -> service.findByIdForScope("pat_2_CHAT", 1L));
+    }
+
+    @Test
+    void allowsSameHospitalPatientDetail() {
+        when(roleRepository.findById("pat_1_CHAT")).thenReturn(Optional.of(patientRole(1L)));
+
+        assertTrue(service.findByIdForScope("pat_1_CHAT", 1L).isPresent());
+    }
+
+    /**
+     * 构造一个患者角色
+     *
+     * @param hospitalId 所属医院 ID
+     * @return 患者角色实体
+     */
+    private Role patientRole(Long hospitalId) {
+        return Role.builder()
+                .id("pat_" + hospitalId + "_CHAT")
+                .name("患者闲聊")
+                .scope("PATIENT")
+                .sessionType("CHAT")
+                .hospitalId(hospitalId)
+                .build();
     }
 }

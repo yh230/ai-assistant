@@ -330,6 +330,49 @@ public class AssistantRoleService {
         return update(id, form);
     }
 
+    /**
+     * 按ID查询角色，并对患者角色做跨院校验
+     *
+     * @param id 角色ID
+     * @param operatorHospitalId 操作人绑定医院（未绑院为 null，此时不做限制）
+     * @return 角色（可能为空）
+     */
+    @Transactional(readOnly = true)
+    public Optional<Role> findByIdForScope(String id, Long operatorHospitalId) {
+        Optional<Role> role = roleRepository.findById(id);
+        role.ifPresent(r -> assertPatientRoleAccessible(r, operatorHospitalId));
+        return role;
+    }
+
+    /**
+     * 删除角色，并对患者角色做跨院校验
+     *
+     * @param id 角色ID
+     * @param operatorHospitalId 操作人绑定医院（未绑院为 null，此时不做限制）
+     */
+    @Transactional
+    public void deleteForScope(String id, Long operatorHospitalId) {
+        Role existing = roleRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("角色不存在: " + id));
+        assertPatientRoleAccessible(existing, operatorHospitalId);
+        roleRepository.delete(existing);
+        log.info("删除角色: {}", id);
+    }
+
+    /**
+     * 校验操作人是否有权操作该患者角色（仅患者域按医院隔离）
+     *
+     * @param role 目标角色
+     * @param operatorHospitalId 操作人绑定医院（null 表示未绑院，不限制）
+     */
+    private void assertPatientRoleAccessible(Role role, Long operatorHospitalId) {
+        if (role != null && SCOPE_PATIENT.equalsIgnoreCase(role.getScope())
+                && operatorHospitalId != null
+                && !operatorHospitalId.equals(role.getHospitalId())) {
+            throw new IllegalArgumentException("无权操作其他医院的患者角色");
+        }
+    }
+
     // ==================== 管理：增删改 ====================
 
     /**

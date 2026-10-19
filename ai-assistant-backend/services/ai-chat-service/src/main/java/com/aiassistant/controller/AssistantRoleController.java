@@ -50,7 +50,7 @@ public class AssistantRoleController {
     }
 
     /**
-     * 获取单个角色详情
+     * 获取单个角色详情（患者角色限本人绑定医院）
      * GET /api/roles/admin/{id}
      *
      * @param id 角色标识
@@ -59,7 +59,7 @@ public class AssistantRoleController {
     @GetMapping("/admin/{id}")
     @PreAuthorize("hasAuthority('ai:role:manage')")
     public Result<Role> getOne(@PathVariable String id) {
-        return assistantRoleService.findById(id)
+        return assistantRoleService.findByIdForScope(id, resolveHospital(null))
                 .map(Result::success)
                 .orElse(Result.fail(404, "角色不存在: " + id));
     }
@@ -94,7 +94,7 @@ public class AssistantRoleController {
     }
 
     /**
-     * 删除角色
+     * 删除角色（患者角色限本人绑定医院）
      * DELETE /api/roles/admin/{id}
      *
      * @param id 角色标识
@@ -104,12 +104,15 @@ public class AssistantRoleController {
     @DeleteMapping("/admin/{id}")
     @PreAuthorize("hasAuthority('ai:role:manage')")
     public Result<Void> delete(@PathVariable String id) {
-        assistantRoleService.delete(id);
+        assistantRoleService.deleteForScope(id, resolveHospital(null));
         return Result.success();
     }
 
     /**
      * 解析操作医院：登录人已绑院时强制用本人医院，未绑院时使用显式入参
+     * <p>
+     * 详情/删除等无医院入参的端点传入 {@code null}，即只取登录人绑定医院；
+     * 未绑院的平台管理员得到 {@code null}，不受医院限制。
      *
      * @param explicitHospitalId 显式传入的医院 ID
      * @return 实际生效的医院 ID（无绑院且未显式传入时为 null）
