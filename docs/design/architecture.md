@@ -15,8 +15,8 @@
 
 公共模块：
 
-- `common`：统一返回、异常、数据权限、Kafka 主题与事件契约。
-- `common-security`：JWT、权限快照、内部令牌、审计注解、全局异常。
+- `common`：统一返回、异常、Kafka 主题与事件契约。
+- `common-security`：JWT、权限快照、内部令牌、数据权限、审计注解、全局异常。
 - `api`：Feign 客户端与服务间 DTO。
 
 ## 2. 身份与鉴权链路

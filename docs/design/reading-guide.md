@@ -21,7 +21,7 @@
 | 3 | `services/auth-service/.../AuthServiceImpl.java` | 登录、刷新、登出分别做了什么？refresh token 如何轮换？ |
 | 4 | `services/system-service/.../UserServiceImpl.java`、`RoleServiceImpl.java` | RBAC 的权限快照何时失效？ |
 | 5 | `services/registration-service/.../RegistrationServiceImpl.java` | 预约状态机、锁顺序、幂等键、号源抢占分别在哪？ |
-| 6 | `services/hospital-service/...` 与 `common/.../DataScope*` | 数据权限如何按医院/科室/医生过滤？ |
+| 6 | `services/hospital-service/...` 与 `common-security/.../DataScope*` | 数据权限如何按医院/科室/医生过滤？ |
 
 读完这六步，普通业务请求的主链路就通了。
 
