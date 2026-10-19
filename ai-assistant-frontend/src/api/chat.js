@@ -1,4 +1,4 @@
-import api, { refreshAccessToken } from './index'
+import api, { forceToLogin, refreshAccessToken } from './index'
 import { streamSse } from './sse'
 
 /**
@@ -21,6 +21,7 @@ export function sendMessageStream(data, { onSession, onToken, onDone, onError } 
     body: JSON.stringify(data),
     getToken: () => localStorage.getItem('ai_token'),
     refresh: refreshAccessToken,
+    onAuthFailure: forceToLogin,
     onEvent: (event, dataStr) => {
       if (event === 'session') {
         try { onSession?.(JSON.parse(dataStr)) } catch { /* ignore */ }

@@ -31,6 +31,29 @@ test('parses multiple events and keeps the incomplete tail in rest', () => {
   assert.equal(rest, 'event: token\ndata: 世界')
 })
 
+test('flush mode emits an unterminated final event', () => {
+  const raw = 'event: token\ndata: hi\n\nevent: done\ndata: {"localFallback":false}'
+  const pending = parseSseEvents(raw)
+  assert.deepEqual(pending.events, [{ event: 'token', data: 'hi' }])
+  assert.equal(pending.rest, 'event: done\ndata: {"localFallback":false}')
+
+  const flushed = parseSseEvents(raw, { flush: true })
+  assert.deepEqual(flushed.events, [
+    { event: 'token', data: 'hi' },
+    { event: 'done', data: '{"localFallback":false}' }
+  ])
+  assert.equal(flushed.rest, '')
+})
+
+test('flush ignores whitespace-only remainder and keeps empty input empty', () => {
+  assert.deepEqual(parseSseEvents('event: token\ndata: ok\n\n', { flush: true }), {
+    events: [{ event: 'token', data: 'ok' }],
+    rest: ''
+  })
+  assert.deepEqual(parseSseEvents('', { flush: true }), { events: [], rest: '' })
+  assert.deepEqual(parseSseEvents('\n', { flush: true }), { events: [], rest: '' })
+})
+
 test('returns empty events for empty or incomplete buffer', () => {
   assert.deepEqual(parseSseEvents(''), { events: [], rest: '' })
   assert.deepEqual(parseSseEvents('event: token\ndata: par'), {

@@ -155,6 +155,7 @@ function openPatientStream(url, body, handlers = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
     getToken: () => localStorage.getItem('patient_token'),
     refresh: refreshPatientAccessToken,
+    onAuthFailure: forceToPatientLogin,
     onEvent: (event, dataStr) => {
       if (event === 'session') {
         try { handlers.onSession?.(JSON.parse(dataStr)) } catch { /* ignore */ }
