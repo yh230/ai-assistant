@@ -9,9 +9,13 @@ import axios from 'axios'
  *
  * 关键行为：
  * - 单飞刷新：同一 tab 并发 401 共用同一次刷新请求
- * - 跨 tab 串行：优先 navigator.locks，降级为 localStorage 租约锁
- * - 锁内重读 token：若其它 tab 已完成刷新，直接复用新 token，避免重复刷新/令牌轮换冲突
+ * - 跨 tab 串行：优先 navigator.locks，降级为 localStorage 租约锁（写入 owner + 随机沉降后回读确认）
+ * - 锁内重读 token：若其它 tab 已完成刷新（当前 token 与 staleToken 不同），直接复用新 token
+ * - 刷新请求带 15s 超时，避免某个 tab 持锁后长时间挂起拖死其它 tab
+ * - 代际校验：登出（本地 forceLogin 或其它 tab 广播的 logout）会推进 generation，
+ *   刷新请求返回后若代际已变化，则丢弃刷新结果、不写入 token
  * - 网络异常 / 5xx 不登出（抛 NetworkError），仅刷新接口明确返回 400/401/403 才登出
+ * - 已取消的请求（AbortError / ERR_CANCELED）原样透传，不转换成 NetworkError
  * - 登出通过 BroadcastChannel 同步到其它 tab
  * - axios 拦截器对 401 只重试一次
  */
@@ -23,6 +27,12 @@ const TOKEN_TYPE = 'Bearer'
 const LOCK_TTL = 8000
 const LOCK_WAIT = 10000
 const LOCK_POLL = 50
+const LOCK_SETTLE_MIN = 40
+const LOCK_SETTLE_MAX = 80
+const REFRESH_TIMEOUT = 15000
+
+// 只匹配 `/api/refresh` 本身（可带 query），不匹配 `/refresh/revoke` 之类的子路径
+const REFRESH_URL_RE = /\/refresh(\?|$)/
 
 export class AuthExpiredError extends Error {
   constructor(message = '登录已过期，请重新登录') {
@@ -43,7 +53,7 @@ function sleep(ms) {
 }
 
 function randomId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36)
+  return Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2)
 }
 
 function readLease(key) {
@@ -55,21 +65,31 @@ function readLease(key) {
 }
 
 /**
- * localStorage 租约锁：获取成功返回 owner，失败（超时）返回 null。
- * 租约带过期时间，持有者崩溃后可自动被抢占。
+ * localStorage 租约锁（尽力而为的近似互斥）。
+ *
+ * 写入后并不立即认为成功：先等 40–80ms 随机沉降窗口，让并发写入互相覆盖并最终稳定，
+ * 再回读确认 owner 仍是自己，才认为持有锁。两个 tab 同时写入时，最后写入者胜出，
+ * 先写入者回读会看到别人的 owner 而放弃，避免“写完立刻回读总是成功”的双赢。
+ *
+ * 超时未获取到锁时抛 NetworkError，调用方绝不能在没有锁的情况下执行刷新。
  */
 async function acquireLease(key, owner) {
   const deadline = Date.now() + LOCK_WAIT
   while (Date.now() < deadline) {
     const lease = readLease(key)
-    if (!lease || !lease.expires || lease.expires <= Date.now()) {
-      localStorage.setItem(key, JSON.stringify({ owner, expires: Date.now() + LOCK_TTL }))
+    const now = Date.now()
+    if (!lease || !lease.expires || lease.expires <= now) {
+      const expires = now + LOCK_TTL
+      localStorage.setItem(key, JSON.stringify({ owner, expires }))
+      await sleep(LOCK_SETTLE_MIN + Math.random() * (LOCK_SETTLE_MAX - LOCK_SETTLE_MIN))
       const check = readLease(key)
-      if (check && check.owner === owner) return owner
+      if (check && check.owner === owner && check.expires > Date.now()) {
+        return true
+      }
     }
     await sleep(LOCK_POLL)
   }
-  return null
+  throw new NetworkError('刷新令牌等待超时')
 }
 
 async function withRefreshLock(name, fn) {
@@ -78,15 +98,13 @@ async function withRefreshLock(name, fn) {
   }
   const key = name + ':lease'
   const owner = randomId()
-  const acquired = await acquireLease(key, owner)
+  await acquireLease(key, owner)
   try {
     return await fn()
   } finally {
-    if (acquired) {
-      const lease = readLease(key)
-      if (lease && lease.owner === owner) {
-        localStorage.removeItem(key)
-      }
+    const lease = readLease(key)
+    if (lease && lease.owner === owner) {
+      localStorage.removeItem(key)
     }
   }
 }
@@ -95,12 +113,53 @@ function isAuthFailureCode(code) {
   return code === 400 || code === 401 || code === 403
 }
 
+function isRefreshUrl(url) {
+  return REFRESH_URL_RE.test(String(url || ''))
+}
+
+function isAbortError(err) {
+  if (!err) return false
+  return err.name === 'AbortError' || err.name === 'TimeoutError' || err.code === 'ERR_CANCELED'
+}
+
+/**
+ * 生成刷新请求的超时信号，返回 { signal, cleanup, didTimeout }。
+ * 优先 AbortSignal.timeout；不支持时退化为 AbortController + setTimeout。
+ */
+function createTimeoutSignal(ms) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    const signal = AbortSignal.timeout(ms)
+    return {
+      signal,
+      cleanup: () => {},
+      // AbortSignal.timeout 的中止原因为 TimeoutError；其它原因的 abort 不计为超时
+      didTimeout: () => !!signal.reason && signal.reason.name === 'TimeoutError'
+    }
+  }
+  if (typeof AbortController !== 'undefined') {
+    const controller = new AbortController()
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, ms)
+    return {
+      signal: controller.signal,
+      cleanup: () => clearTimeout(timer),
+      didTimeout: () => timedOut
+    }
+  }
+  return { signal: undefined, cleanup: () => {}, didTimeout: () => false }
+}
+
 export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
   const lockName = `auth-refresh:${tokenKey}`
   const channelName = `auth-sync:${tokenKey}`
 
   let redirecting = false
   let refreshPromise = null
+  // 认证代际：forceLogin 与远端 logout 都会自增；刷新请求跨代返回时结果作废
+  let generation = 0
 
   let channel = null
   if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
@@ -109,6 +168,7 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
       channel.onmessage = (event) => {
         const data = event && event.data
         if (!data || data.type !== 'logout') return
+        generation += 1
         clearAuthStorage()
         redirectToLogin()
       }
@@ -143,9 +203,10 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
   }
 
   /**
-   * 强制登出：清理本地认证态，通知其它 tab，并跳转登录页（并发调用只跳一次）。
+   * 强制登出：推进代际、清理本地认证态，通知其它 tab，并跳转登录页（并发调用只跳一次）。
    */
   function forceLogin() {
+    generation += 1
     if (redirecting) return
     redirecting = true
     clearAuthStorage()
@@ -163,7 +224,7 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
 
   async function performRefresh(staleToken) {
     return withRefreshLock(lockName, async () => {
-      // 锁内重读：其它 tab 可能已完成刷新，直接复用新 token
+      // 锁内重读：其它 tab 可能已完成刷新，直接复用新 token，避免重复刷新/令牌轮换冲突
       const current = getToken()
       if (staleToken && current && current !== staleToken) {
         return current
@@ -174,16 +235,34 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
         throw expire('无刷新令牌')
       }
 
+      // 发起请求前记录代际，返回后若已登出则丢弃结果
+      const requestGeneration = generation
+      const { signal, cleanup, didTimeout } = createTimeoutSignal(REFRESH_TIMEOUT)
+
       let res
       try {
         res = await fetch(REFRESH_PATH, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken })
+          body: JSON.stringify({ refreshToken }),
+          signal
         })
-      } catch {
+      } catch (err) {
+        // 我们自己的超时中止视为网络层失败；外部取消的 AbortError 原样透传
+        if (isAbortError(err)) {
+          if (didTimeout()) {
+            throw new NetworkError('刷新登录态失败：请求超时')
+          }
+          throw err
+        }
         // 网络层失败不登出，保留登录态等待重试
         throw new NetworkError('刷新登录态失败：网络异常')
+      } finally {
+        cleanup()
+      }
+
+      if (generation !== requestGeneration) {
+        throw new AuthExpiredError('登录态已变更，本次刷新结果已丢弃')
       }
 
       if (isAuthFailureCode(res.status)) {
@@ -201,6 +280,11 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
         throw new NetworkError((data && data.msg) || '刷新登录态失败')
       }
 
+      // 写盘前再次校验代际：解析响应期间可能收到远端登出
+      if (generation !== requestGeneration) {
+        throw new AuthExpiredError('登录态已变更，本次刷新结果已丢弃')
+      }
+
       localStorage.setItem(tokenKey, data.data.token)
       if (refreshKey && data.data.refreshToken) {
         localStorage.setItem(refreshKey, data.data.refreshToken)
@@ -212,7 +296,8 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
 
   /**
    * 刷新 access token（tab 内单飞）。
-   * @param {string} [staleToken] 触发本次刷新的旧 token，用于锁内判断是否已有新 token
+   * @param {string} [staleToken] 触发本次刷新的旧 token；锁内若发现当前 token 已是新值则直接复用。
+   *                             省略时保持旧行为（不做复用判断）。
    */
   function refreshAccessToken(staleToken) {
     if (!refreshPromise) {
@@ -229,10 +314,11 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
     }
   })
 
-  // 请求拦截器：自动携带 Token
+  // 请求拦截器：自动携带 Token，并记录本次请求实际使用的 token（供 401 时判断是否已被刷新）
   http.interceptors.request.use(
     (config) => {
       const token = getToken()
+      config._accessToken = token || null
       if (token) {
         config.headers.Authorization = `${TOKEN_TYPE} ${token}`
       }
@@ -252,23 +338,31 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
     },
     async (error) => {
       if (!error.response) {
+        // 主动取消的请求原样透传，不伪装成网络异常
+        if (isAbortError(error)) {
+          return Promise.reject(error)
+        }
         const timedOut = error.code === 'ECONNABORTED'
         return Promise.reject(new NetworkError(timedOut ? '请求超时，请稍后重试' : undefined))
       }
 
       const { status, data } = error.response
       const cfg = error.config || {}
-      const isRefreshCall = (cfg.url || '').includes('/refresh')
+      const isRefreshCall = isRefreshUrl(cfg.url) || isRefreshUrl(cfg.baseURL)
 
       if (status === 401 && !isRefreshCall && !cfg._retry) {
         cfg._retry = true
-        const staleToken = getToken()
+        // 使用该请求实际携带的 token，便于锁内判断其它 tab 是否已完成刷新
+        const staleToken = cfg._accessToken !== undefined ? cfg._accessToken : getToken()
         try {
           await refreshAccessToken(staleToken)
           return http(cfg)
         } catch (err) {
           if (err instanceof AuthExpiredError) {
             forceLogin()
+            return Promise.reject(err)
+          }
+          if (isAbortError(err)) {
             return Promise.reject(err)
           }
           // 网络/5xx：不登出，保留登录态交由上层提示重试
