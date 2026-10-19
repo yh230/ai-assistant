@@ -2,6 +2,7 @@ package com.aiassistant.service.impl;
 
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.mq.KnowledgeTaskPublisher;
+import com.aiassistant.rag.KnowledgeContentGuard;
 import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.common.auth.UserSnapshot;
@@ -48,7 +49,8 @@ class KnowledgeServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new KnowledgeServiceImpl(documentRepository, knowledgeVectorStore, taskPublisher);
+        service = new KnowledgeServiceImpl(documentRepository, knowledgeVectorStore, taskPublisher,
+                new KnowledgeContentGuard());
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken("staff", null);
         auth.setDetails(UserSnapshot.builder().userId(7L).hospitalId(1L)
                 .identity(SecurityConstants.IDENTITY_STAFF).build());

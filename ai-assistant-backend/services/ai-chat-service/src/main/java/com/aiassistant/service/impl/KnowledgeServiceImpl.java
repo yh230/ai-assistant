@@ -3,6 +3,7 @@ package com.aiassistant.service.impl;
 import com.aiassistant.dto.KnowledgeDocumentDTO;
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.mq.KnowledgeTaskPublisher;
+import com.aiassistant.rag.KnowledgeContentGuard;
 import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.aiassistant.service.KnowledgeService;
@@ -20,7 +21,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
@@ -50,19 +55,25 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     /** 知识库任务事件发布器 */
     private final KnowledgeTaskPublisher taskPublisher;
 
+    /** 知识库内容注入防护 */
+    private final KnowledgeContentGuard knowledgeContentGuard;
+
     /**
      * 构造器注入
      *
-     * @param documentRepository   知识库文档仓库
-     * @param knowledgeVectorStore 知识库向量存储
-     * @param taskPublisher        知识库任务事件发布器
+     * @param documentRepository    知识库文档仓库
+     * @param knowledgeVectorStore  知识库向量存储
+     * @param taskPublisher         知识库任务事件发布器
+     * @param knowledgeContentGuard 知识库内容注入防护
      */
     public KnowledgeServiceImpl(KnowledgeDocumentRepository documentRepository,
                                 KnowledgeVectorStore knowledgeVectorStore,
-                                KnowledgeTaskPublisher taskPublisher) {
+                                KnowledgeTaskPublisher taskPublisher,
+                                KnowledgeContentGuard knowledgeContentGuard) {
         this.documentRepository = documentRepository;
         this.knowledgeVectorStore = knowledgeVectorStore;
         this.taskPublisher = taskPublisher;
+        this.knowledgeContentGuard = knowledgeContentGuard;
     }
 
     @Override
@@ -80,10 +91,12 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         }
         String text;
         try {
-            text = new String(file.getBytes(), StandardCharsets.UTF_8);
+            text = decode(file.getBytes());
         } catch (IOException e) {
             throw new BusinessException("文档读取失败");
         }
+        // 知识文档会被检索进对话上下文，上传时即拒绝疑似提示词注入内容
+        knowledgeContentGuard.assertSafe(text);
         KnowledgeDocument doc = new KnowledgeDocument();
         doc.setHospitalId(hospitalId);
         doc.setName(filename);
@@ -156,6 +169,26 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("当前账号未绑定医院，无法管理知识库");
         }
         return user;
+    }
+
+    /**
+     * 解码文档字节：剥离 UTF-8 BOM，非法 UTF-8 回退 GB18030（兼容 Windows 下保存的中文 txt）
+     *
+     * @param bytes 原始字节
+     * @return 文档文本
+     */
+    private String decode(byte[] bytes) {
+        if (bytes.length >= 3 && bytes[0] == (byte) 0xEF
+                && bytes[1] == (byte) 0xBB && bytes[2] == (byte) 0xBF) {
+            bytes = Arrays.copyOfRange(bytes, 3, bytes.length);
+        }
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (Exception e) {
+            return new String(bytes, Charset.forName("GB18030"));
+        }
     }
 
     /**
