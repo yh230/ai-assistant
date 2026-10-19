@@ -64,8 +64,8 @@ public class KnowledgeChunker {
      * 切片 ID（{@code documentId:index}）互相覆盖；同一文档多次切分得到的 ID 不同，
      * 因此该重载<b>不能</b>用于需要稳定 ID 的场景。
      * <p>
-     * <b>Task 7 要求</b>：{@code KnowledgeVectorStore} 等仍在调用本重载的消费者必须改为
-     * {@link #split(Long, String, String)} 并传入数据库中的真实 documentId。
+     * <b>兼容说明</b>：生产链路已全部改用 {@link #split(Long, String, String)} 并传入真实
+     * documentId，本重载仅保留给兼容旧调用与测试使用。
      *
      * @param sourceName 来源文件名
      * @param text       文档全文

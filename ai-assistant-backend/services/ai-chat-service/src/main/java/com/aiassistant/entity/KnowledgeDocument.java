@@ -57,7 +57,7 @@ public class KnowledgeDocument {
     @Column(name = "error_msg", length = 500)
     private String errorMsg;
 
-    /** 文档全文（删除重建向量用） */
+    /** 文档全文（供异步切片与失败重试使用） */
     @Lob
     @Column(columnDefinition = "LONGTEXT")
     private String content;

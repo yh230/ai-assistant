@@ -2,7 +2,7 @@ package com.aiassistant.mq;
 
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.rag.KnowledgeChunker;
-import com.aiassistant.rag.KnowledgeVectorStore;
+import com.aiassistant.rag.KnowledgeStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.api.mq.KnowledgeMqEvent;
 import com.api.mq.MqEnvelope;
@@ -38,7 +38,7 @@ public class KnowledgeTaskConsumer {
     private static final Duration IDEMPOTENT_TTL = Duration.ofDays(7);
 
     private final KnowledgeDocumentRepository documentRepository;
-    private final KnowledgeVectorStore knowledgeVectorStore;
+    private final KnowledgeStore knowledgeStore;
     private final KnowledgeChunker knowledgeChunker;
     private final IdempotentGuard idempotentGuard;
     private final ObjectMapper objectMapper;
@@ -81,11 +81,14 @@ public class KnowledgeTaskConsumer {
                 ack.acknowledge();
                 return;
             }
-            List<Document> chunks = knowledgeChunker.split(doc.getName(), doc.getContent());
-            knowledgeVectorStore.addDocuments(event.getHospitalId(), chunks);
+            int previousChunkCount = doc.getChunkCount() == null ? 0 : doc.getChunkCount();
+            // 使用真实文档 ID 切片：切片 ID 为 documentId:index，供幂等覆盖与 chunk 级引用溯源
+            List<Document> chunks = knowledgeChunker.split(doc.getId(), doc.getName(), doc.getContent());
+            knowledgeStore.upsertDocument(event.getHospitalId(), doc.getId(), doc.getName(),
+                    previousChunkCount, chunks);
             doc.setChunkCount(chunks.size());
             doc.setStatus(KnowledgeDocument.STATUS_READY);
-            doc.setErrorMsg(null);
+            doc.setErrorMsg("");
             documentRepository.save(doc);
             ack.acknowledge();
         } catch (Exception e) {

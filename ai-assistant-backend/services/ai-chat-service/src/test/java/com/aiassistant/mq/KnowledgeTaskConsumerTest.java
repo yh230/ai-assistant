@@ -2,7 +2,7 @@ package com.aiassistant.mq;
 
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.rag.KnowledgeChunker;
-import com.aiassistant.rag.KnowledgeVectorStore;
+import com.aiassistant.rag.KnowledgeStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.api.mq.KnowledgeMqEvent;
 import com.api.mq.MqEnvelope;
@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.document.Document;
 import org.springframework.kafka.support.Acknowledgment;
 
 import java.time.Duration;
@@ -35,7 +36,7 @@ import static org.mockito.Mockito.*;
 class KnowledgeTaskConsumerTest {
 
     @Mock private KnowledgeDocumentRepository documentRepository;
-    @Mock private KnowledgeVectorStore knowledgeVectorStore;
+    @Mock private KnowledgeStore knowledgeStore;
     @Mock private KnowledgeChunker knowledgeChunker;
     @Mock private IdempotentGuard idempotentGuard;
     @Mock private Acknowledgment ack;
@@ -45,7 +46,7 @@ class KnowledgeTaskConsumerTest {
 
     @BeforeEach
     void setUp() {
-        consumer = new KnowledgeTaskConsumer(documentRepository, knowledgeVectorStore,
+        consumer = new KnowledgeTaskConsumer(documentRepository, knowledgeStore,
                 knowledgeChunker, idempotentGuard, objectMapper);
     }
 
@@ -80,13 +81,35 @@ class KnowledgeTaskConsumerTest {
         doc.setErrorMsg("历史失败信息");
         when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
         when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
-        when(knowledgeChunker.split(eq("guide.md"), eq("正文"))).thenReturn(List.of());
+        when(knowledgeChunker.split(eq(9L), eq("guide.md"), eq("正文"))).thenReturn(List.of());
 
         consumer.onMessage(record(event), ack);
 
-        verify(knowledgeVectorStore).addDocuments(eq(1L), any());
+        verify(knowledgeStore).upsertDocument(1L, 9L, "guide.md", 0, List.of());
         verify(documentRepository).save(argThat(d -> d.getStatus() == KnowledgeDocument.STATUS_READY
-                && d.getErrorMsg() == null));
+                && "".equals(d.getErrorMsg()) && d.getChunkCount() == 0));
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldPassPreviousChunkCountAndNewChunksToStore() throws Exception {
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        KnowledgeDocument doc = document(KnowledgeDocument.STATUS_PENDING);
+        doc.setChunkCount(5);
+        List<Document> chunks = List.of(
+                Document.builder().id("9:0").text("第一片").build(),
+                Document.builder().id("9:1").text("第二片").build());
+        when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+        when(knowledgeChunker.split(9L, "guide.md", "正文")).thenReturn(chunks);
+
+        consumer.onMessage(record(event), ack);
+
+        verify(knowledgeStore).upsertDocument(1L, 9L, "guide.md", 5, chunks);
+        verify(documentRepository).save(argThat(d -> d.getChunkCount() == 2
+                && d.getStatus() == KnowledgeDocument.STATUS_READY));
         verify(ack).acknowledge();
     }
 
@@ -100,7 +123,7 @@ class KnowledgeTaskConsumerTest {
 
         consumer.onMessage(record(event), ack);
 
-        verify(knowledgeVectorStore, never()).addDocuments(any(), any());
+        verify(knowledgeStore, never()).upsertDocument(any(), any(), any(), anyInt(), any());
         verify(documentRepository, never()).save(any());
         verify(ack).acknowledge();
     }
@@ -115,8 +138,8 @@ class KnowledgeTaskConsumerTest {
 
         consumer.onMessage(record(event), ack);
 
-        verify(knowledgeChunker, never()).split(any(), any());
-        verify(knowledgeVectorStore, never()).addDocuments(any(), any());
+        verify(knowledgeChunker, never()).split(any(), any(), any());
+        verify(knowledgeStore, never()).upsertDocument(any(), any(), any(), anyInt(), any());
         verify(documentRepository, never()).save(any());
         verify(ack).acknowledge();
     }
@@ -141,8 +164,9 @@ class KnowledgeTaskConsumerTest {
         event.setHospitalId(1L);
         when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
         when(documentRepository.findById(9L)).thenReturn(Optional.of(document(KnowledgeDocument.STATUS_PENDING)));
-        when(knowledgeChunker.split(any(), any())).thenReturn(List.of());
-        doThrow(new RuntimeException("embed down")).when(knowledgeVectorStore).addDocuments(any(), any());
+        when(knowledgeChunker.split(any(), any(), any())).thenReturn(List.of());
+        doThrow(new RuntimeException("embed down")).when(knowledgeStore)
+                .upsertDocument(any(), any(), any(), anyInt(), any());
 
         assertThrows(RuntimeException.class, () -> consumer.onMessage(record(event), ack));
 

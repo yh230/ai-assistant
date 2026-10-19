@@ -4,7 +4,7 @@ import com.aiassistant.dto.KnowledgeDocumentDTO;
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.mq.KnowledgeTaskPublisher;
 import com.aiassistant.rag.KnowledgeContentGuard;
-import com.aiassistant.rag.KnowledgeVectorStore;
+import com.aiassistant.rag.KnowledgeStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.aiassistant.service.KnowledgeService;
 import com.common.auth.UserSnapshot;
@@ -32,7 +32,7 @@ import java.util.Set;
 /**
  * 知识库文档管理（上传/列表/删除；全部操作限定在操作者医院范围内）
  * <p>
- * 上传落库即返回，切片向量化经 Kafka 异步完成；删除后按该医院已就绪文档重建向量文件。
+ * 上传落库即返回，切片向量化经 Kafka 异步完成；删除时按该文档已写入的切片数清理切片。
  *
  * @author yh
  * @date 2026-10-13
@@ -55,8 +55,8 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     /** 知识库文档仓库 */
     private final KnowledgeDocumentRepository documentRepository;
 
-    /** 本院向量存储 */
-    private final KnowledgeVectorStore knowledgeVectorStore;
+    /** 本院知识库切片存储 */
+    private final KnowledgeStore knowledgeStore;
 
     /** 知识库任务事件发布器 */
     private final KnowledgeTaskPublisher taskPublisher;
@@ -68,16 +68,16 @@ public class KnowledgeServiceImpl implements KnowledgeService {
      * 构造器注入
      *
      * @param documentRepository    知识库文档仓库
-     * @param knowledgeVectorStore  知识库向量存储
+     * @param knowledgeStore        知识库切片存储
      * @param taskPublisher         知识库任务事件发布器
      * @param knowledgeContentGuard 知识库内容注入防护
      */
     public KnowledgeServiceImpl(KnowledgeDocumentRepository documentRepository,
-                                KnowledgeVectorStore knowledgeVectorStore,
+                                KnowledgeStore knowledgeStore,
                                 KnowledgeTaskPublisher taskPublisher,
                                 KnowledgeContentGuard knowledgeContentGuard) {
         this.documentRepository = documentRepository;
-        this.knowledgeVectorStore = knowledgeVectorStore;
+        this.knowledgeStore = knowledgeStore;
         this.taskPublisher = taskPublisher;
         this.knowledgeContentGuard = knowledgeContentGuard;
     }
@@ -156,9 +156,9 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("无权操作该文档");
         }
         documentRepository.delete(doc);
-        // 按该医院已就绪文档重建向量（未就绪文档尚未入向量；文档量小，重建简单可靠）
-        knowledgeVectorStore.rebuild(user.getHospitalId(),
-                documentRepository.findByHospitalIdAndStatus(user.getHospitalId(), KnowledgeDocument.STATUS_READY));
+        // 按该文档已写入的切片数清理切片，避免整库重建
+        knowledgeStore.deleteDocument(user.getHospitalId(), doc.getId(),
+                doc.getChunkCount() == null ? 0 : doc.getChunkCount());
     }
 
     /**

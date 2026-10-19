@@ -3,7 +3,7 @@ package com.aiassistant.service.impl;
 import com.aiassistant.entity.KnowledgeDocument;
 import com.aiassistant.mq.KnowledgeTaskPublisher;
 import com.aiassistant.rag.KnowledgeContentGuard;
-import com.aiassistant.rag.KnowledgeVectorStore;
+import com.aiassistant.rag.KnowledgeStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.common.auth.UserSnapshot;
 import com.common.constant.SecurityConstants;
@@ -24,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,14 +46,14 @@ import static org.mockito.Mockito.when;
 class KnowledgeServiceImplTest {
 
     @Mock private KnowledgeDocumentRepository documentRepository;
-    @Mock private KnowledgeVectorStore knowledgeVectorStore;
+    @Mock private KnowledgeStore knowledgeStore;
     @Mock private KnowledgeTaskPublisher taskPublisher;
 
     private KnowledgeServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new KnowledgeServiceImpl(documentRepository, knowledgeVectorStore, taskPublisher,
+        service = new KnowledgeServiceImpl(documentRepository, knowledgeStore, taskPublisher,
                 new KnowledgeContentGuard());
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken("staff", null);
         auth.setDetails(UserSnapshot.builder().userId(7L).hospitalId(1L)
@@ -111,6 +112,33 @@ class KnowledgeServiceImplTest {
 
         assertEquals(9L, id);
         verify(taskPublisher, times(1)).publishUploaded(9L, 1L);
+    }
+
+    @Test
+    void deletesChunksByStoredChunkCount() {
+        KnowledgeDocument doc = new KnowledgeDocument();
+        doc.setId(9L);
+        doc.setHospitalId(1L);
+        doc.setChunkCount(3);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+
+        service.delete(9L);
+
+        verify(documentRepository).delete(doc);
+        verify(knowledgeStore).deleteDocument(1L, 9L, 3);
+    }
+
+    @Test
+    void deletesChunksWithZeroWhenChunkCountMissing() {
+        KnowledgeDocument doc = new KnowledgeDocument();
+        doc.setId(9L);
+        doc.setHospitalId(1L);
+        doc.setChunkCount(null);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+
+        service.delete(9L);
+
+        verify(knowledgeStore).deleteDocument(1L, 9L, 0);
     }
 
     @Test
