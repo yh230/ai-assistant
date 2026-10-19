@@ -50,12 +50,25 @@ class KnowledgeTaskConsumerTest {
     }
 
     private ConsumerRecord<String, String> record(KnowledgeMqEvent event) throws Exception {
+        return record(MqTopics.KNOWLEDGE_TASK, event);
+    }
+
+    private ConsumerRecord<String, String> record(String topic, KnowledgeMqEvent event) throws Exception {
         MqEnvelope envelope = new MqEnvelope();
         envelope.setEventId("k1");
         envelope.setEventType(KnowledgeMqEvent.KNOWLEDGE_UPLOADED);
         envelope.setPayload(objectMapper.writeValueAsString(event));
-        return new ConsumerRecord<>(MqTopics.KNOWLEDGE_TASK, 0, 0L, "k",
-                objectMapper.writeValueAsString(envelope));
+        return new ConsumerRecord<>(topic, 0, 0L, "k", objectMapper.writeValueAsString(envelope));
+    }
+
+    private KnowledgeDocument document(int status) {
+        KnowledgeDocument doc = new KnowledgeDocument();
+        doc.setId(9L);
+        doc.setHospitalId(1L);
+        doc.setName("guide.md");
+        doc.setContent("正文");
+        doc.setStatus(status);
+        return doc;
     }
 
     @Test
@@ -63,12 +76,8 @@ class KnowledgeTaskConsumerTest {
         KnowledgeMqEvent event = new KnowledgeMqEvent();
         event.setDocumentId(9L);
         event.setHospitalId(1L);
-        KnowledgeDocument doc = new KnowledgeDocument();
-        doc.setId(9L);
-        doc.setHospitalId(1L);
-        doc.setName("guide.md");
-        doc.setContent("正文");
-        doc.setStatus(KnowledgeDocument.STATUS_PENDING);
+        KnowledgeDocument doc = document(KnowledgeDocument.STATUS_PENDING);
+        doc.setErrorMsg("历史失败信息");
         when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
         when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
         when(knowledgeChunker.split(eq("guide.md"), eq("正文"))).thenReturn(List.of());
@@ -76,7 +85,8 @@ class KnowledgeTaskConsumerTest {
         consumer.onMessage(record(event), ack);
 
         verify(knowledgeVectorStore).addDocuments(eq(1L), any());
-        verify(documentRepository).save(argThat(d -> d.getStatus() == KnowledgeDocument.STATUS_READY));
+        verify(documentRepository).save(argThat(d -> d.getStatus() == KnowledgeDocument.STATUS_READY
+                && d.getErrorMsg() == null));
         verify(ack).acknowledge();
     }
 
@@ -91,6 +101,23 @@ class KnowledgeTaskConsumerTest {
         consumer.onMessage(record(event), ack);
 
         verify(knowledgeVectorStore, never()).addDocuments(any(), any());
+        verify(documentRepository, never()).save(any());
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldSkipWhenDocumentAlreadyReady() throws Exception {
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(document(KnowledgeDocument.STATUS_READY)));
+
+        consumer.onMessage(record(event), ack);
+
+        verify(knowledgeChunker, never()).split(any(), any());
+        verify(knowledgeVectorStore, never()).addDocuments(any(), any());
+        verify(documentRepository, never()).save(any());
         verify(ack).acknowledge();
     }
 
@@ -112,19 +139,15 @@ class KnowledgeTaskConsumerTest {
         KnowledgeMqEvent event = new KnowledgeMqEvent();
         event.setDocumentId(9L);
         event.setHospitalId(1L);
-        KnowledgeDocument doc = new KnowledgeDocument();
-        doc.setId(9L);
-        doc.setHospitalId(1L);
-        doc.setName("guide.md");
-        doc.setContent("正文");
         when(idempotentGuard.consumeOnce(eq("knowledge-consumer"), eq("k1"), any(Duration.class))).thenReturn(true);
-        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(document(KnowledgeDocument.STATUS_PENDING)));
         when(knowledgeChunker.split(any(), any())).thenReturn(List.of());
         doThrow(new RuntimeException("embed down")).when(knowledgeVectorStore).addDocuments(any(), any());
 
         assertThrows(RuntimeException.class, () -> consumer.onMessage(record(event), ack));
 
         verify(idempotentGuard).release("knowledge-consumer", "k1");
+        verify(documentRepository, never()).save(any());
         verify(ack, never()).acknowledge();
     }
 
@@ -142,5 +165,42 @@ class KnowledgeTaskConsumerTest {
 
         verify(idempotentGuard).release("knowledge-consumer", "k1");
         verify(ack, never()).acknowledge();
+    }
+
+    @Test
+    void shouldMarkDocumentFailedOnDlt() throws Exception {
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        KnowledgeDocument doc = document(KnowledgeDocument.STATUS_PENDING);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+
+        consumer.onDlt(record(MqTopics.KNOWLEDGE_TASK_DLT, event), ack);
+
+        verify(documentRepository).save(argThat(d -> d.getStatus() == KnowledgeDocument.STATUS_FAILED
+                && d.getErrorMsg() != null && !d.getErrorMsg().isBlank()));
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldIgnoreMalformedDltWithoutThrowing() {
+        assertDoesNotThrow(() -> consumer.onDlt(new ConsumerRecord<>(
+                MqTopics.KNOWLEDGE_TASK_DLT, 0, 0L, "k", "{bad"), ack));
+
+        verify(documentRepository, never()).save(any());
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldIgnoreDltWhenDocumentMissing() throws Exception {
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        when(documentRepository.findById(9L)).thenReturn(Optional.empty());
+
+        consumer.onDlt(record(MqTopics.KNOWLEDGE_TASK_DLT, event), ack);
+
+        verify(documentRepository, never()).save(any());
+        verify(ack).acknowledge();
     }
 }

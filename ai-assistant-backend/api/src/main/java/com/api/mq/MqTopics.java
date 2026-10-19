@@ -20,6 +20,9 @@ public final class MqTopics {
     /** 死信主题后缀 */
     public static final String DLT_SUFFIX = ".DLT";
 
+    /** 知识库任务死信主题 */
+    public static final String KNOWLEDGE_TASK_DLT = KNOWLEDGE_TASK + DLT_SUFFIX;
+
     private MqTopics() {
     }
 

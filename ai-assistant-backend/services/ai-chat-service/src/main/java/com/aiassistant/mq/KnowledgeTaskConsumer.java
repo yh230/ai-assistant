@@ -45,6 +45,9 @@ public class KnowledgeTaskConsumer {
 
     /**
      * 消费知识库任务并完成切片向量化
+     * <p>
+     * 文档不存在（上传事务已回滚）或已就绪时直接确认；处理失败释放幂等键并抛出，
+     * 由错误处理器重试，重试耗尽后转死信主题。
      *
      * @param record 消息
      * @param ack 手动确认
@@ -52,21 +55,58 @@ public class KnowledgeTaskConsumer {
     @KafkaListener(topics = MqTopics.KNOWLEDGE_TASK, groupId = GROUP)
     public void onMessage(ConsumerRecord<String, String> record, Acknowledgment ack) throws Exception {
         MqEnvelope envelope = objectMapper.readValue(record.value(), MqEnvelope.class);
-        if (idempotentGuard.consumeOnce(GROUP, envelope.getEventId(), IDEMPOTENT_TTL)) {
-            try {
-                KnowledgeMqEvent event = objectMapper.readValue(envelope.getPayload(), KnowledgeMqEvent.class);
-                documentRepository.findById(event.getDocumentId()).ifPresentOrElse(doc -> {
-                    List<Document> chunks = knowledgeChunker.split(doc.getName(), doc.getContent());
-                    knowledgeVectorStore.addDocuments(event.getHospitalId(), chunks);
-                    doc.setChunkCount(chunks.size());
-                    doc.setStatus(KnowledgeDocument.STATUS_READY);
-                    documentRepository.save(doc);
-                }, () -> log.warn("知识库任务文档不存在，跳过: {}", event.getDocumentId()));
-            } catch (Exception e) {
-                // 失败释放幂等键：重试可重放同一事件（重放耗尽由错误处理器转 DLT）
-                idempotentGuard.release(GROUP, envelope.getEventId());
-                throw e;
+        if (!idempotentGuard.consumeOnce(GROUP, envelope.getEventId(), IDEMPOTENT_TTL)) {
+            ack.acknowledge();
+            return;
+        }
+        try {
+            KnowledgeMqEvent event = objectMapper.readValue(envelope.getPayload(), KnowledgeMqEvent.class);
+            KnowledgeDocument doc = documentRepository.findById(event.getDocumentId()).orElse(null);
+            if (doc == null) {
+                log.warn("知识库任务文档不存在，跳过: {}", event.getDocumentId());
+                ack.acknowledge();
+                return;
             }
+            if (doc.getStatus() != null && doc.getStatus() == KnowledgeDocument.STATUS_READY) {
+                log.info("知识库文档已就绪，跳过重复处理: {}", doc.getId());
+                ack.acknowledge();
+                return;
+            }
+            List<Document> chunks = knowledgeChunker.split(doc.getName(), doc.getContent());
+            knowledgeVectorStore.addDocuments(event.getHospitalId(), chunks);
+            doc.setChunkCount(chunks.size());
+            doc.setStatus(KnowledgeDocument.STATUS_READY);
+            doc.setErrorMsg(null);
+            documentRepository.save(doc);
+            ack.acknowledge();
+        } catch (Exception e) {
+            // 失败释放幂等键：重试可重放同一事件（重放耗尽由错误处理器转 DLT）
+            idempotentGuard.release(GROUP, envelope.getEventId());
+            throw e;
+        }
+    }
+
+    /**
+     * 消费知识库死信：将文档置为失败并写入提示信息
+     * <p>
+     * 死信只做状态兜底，解析失败仅记录日志，避免死信再次进入重试循环；无论成败均确认消息
+     *
+     * @param record 死信消息
+     * @param ack 手动确认
+     */
+    @KafkaListener(topics = MqTopics.KNOWLEDGE_TASK_DLT, groupId = "knowledge-dlt")
+    public void onDlt(ConsumerRecord<String, String> record, Acknowledgment ack) {
+        try {
+            MqEnvelope envelope = objectMapper.readValue(record.value(), MqEnvelope.class);
+            KnowledgeMqEvent event = objectMapper.readValue(envelope.getPayload(), KnowledgeMqEvent.class);
+            documentRepository.findById(event.getDocumentId()).ifPresent(doc -> {
+                doc.setStatus(KnowledgeDocument.STATUS_FAILED);
+                doc.setErrorMsg("异步处理失败，请删除后重新上传");
+                documentRepository.save(doc);
+                log.warn("知识库文档处理失败已置为失败状态: {}", doc.getId());
+            });
+        } catch (Exception e) {
+            log.error("处理知识库DLT失败: {}", e.getMessage());
         }
         ack.acknowledge();
     }

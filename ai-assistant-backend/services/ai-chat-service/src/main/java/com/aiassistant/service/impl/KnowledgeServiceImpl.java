@@ -15,6 +15,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -91,8 +93,18 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         doc.setContent(text);
         doc.setCreateBy(user.getUserId());
         KnowledgeDocument saved = documentRepository.save(doc);
-        // 落库即返回，切片向量化交由消费者异步完成（消费端以文档不存在兜底回滚场景）
-        taskPublisher.publishUploaded(saved.getId(), hospitalId);
+        // 落库即返回，切片向量化交由消费者异步完成；事件须在事务提交后发送，避免消费者读到未提交数据
+        Runnable publish = () -> taskPublisher.publishUploaded(saved.getId(), hospitalId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publish.run();
+                }
+            });
+        } else {
+            publish.run();
+        }
         return saved.getId();
     }
 
