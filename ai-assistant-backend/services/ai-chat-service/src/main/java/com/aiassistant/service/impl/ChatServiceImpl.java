@@ -16,6 +16,7 @@ import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
 import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
+import com.aiassistant.service.UserMemoryBuilder;
 import com.aiassistant.service.WeatherService;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
@@ -64,7 +65,7 @@ import java.util.stream.Collectors;
  *     <li><b>多角色</b>：角色人设来自数据库（ai_role 表，可在「角色管理」页面维护），运行时按 roleId 选择，并注入跨会话的 DB 用户画像。</li>
  *     <li><b>多模型</b>：模型来自配置（ai.assistant.models），运行时按 modelId 选择 ChatClient；
  *         模型不可用时自动降级为本地回复引擎，对话不中断。</li>
- *     <li><b>上下文管理</b>：长对话自动摘要压缩，保留最近 N 条完整消息；用户画像从全量历史中提取。</li>
+ *     <li><b>上下文管理</b>：长对话自动摘要压缩，保留最近 N 条完整消息；用户画像仅从当前登录人自身历史中提取。</li>
  *     <li><b>会话隔离</b>：会话按归属用户 + 身份绑定，员工侧读写一律限定当前登录人（identity=staff）的会话。</li>
  * </ul>
  *
@@ -81,10 +82,6 @@ public class ChatServiceImpl implements ChatService {
     /** 城市提取正则 */
     private static final Pattern CITY_PATTERN =
             Pattern.compile("([\\u4e00-\\u9fa5]{2,8})(?:市|地区)?的?(?:今天|现在|明天|当前)?(?:实时)?(?:的)?天气");
-
-    /** 用户名提取正则 */
-    private static final Pattern NAME_PATTERN =
-            Pattern.compile("(?:我叫|我是|我的名字是|叫我)\\s*([\\u4e00-\\u9fa5]{2,4})");
 
     /** 旧对话摘要前缀 */
     private static final String SUMMARY_HEADER = "以下是之前对话的摘要信息，帮助你理解上下文：\n";
@@ -106,6 +103,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatModelRegistry chatModelRegistry;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
+    private final UserMemoryBuilder userMemoryBuilder;
     private final WeatherService weatherService;
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
@@ -153,7 +151,8 @@ public class ChatServiceImpl implements ChatService {
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
         List<Message> contextMessages = buildContextMessages(history);
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
+        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
+                snapshot.getUserId(), memoryIdentity(snapshot));
         boolean aiEnabled = chatModelRegistry.isActive(modelId);
 
         log.info("流式聊天 sessionId={}, roleId={}, modelId={}, aiEnabled={}, 历史消息数={}",
@@ -272,7 +271,8 @@ public class ChatServiceImpl implements ChatService {
             session.setRoleId(roleId);
             sessionRepository.save(session);
         }
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
+        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
+                snapshot.getUserId(), memoryIdentity(snapshot));
         saveUserMessage(sessionId, request.getMessage());
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
@@ -448,15 +448,17 @@ public class ChatServiceImpl implements ChatService {
     // ==================== 动态系统提示词（用户画像注入） ====================
 
     /**
-     * 构建最终系统提示词 = 角色人设 + 跨会话用户画像。
+     * 构建最终系统提示词 = 角色人设 + 当前登录人的跨会话画像
      *
      * @param systemPrompt 角色系统提示词（来自数据库，已含兜底默认值）
+     * @param userId       登录人 ID
+     * @param identity     身份（staff/patient）
      * @return 系统提示词
      */
-    private String buildSystemPrompt(String systemPrompt) {
+    private String buildSystemPrompt(String systemPrompt, Long userId, String identity) {
         String base = (systemPrompt != null && !systemPrompt.isBlank())
                 ? systemPrompt : "你是用户的 AI 助手，请友好、简洁、真诚地回应。";
-        String memory = buildUserMemory();
+        String memory = userMemoryBuilder.build(userId, identity);
         if (memory != null && !memory.isBlank()) {
             return base + MEMORY_SEPARATOR + memory;
         }
@@ -464,73 +466,14 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 从数据库历史对话中提取用户画像（聊天次数、名字、常聊城市、话题偏好）。
+     * 解析画像查询使用的身份：空值按旧数据员工处理
      *
-     * @return 用户画像文本；无数据时返回空字符串（不返回 null）
+     * @param snapshot 当前登录人快照
+     * @return 身份（staff/patient）
      */
-    private String buildUserMemory() {
-        try {
-            long sessionCount = sessionRepository.count();
-            long messageCount = messageRepository.countByRole("user");
-            if (sessionCount == 0) {
-                return "";
-            }
-
-            List<ChatMessage> recentUserMessages = messageRepository.findRecentUserMessages(50);
-            Set<String> cities = new LinkedHashSet<>();
-            Set<String> topics = new LinkedHashSet<>();
-            String userName = null;
-
-            for (ChatMessage m : recentUserMessages) {
-                String content = m.getContent();
-                if (content == null) {
-                    continue;
-                }
-
-                Matcher cityMatcher = CITY_PATTERN.matcher(content);
-                while (cityMatcher.find()) {
-                    String city = cityMatcher.group(1);
-                    if (!city.matches("(查|问|看|找|这|那|个|的|我|你|他|她|今|明|后|白|晚)+")) {
-                        cities.add(city);
-                    }
-                }
-
-                if (userName == null) {
-                    Matcher nameMatcher = NAME_PATTERN.matcher(content);
-                    if (nameMatcher.find()) {
-                        userName = nameMatcher.group(1);
-                    }
-                }
-
-                if (content.contains("游戏")) topics.add("游戏");
-                if (content.contains("电影")) topics.add("电影");
-                if (content.contains("工作")) topics.add("工作");
-                if (content.contains("学习")) topics.add("学习");
-                if (content.contains("美食") || content.contains("吃")) topics.add("美食");
-                if (content.contains("旅游") || content.contains("旅行")) topics.add("旅游");
-                if (content.contains("音乐")) topics.add("音乐");
-                if (content.contains("运动") || content.contains("健身")) topics.add("运动");
-                if (content.contains("代码") || content.contains("编程") || content.contains("程序")) topics.add("编程");
-            }
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("- 你们之前已经聊过 ").append(sessionCount).append(" 次，共 ").append(messageCount).append(" 条对话");
-            if (userName != null) {
-                sb.append("\n- 用户可能叫「").append(userName).append("」，可以在合适的时候自然地称呼");
-            }
-            if (!cities.isEmpty()) {
-                List<String> cityList = new ArrayList<>(cities);
-                sb.append("\n- 用户经常关心的城市：")
-                        .append(String.join("、", cityList.size() > 5 ? cityList.subList(0, 5) : cityList));
-            }
-            if (!topics.isEmpty()) {
-                sb.append("\n- 用户感兴趣的话题：").append(String.join("、", topics));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            log.warn("构建用户记忆失败: {}", e.getMessage());
-            return "";
-        }
+    private String memoryIdentity(UserSnapshot snapshot) {
+        String identity = snapshot.getIdentity();
+        return (identity == null || identity.isBlank()) ? SecurityConstants.IDENTITY_STAFF : identity;
     }
 
     // ==================== 历史与列表 ====================
