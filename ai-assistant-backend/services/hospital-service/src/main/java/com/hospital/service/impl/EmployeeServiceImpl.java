@@ -45,6 +45,7 @@ import java.util.stream.Collectors;
  *     <li>分页过滤参数由 {@link DataScopeResolver} 解析：院长→本院、科室主任→本科室、管理员→按前端条件、本人→仅本人</li>
  *     <li>新增/编辑：院长强制本院、科室主任强制本科室（前端越权传参无效）</li>
  *     <li>删除/改状态/重置密码 等操作先按员工归属做范围校验</li>
+ *     <li>非 admin 不可改动管理员账号（读取目标当前角色，与是否提交角色无关）</li>
  * </ul>
  *
  * @author yh
@@ -68,7 +69,7 @@ public class EmployeeServiceImpl implements EmployeeService {
      */
     @Override
     public PageResult<EmployeeVO> pageEmployees(EmployeeQueryDTO query) {
-        DataScope scope = dataScopeResolver.resolve();
+        DataScope scope = dataScopeResolver.resolveRequired();
         if (scope.isSelf()) {
             return pageSelf(query, scope);
         }
@@ -109,7 +110,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     @Override
     public void create(EmployeeSaveDTO dto) {
         // 数据范围：院长强制本院、主任强制本科室（医院由科室推导），均忽略前端越权传参
-        DataScope scope = dataScopeResolver.resolve();
+        DataScope scope = dataScopeResolver.resolveRequired();
         if (scope.isHospital()) {
             dto.setHospitalId(scope.getHospitalId());
         } else if (scope.isDepartment()) {
@@ -132,17 +133,15 @@ public class EmployeeServiceImpl implements EmployeeService {
     @Override
     public void update(Long id, EmployeeUpdateDTO dto) {
         UserBriefDTO target = requireUser(id, "无权操作该员工");
+        // 管理员目标保护：无论是否提交角色，非 admin 一律不可改动管理员账号
+        Map<Long, String> codeById = dto.getRoleIds() == null ? null : loadRoleCodeMap();
+        assertAdminTarget(target, "无权修改管理员账号", codeById);
         List<Long> roleIds = dto.getRoleIds();
         if (roleIds != null) {
-            Map<Long, String> codeById = loadRoleCodeMap();
             List<String> operatorRoles = operatorRoles();
             boolean selfUnchanged = id.equals(SecurityUtils.getCurrentUserIdOrNull())
                     && asSet(roleIds).equals(asSet(target.getRoleIds()));
             if (!operatorRoles.contains(RoleConstants.ADMIN)) {
-                // 管理员目标保护：非 admin 不得改动管理员现有角色（防降级/剥离）
-                if (codesOf(target.getRoleIds(), codeById).contains(RoleConstants.ADMIN)) {
-                    throw new BusinessException("无权修改管理员角色");
-                }
                 // 自提权拦截：非 admin 仅可提交与现状一致的角色集合，实际变更一律拒绝
                 if (id.equals(SecurityUtils.getCurrentUserIdOrNull()) && !selfUnchanged) {
                     throw new BusinessException("不能修改自己的角色");
@@ -153,7 +152,7 @@ public class EmployeeServiceImpl implements EmployeeService {
                 assertRoleGrantable(roleIds, codeById);
             }
         }
-        DataScope scope = dataScopeResolver.resolve();
+        DataScope scope = dataScopeResolver.resolveRequired();
         if (scope.isHospital()) {
             // 院长：锁定本院，科室可调整（科室须属本院，前端越权传参无效）
             dto.setHospitalId(scope.getHospitalId());
@@ -167,7 +166,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 
     @Override
     public void delete(Long id) {
-        requireUser(id, "无权操作该员工");
+        UserBriefDTO target = requireUser(id, "无权操作该员工");
+        assertAdminTarget(target, "无权操作管理员账号");
         unwrap(userClient.delete(id), "删除员工失败");
     }
 
@@ -181,6 +181,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     public void changeStatus(Long id, Integer status) {
         StatusValidator.checkEnabledDisabled(status, "非法的状态值");
         UserBriefDTO u = requireUser(id, "无权操作该员工");
+        assertAdminTarget(u, "无权操作管理员账号");
         EmployeeUpdateDTO req = new EmployeeUpdateDTO();
         req.setName(u.getName());
         req.setPhone(u.getPhone());
@@ -199,6 +200,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     @Override
     public void resetPassword(Long id, String newPassword) {
         UserBriefDTO u = requireUser(id, "无权操作该员工");
+        assertAdminTarget(u, "无权操作管理员账号");
         EmployeeUpdateDTO req = new EmployeeUpdateDTO();
         req.setName(u.getName());
         req.setPhone(u.getPhone());
@@ -229,6 +231,36 @@ public class EmployeeServiceImpl implements EmployeeService {
             list = match ? rows : List.of();
         }
         return PageResult.of(list.size(), query.getPageNum(), query.getPageSize(), enrich(list));
+    }
+
+    /**
+     * 管理员目标保护：非 admin 操作管理员账号一律拒绝
+     * <p>
+     * 目标当前角色无条件读取（不依赖入参是否携带 roleIds），避免院长/科室主任借改密、
+     * 禁用、删除等不传角色的入口接管管理员账号；admin 操作者直接放行，不额外查询角色。
+     *
+     * @param target 目标员工（含当前角色 ID）
+     * @param failMessage 越权提示文案
+     */
+    private void assertAdminTarget(UserBriefDTO target, String failMessage) {
+        assertAdminTarget(target, failMessage, null);
+    }
+
+    /**
+     * 管理员目标保护（可复用已加载的角色映射，避免重复调用用户中心）
+     *
+     * @param target 目标员工（含当前角色 ID）
+     * @param failMessage 越权提示文案
+     * @param codeById 角色 ID→角色编码映射（为空时按需加载）
+     */
+    private void assertAdminTarget(UserBriefDTO target, String failMessage, Map<Long, String> codeById) {
+        if (operatorRoles().contains(RoleConstants.ADMIN)) {
+            return;
+        }
+        Map<Long, String> roles = codeById == null ? loadRoleCodeMap() : codeById;
+        if (codesOf(target.getRoleIds(), roles).contains(RoleConstants.ADMIN)) {
+            throw new BusinessException(failMessage);
+        }
     }
 
     /**
@@ -319,7 +351,8 @@ public class EmployeeServiceImpl implements EmployeeService {
             throw new BusinessException("员工不存在");
         }
         UserBriefDTO u = list.get(0);
-        dataScopeResolver.resolve().assertCanAccess(u.getHospitalId(), u.getDepartmentId(), u.getId(), failMessage);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(u.getHospitalId(), u.getDepartmentId(), u.getId(), failMessage);
         return u;
     }
 

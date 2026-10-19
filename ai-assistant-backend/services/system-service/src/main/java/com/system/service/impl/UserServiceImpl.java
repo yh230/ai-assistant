@@ -259,7 +259,9 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
-        // 自提权/管理员目标拦截（兜底），内部无身份调用视为可信
+        // 管理员目标保护（兜底）：非 admin 不得改动管理员账号，与是否携带角色无关
+        assertAdminTargetOperable(id, "无权修改管理员账号");
+        // 自提权拦截（兜底），内部无身份调用视为可信
         UserSnapshot operator = SecurityUtils.currentSnapshot();
         List<Long> currentRoleIds = dto.getRoleIds() == null
                 ? List.of() : nullSafe(userRoleMapper.selectRoleIdsByUserId(id));
@@ -268,10 +270,6 @@ public class UserServiceImpl implements UserService {
         if (operator != null && dto.getRoleIds() != null) {
             List<String> operatorRoles = operator.getRoles() == null ? List.of() : operator.getRoles();
             if (!operatorRoles.contains(RoleConstants.ADMIN)) {
-                // 管理员目标保护：非 admin 不得改动管理员现有角色（防降级/剥离）
-                if (roleCodes(currentRoleIds).contains(RoleConstants.ADMIN)) {
-                    throw new BusinessException("无权修改管理员角色");
-                }
                 // 自提权拦截：非 admin 仅可提交与现状一致的角色集合，实际变更一律拒绝
                 if (id.equals(operator.getUserId()) && !selfUnchanged) {
                     throw new BusinessException("不能修改自己的角色");
@@ -317,6 +315,8 @@ public class UserServiceImpl implements UserService {
         if (id.equals(getCurrentUserId())) {
             throw new BusinessException("不能删除当前登录账号");
         }
+        // 管理员目标保护：非 admin 不得删除管理员账号
+        assertAdminTargetOperable(id, "无权操作管理员账号");
         userMapper.deleteById(id);
         userRoleMapper.deleteByUserId(id);
         evictAuth(id);
@@ -339,6 +339,8 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
+        // 管理员目标保护：非 admin 不得禁用/启用管理员账号
+        assertAdminTargetOperable(id, "无权操作管理员账号");
         user.setStatus(status);
         user.setUpdateTime(LocalDateTime.now());
         userMapper.updateById(user);
@@ -361,6 +363,8 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
+        // 管理员目标保护：非 admin 不得重置管理员密码
+        assertAdminTargetOperable(id, "无权操作管理员账号");
         PasswordSupport.resetPassword(user, dto.getNewPassword(), passwordEncoder);
         userMapper.updateById(user);
         // 改密后踢下线：旧 access 与 refresh 均失效，需重新登录
@@ -488,6 +492,29 @@ public class UserServiceImpl implements UserService {
             authClient.kickout(SecurityConstants.IDENTITY_STAFF, userId);
         } catch (Exception e) {
             log.warn("强制用户下线失败: userId={}, {}", userId, e.getMessage());
+        }
+    }
+
+    /**
+     * 管理员目标保护：非 admin 操作管理员账号一律拒绝
+     * <p>
+     * 目标当前角色无条件读取（不依赖入参是否携带 roleIds），防止医院端借改密、禁用、
+     * 删除等不传角色的入口接管管理员账号；无登录快照的内部调用视为受信链路。
+     *
+     * @param id 目标用户 ID
+     * @param failMessage 越权提示文案
+     */
+    private void assertAdminTargetOperable(Long id, String failMessage) {
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        if (operator == null) {
+            return;
+        }
+        List<String> operatorRoles = operator.getRoles() == null ? List.of() : operator.getRoles();
+        if (operatorRoles.contains(RoleConstants.ADMIN)) {
+            return;
+        }
+        if (roleCodes(nullSafe(userRoleMapper.selectRoleIdsByUserId(id))).contains(RoleConstants.ADMIN)) {
+            throw new BusinessException(failMessage);
         }
     }
 

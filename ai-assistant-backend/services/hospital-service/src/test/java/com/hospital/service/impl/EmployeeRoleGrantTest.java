@@ -51,7 +51,7 @@ class EmployeeRoleGrantTest {
     @BeforeEach
     void stubDataScope() {
         // 每个用例都会经由 create/update 触发数据范围解析，统一放行以免逐用例重复打桩
-        when(dataScopeResolver.resolve()).thenReturn(DataScope.all());
+        when(dataScopeResolver.resolveRequired()).thenReturn(DataScope.all());
     }
 
     @AfterEach
@@ -159,7 +159,7 @@ class EmployeeRoleGrantTest {
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> employeeService.update(6L, dto));
-        assertEquals("无权修改管理员角色", ex.getMessage());
+        assertEquals("无权修改管理员账号", ex.getMessage());
         verify(userClient, never()).update(any(), any());
     }
 

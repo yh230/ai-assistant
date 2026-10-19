@@ -84,4 +84,35 @@ class InternalAuthFilterTest {
         assertEquals(403, response.getStatus());
         assertTrue(response.getContentAsString().contains("权限不足，禁止访问"));
     }
+
+    @Test
+    void rejectsWrongTokenWhenContextPathPresent() throws Exception {
+        // 部署在 /ctx 下时 URI 为 /ctx/inner/x，必须按 servletPath=/inner/x 识别内部接口
+        MockHttpServletRequest request = contextPathRequest();
+        request.addHeader("X-Internal-Token", "wrong");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(403, response.getStatus());
+    }
+
+    @Test
+    void passesCorrectTokenWhenContextPathPresent() throws Exception {
+        MockHttpServletRequest request = contextPathRequest();
+        request.addHeader("X-Internal-Token", TOKEN);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        assertEquals(200, response.getStatus());
+    }
+
+    /**
+     * 构造带 context-path 的内部请求：requestURI=/ctx/inner/x，servletPath=/inner/x
+     *
+     * @return 模拟请求
+     */
+    private static MockHttpServletRequest contextPathRequest() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/ctx/inner/x");
+        request.setContextPath("/ctx");
+        request.setServletPath("/inner/x");
+        return request;
+    }
 }
