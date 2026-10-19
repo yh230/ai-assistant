@@ -9,6 +9,7 @@ import com.aiassistant.service.AdminChatService;
 import com.api.client.PatientClient;
 import com.api.dto.UserBriefDTO;
 import com.common.auth.UserSnapshot;
+import com.common.constant.RoleConstants;
 import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
@@ -84,7 +85,10 @@ public class AdminChatServiceImpl implements AdminChatService {
     }
 
     /**
-     * 取当前员工快照，未登录或非员工身份拒绝访问管理端
+     * 取当前员工快照，未登录、非员工身份或未绑定医院的非平台管理员拒绝访问管理端
+     * <p>
+     * 仅平台管理员（admin 角色且未绑定医院）可查看全部医院数据；
+     * 院长/门诊管理员等未绑定医院时不得跨院查看。
      *
      * @return 当前员工用户快照
      */
@@ -95,6 +99,10 @@ public class AdminChatServiceImpl implements AdminChatService {
         }
         if (!SecurityConstants.IDENTITY_STAFF.equals(user.getIdentity())) {
             throw new BusinessException("无权访问管理端接口");
+        }
+        if (user.getHospitalId() == null
+                && (user.getRoles() == null || !user.getRoles().contains(RoleConstants.ADMIN))) {
+            throw new BusinessException("当前账号未绑定医院");
         }
         return user;
     }

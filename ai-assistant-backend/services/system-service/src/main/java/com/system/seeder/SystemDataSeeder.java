@@ -180,7 +180,7 @@ public class SystemDataSeeder implements CommandLineRunner {
     }
 
     /**
-     * 按权限标识取按钮菜单，不存在则创建
+     * 按权限标识取按钮菜单（type=2），不存在则创建
      *
      * @param parentId 父菜单 ID
      * @param name     菜单名称
@@ -190,7 +190,9 @@ public class SystemDataSeeder implements CommandLineRunner {
      */
     private Long ensureButton(Long parentId, String name, String perms, int sort) {
         SysMenu existing = menuMapper.selectOne(new LambdaQueryWrapper<SysMenu>()
-                .eq(SysMenu::getPerms, perms).last("LIMIT 1"));
+                .eq(SysMenu::getPerms, perms)
+                .eq(SysMenu::getType, 2)
+                .last("LIMIT 1"));
         if (existing != null) {
             return existing.getId();
         }
