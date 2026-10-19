@@ -69,6 +69,7 @@ class NumberSourceServiceHospitalScopeTest {
         // 初始化 MP TableInfo 缓存，使列名解析可用
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, DoctorSchedule.class);
+        TableInfoHelper.initTableInfo(assistant, NumberSource.class);
     }
 
     @Test
