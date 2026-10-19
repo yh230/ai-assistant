@@ -158,6 +158,8 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     @Transactional(rollbackFor = Exception.class)
     public void generateSources(Long scheduleId) {
         DoctorSchedule s = requireSchedule(scheduleId);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
         numberSourceService.generateForSchedule(s);
     }
 

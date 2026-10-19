@@ -94,7 +94,7 @@ public class DepartmentServiceImpl implements DepartmentService {
     public DepartmentVO get(Long id) {
         Department d = requireDepartment(id);
         dataScopeResolver.resolveRequired()
-                .assertCanAccess(d.getHospitalId(), d.getId(), null, "无权操作该科室");
+                .assertCanAccess(d.getHospitalId(), d.getId(), null, "无权查看该科室");
         return enrich(List.of(d)).get(0);
     }
 
@@ -107,9 +107,17 @@ public class DepartmentServiceImpl implements DepartmentService {
     @Transactional(rollbackFor = Exception.class)
     public void create(DepartmentSaveDTO dto) {
         DataScope scope = dataScopeResolver.resolveRequired();
+        // 科室维护仅 admin（ALL）与院长/门诊管理（HOSPITAL）可用；SELF/DEPARTMENT 不可创建
+        if (!scope.isAll() && !scope.isHospital()) {
+            throw new BusinessException("无权新增科室");
+        }
+        Long hospitalId = scope.isAll() ? dto.getHospitalId() : scope.getHospitalId();
+        if (hospitalId == null) {
+            throw new BusinessException("无法确定科室所属医院");
+        }
         Department d = new Department();
         // 医院归属由数据范围决定，忽略前端传值
-        d.setHospitalId(scope.isAll() ? dto.getHospitalId() : scope.getHospitalId());
+        d.setHospitalId(hospitalId);
         d.setName(dto.getName());
         d.setDirectorUserId(dto.getDirectorUserId());
         d.setStatus(dto.getStatus() == null ? StatusConstants.ENABLED : dto.getStatus());
