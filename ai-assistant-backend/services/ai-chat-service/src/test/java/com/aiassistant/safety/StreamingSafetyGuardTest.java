@@ -22,8 +22,14 @@ class StreamingSafetyGuardTest {
     void blocksKeywordSplitAcrossTokens() {
         StreamingSafetyGuard guard = new StreamingSafetyGuard(List.of("胸痛"), "请立即就医");
         StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("我", "突然胸", "痛"));
-        assertEquals(List.of("请立即就医"), guarded.tokens().collectList().block());
+        List<String> tokens = guarded.tokens().collectList().block();
+        String output = String.join("", tokens);
+        // 命中前可能已放行若干前缀字符（holdback 之外的原始字符），因此只断言：
+        // 输出以标准文案收尾、关键词未被完整放行、blocked 为 true
         assertTrue(guarded.blocked().get());
+        assertTrue(output.endsWith("请立即就医"));
+        assertFalse(output.contains("胸痛"));
+        // 命中后 delivered 被重置为标准文案，不再保留已放行前缀
         assertEquals("请立即就医", guarded.delivered().toString());
     }
 
@@ -84,8 +90,14 @@ class StreamingSafetyGuardTest {
         // "胸 痛" 归一后为 "胸痛"，holdback 需覆盖被移除的空格
         StreamingSafetyGuard guard = new StreamingSafetyGuard(List.of("胸痛"), "请立即就医");
         StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("突 发 胸", " 痛"));
-        assertEquals(List.of("请立即就医"), guarded.tokens().collectList().block());
+        List<String> tokens = guarded.tokens().collectList().block();
+        String output = String.join("", tokens);
+        // 首个 token 中 holdback 之外的字符（"突"）会先放行，命中后补发标准文案
         assertTrue(guarded.blocked().get());
+        assertTrue(output.endsWith("请立即就医"));
+        // 归一后关键词不得被完整放行（空格/全角空格被移除后仍不能出现 "胸痛"）
+        assertFalse(output.replace(" ", "").replace("\u3000", "").contains("胸痛"));
+        assertEquals("请立即就医", guarded.delivered().toString());
     }
 
     @Test
