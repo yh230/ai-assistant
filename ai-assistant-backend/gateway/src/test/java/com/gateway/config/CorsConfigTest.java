@@ -5,6 +5,7 @@ import org.springframework.web.cors.CorsConfiguration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -35,5 +36,29 @@ class CorsConfigTest {
     void neverUsesAllowedOriginPatterns() {
         CorsConfiguration config = CorsConfig.buildConfig("https://admin.example.com");
         assertTrue(config.getAllowedOriginPatterns() == null || config.getAllowedOriginPatterns().isEmpty());
+    }
+
+    @Test
+    void rejectsWildcardOrigin() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> CorsConfig.buildConfig("*"));
+        assertTrue(ex.getMessage().contains("wildcard"));
+    }
+
+    @Test
+    void rejectsWildcardAmongExactOrigins() {
+        assertThrows(IllegalStateException.class,
+                () -> CorsConfig.buildConfig("https://admin.example.com,*"));
+    }
+
+    @Test
+    void rejectsBlankOrigins() {
+        assertThrows(IllegalStateException.class, () -> CorsConfig.buildConfig("   "));
+        assertThrows(IllegalStateException.class, () -> CorsConfig.buildConfig(" , , "));
+    }
+
+    @Test
+    void rejectsNullOrigins() {
+        assertThrows(IllegalStateException.class, () -> CorsConfig.buildConfig(null));
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.web.cors.reactive.CorsWebFilter;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * 跨域配置 - 仅放行白名单内的前端源
@@ -44,12 +45,25 @@ public class CorsConfig {
      * @return 跨域配置
      */
     static CorsConfiguration buildConfig(String allowedOrigins) {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowCredentials(true);
-        config.setAllowedOrigins(Arrays.stream(allowedOrigins.split(","))
+        if (allowedOrigins == null || !StringUtils.hasText(allowedOrigins)) {
+            throw new IllegalStateException(
+                    "security.cors.allowed-origins must not be null or blank");
+        }
+        List<String> origins = Arrays.stream(allowedOrigins.split(","))
                 .map(String::trim)
                 .filter(StringUtils::hasText)
-                .toList());
+                .toList();
+        if (origins.isEmpty()) {
+            throw new IllegalStateException(
+                    "security.cors.allowed-origins must contain at least one non-blank origin");
+        }
+        if (origins.contains("*")) {
+            throw new IllegalStateException(
+                    "security.cors.allowed-origins must not contain wildcard '*'");
+        }
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowCredentials(true);
+        config.setAllowedOrigins(origins);
         config.addAllowedHeader("*");
         config.addAllowedMethod("*");
         config.setMaxAge(3600L);
