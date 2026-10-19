@@ -14,18 +14,24 @@
           <el-radio-button value="STAFF">员工角色</el-radio-button>
           <el-radio-button value="PATIENT">患者角色</el-radio-button>
         </el-radio-group>
+        <el-select
+          v-if="needsHospitalPicker"
+          v-model="selectedHospitalId"
+          class="hospital-select"
+          placeholder="请选择医院"
+          :loading="hospitalsLoading"
+          filterable
+          @change="loadRoles"
+        >
+          <el-option
+            v-for="h in hospitalOptions"
+            :key="h.id"
+            :label="h.name"
+            :value="h.id"
+          />
+        </el-select>
         <span class="scope-hint">{{ scopeHint }}</span>
       </div>
-
-      <!-- TODO: 若后续希望只在未绑院时提示，需在 auth-service 的 UserInfoVO 中补充 hospitalId 字段 -->
-      <el-alert
-        v-if="scope === 'PATIENT'"
-        class="scope-alert"
-        type="info"
-        :closable="false"
-        show-icon
-        description="患者角色按医院隔离，已绑定医院的账号由服务端自动使用所属医院。"
-      />
 
       <el-table v-if="roles.length > 0" :data="roles" stripe>
         <el-table-column label="角色ID" width="120">
@@ -65,13 +71,16 @@
 
     <el-dialog v-model="showModal" :title="isEdit ? '编辑角色' : '新增角色'" width="560px">
       <el-form label-position="top">
-        <el-form-item label="角色ID" required>
+        <el-form-item v-if="scope === 'STAFF' || isEdit" label="角色ID" required>
           <el-input
             v-model="form.id"
             :disabled="isEdit"
             placeholder="如 chat_buddy（字母/数字/下划线，2~32位）"
           />
           <span class="form-hint" v-if="isEdit">编辑时不可修改</span>
+        </el-form-item>
+        <el-form-item v-else label="角色ID">
+          <span class="form-hint">患者角色ID由服务端生成（pat_医院_会话类型），无需填写</span>
         </el-form-item>
 
         <el-form-item label="名称" required>
@@ -129,6 +138,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { getAdminRoles, createRole, updateRole, deleteRole } from '../api/role'
+import { publicHospitals } from '../api/patient'
+import { useAuth } from '../store/auth'
 import { confirm as showConfirm, toast } from '../utils/message'
 
 // 会话类型显示名（与患者端口径一致）
@@ -139,12 +150,24 @@ const SESSION_TYPES = [
   { value: 'RAG', label: '知识库问答' }
 ]
 
+const { userInfo } = useAuth()
+
 // 角色域：STAFF-员工，PATIENT-患者
 const scope = ref('STAFF')
-// 患者模式下前端无法判断账号是否绑院，仅展示按院隔离的通用说明（见模板 TODO）
-const scopeHint = computed(() =>
-  scope.value === 'PATIENT' ? '患者角色按医院隔离，同一医院每种会话类型一份' : '员工角色全局共用，聊天时供员工选择'
-)
+// 登录人已绑定医院时由服务端强制使用本人医院，无需选择
+const boundHospitalId = computed(() => userInfo.value?.hospitalId)
+const needsHospitalPicker = computed(() => scope.value === 'PATIENT' && !boundHospitalId.value)
+
+const scopeHint = computed(() => {
+  if (scope.value !== 'PATIENT') return '员工角色全局共用，聊天时供员工选择'
+  return boundHospitalId.value
+    ? '患者角色按医院隔离，已自动使用您所属医院'
+    : '患者角色按医院隔离，请选择医院后维护该院角色'
+})
+
+const hospitalOptions = ref([])
+const hospitalsLoading = ref(false)
+const selectedHospitalId = ref(null)
 
 const roles = ref([])
 const showModal = ref(false)
@@ -168,12 +191,31 @@ function typeLabel(type) {
   return TYPE_LABELS[type] || type || '—'
 }
 
+// 未绑院账号需显式选择医院；未选择前不请求列表（服务端要求 hospitalId）
 async function loadRoles() {
+  const hospitalId = needsHospitalPicker.value ? selectedHospitalId.value : null
+  if (needsHospitalPicker.value && !hospitalId) {
+    roles.value = []
+    return
+  }
   try {
-    roles.value = await getAdminRoles(scope.value)
+    roles.value = await getAdminRoles(scope.value, hospitalId)
   } catch (e) {
     console.error('加载角色失败:', e)
     toast.error('加载角色失败：' + e.message)
+  }
+}
+
+async function loadHospitals() {
+  if (hospitalOptions.value.length > 0) return
+  hospitalsLoading.value = true
+  try {
+    hospitalOptions.value = (await publicHospitals()) || []
+  } catch (e) {
+    console.error('加载医院列表失败:', e)
+    toast.error('加载医院列表失败：' + e.message)
+  } finally {
+    hospitalsLoading.value = false
   }
 }
 
@@ -215,16 +257,19 @@ function closeModal() {
 }
 
 async function save() {
-  if (!form.value.id.trim()) return toast.warn('请填写角色ID')
-  if (!/^[A-Za-z0-9_]{2,32}$/.test(form.value.id.trim())) return toast.warn('角色ID仅允许字母、数字、下划线，长度2~32')
+  const patientCreate = scope.value === 'PATIENT' && !isEdit.value
+  if (!patientCreate) {
+    if (!form.value.id.trim()) return toast.warn('请填写角色ID')
+    if (!/^[A-Za-z0-9_]{2,32}$/.test(form.value.id.trim())) return toast.warn('角色ID仅允许字母、数字、下划线，长度2~32')
+  }
   if (!form.value.name.trim()) return toast.warn('请填写名称')
   if (!form.value.systemPrompt.trim()) return toast.warn('请填写系统提示词')
   if (scope.value === 'PATIENT' && !form.value.sessionType) return toast.warn('请选择会话类型')
+  if (patientCreate && needsHospitalPicker.value && !selectedHospitalId.value) return toast.warn('请先选择医院')
 
-  // 提交载荷：始终带 scope；sessionType 仅在新增患者角色时携带（后端更新不应用该字段，UI 亦置为只读），
-  // 医院 ID 由服务端按登录人解析
+  // 提交载荷：始终带 scope；新增患者角色时携带会话类型，未绑院账号还需携带所选医院；
+  // 患者角色 ID 由服务端派生，不提交客户端 ID
   const payload = {
-    id: form.value.id.trim(),
     name: form.value.name.trim(),
     avatar: form.value.avatar,
     description: form.value.description,
@@ -233,7 +278,11 @@ async function save() {
     enabled: form.value.enabled,
     scope: scope.value
   }
-  if (scope.value === 'PATIENT' && !isEdit.value) payload.sessionType = form.value.sessionType
+  if (!patientCreate) payload.id = form.value.id.trim()
+  if (patientCreate) {
+    payload.sessionType = form.value.sessionType
+    if (needsHospitalPicker.value) payload.hospitalId = selectedHospitalId.value
+  }
 
   saving.value = true
   try {
@@ -261,7 +310,10 @@ async function removeRole(role) {
   }
 }
 
-onMounted(loadRoles)
+onMounted(() => {
+  if (!boundHospitalId.value) loadHospitals()
+  loadRoles()
+})
 </script>
 
 <style scoped>
@@ -299,7 +351,7 @@ onMounted(loadRoles)
   color: var(--text-tertiary);
 }
 
-.scope-alert {
-  margin-bottom: 12px;
+.hospital-select {
+  width: 220px;
 }
 </style>

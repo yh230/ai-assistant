@@ -19,7 +19,9 @@ import java.time.LocalDateTime;
  */
 @Data
 @Entity
-@Table(name = "ai_role")
+@Table(name = "ai_role",
+        uniqueConstraints = @UniqueConstraint(name = "uk_ai_role_scope",
+                columnNames = {"scope", "hospital_id", "session_type"}))
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder

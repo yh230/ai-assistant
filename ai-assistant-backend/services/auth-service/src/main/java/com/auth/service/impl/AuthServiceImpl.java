@@ -254,6 +254,7 @@ public class AuthServiceImpl implements AuthService {
         }
         vo.setRoles(snapshot.getRoles());
         vo.setPermissions(snapshot.getPerms());
+        vo.setHospitalId(snapshot.getHospitalId());
         vo.setMenus(info != null ? info.getMenus() : null);
         return vo;
     }

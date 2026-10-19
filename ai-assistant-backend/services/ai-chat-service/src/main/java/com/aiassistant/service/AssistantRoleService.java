@@ -276,11 +276,14 @@ public class AssistantRoleService {
      * @param hospitalId 医院 ID（患者域必填）
      * @return 角色列表
      */
-    @Transactional(readOnly = true)
     public List<Role> listByScope(String scope, Long hospitalId) {
         if (SCOPE_PATIENT.equalsIgnoreCase(scope)) {
             if (hospitalId == null) {
                 throw new IllegalArgumentException("查询患者角色必须指定医院");
+            }
+            // 管理端列表幂等补齐三类默认人设，避免首次患者消息前列表为空
+            for (String type : List.of("CHAT", "TRIAGE", "RAG")) {
+                resolvePatientRole(hospitalId, type);
             }
             return roleRepository.findByScopeAndHospitalIdOrderBySortOrderAscIdAsc(SCOPE_PATIENT, hospitalId);
         }
@@ -288,7 +291,7 @@ public class AssistantRoleService {
     }
 
     /**
-     * 新增角色（患者角色强制写入医院与会话类型校验）
+     * 新增角色（患者角色强制写入医院与会话类型校验，ID 由服务端派生）
      *
      * @param form 角色表单
      * @param hospitalId 服务端确定的医院 ID（患者域必填）
@@ -297,6 +300,10 @@ public class AssistantRoleService {
     @Transactional
     public Role createForScope(RoleForm form, Long hospitalId) {
         boolean patient = SCOPE_PATIENT.equalsIgnoreCase(form.getScope());
+        if (!patient && hospitalId != null) {
+            // 全局员工角色仅平台管理员（未绑院）可维护
+            throw new IllegalArgumentException("员工角色仅平台管理员可维护");
+        }
         if (patient) {
             if (hospitalId == null) {
                 throw new IllegalArgumentException("新增患者角色必须指定医院");
@@ -305,13 +312,19 @@ public class AssistantRoleService {
                 throw new IllegalArgumentException("患者角色必须指定会话类型");
             }
             form.setHospitalId(hospitalId);
-            form.setSessionType(normalizeSessionType(form.getSessionType()));
+            String type = normalizeSessionType(form.getSessionType());
+            form.setSessionType(type);
+            if (roleRepository.findByScopeAndHospitalIdAndSessionType(SCOPE_PATIENT, hospitalId, type).isPresent()) {
+                throw new IllegalArgumentException("该医院该会话类型已存在角色");
+            }
+            // 忽略客户端传入的 ID，避免跨院命名空间污染
+            form.setId("pat_" + hospitalId + "_" + type);
         }
         return create(form);
     }
 
     /**
-     * 更新角色（患者角色不允许改医院）
+     * 更新角色（患者角色不允许改医院；员工角色仅平台管理员可维护）
      *
      * @param id 角色ID（路径参数）
      * @param form 角色表单
@@ -322,6 +335,9 @@ public class AssistantRoleService {
     public Role updateForScope(String id, RoleForm form, Long hospitalId) {
         Role existing = roleRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("角色不存在: " + id));
+        if (SCOPE_STAFF.equalsIgnoreCase(existing.getScope()) && hospitalId != null) {
+            throw new IllegalArgumentException("员工角色仅平台管理员可维护");
+        }
         if (SCOPE_PATIENT.equalsIgnoreCase(existing.getScope()) && hospitalId != null
                 && !hospitalId.equals(existing.getHospitalId())) {
             throw new IllegalArgumentException("无权修改其他医院的患者角色");
@@ -344,7 +360,7 @@ public class AssistantRoleService {
     }
 
     /**
-     * 删除角色，并对患者角色做跨院校验
+     * 删除角色，并对患者角色做跨院校验（员工角色仅平台管理员可维护）
      *
      * @param id 角色ID
      * @param operatorHospitalId 操作人绑定医院（未绑院为 null，此时不做限制）
@@ -353,6 +369,9 @@ public class AssistantRoleService {
     public void deleteForScope(String id, Long operatorHospitalId) {
         Role existing = roleRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("角色不存在: " + id));
+        if (SCOPE_STAFF.equalsIgnoreCase(existing.getScope()) && operatorHospitalId != null) {
+            throw new IllegalArgumentException("员工角色仅平台管理员可维护");
+        }
         assertPatientRoleAccessible(existing, operatorHospitalId);
         roleRepository.delete(existing);
         log.info("删除角色: {}", id);

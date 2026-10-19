@@ -104,11 +104,11 @@ AI 发起的预约挂号由挂号服务端做租户强校验：排班所属医�
 ## AI 角色库化（员工/患者双域）
 
 - 员工角色：`GET /api/roles/admin?scope=STAFF`（全局）。
-- 患者角色：`GET /api/roles/admin?scope=PATIENT&hospitalId=<id>`；已绑院账号强制使用本人医院。
+- 患者角色：`GET /api/roles/admin?scope=PATIENT&hospitalId=<id>`；已绑院账号强制使用本人医院；未绑院管理员（如平台管理员）必须显式传 `hospitalId`，管理端页面提供医院选择器。
 - 权限：`ai:role:manage`（system-service 启动时幂等播种）；缺失时普通员工返回 403。
-- 患者角色缺失时首次患者会话发消息时自动建库（`pat_<hospitalId>_<...>`），Nacos `ai.prompt.*` 仅作模板与兜底；管理端列表接口只读，不会触发建库。
+- 患者角色由管理端患者列表幂等补齐三类默认人设（`pat_<hospitalId>_<CHAT|TRIAGE|RAG>`），首次打开列表即可见；患者聊天时也会按需惰性建库。Nacos `ai.prompt.*` 仅作模板与兜底。
 
-> 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。患者域用例自足化：列表缺少 TRIAGE 时先经管理端接口补建，不依赖其他用例先行；提示词更新用例写回后会在 `finally` 中还原原提示词。
+> 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。患者域用例直接 GET 列表断言三类默认角色；提示词更新用例写回后会在 `finally` 中还原原提示词（仅在成功捕获原提示词时执行）。
 
 ## 不覆盖范围
 
