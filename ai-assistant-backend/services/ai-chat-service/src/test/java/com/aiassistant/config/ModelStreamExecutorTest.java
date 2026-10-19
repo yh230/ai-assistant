@@ -49,4 +49,37 @@ class ModelStreamExecutorTest {
                 .stream(List.of("a", "b"), model -> Flux.error(new RuntimeException(model + " down")))
                 .collectList().block());
     }
+
+    @Test
+    void failsWhenChainIsNullOrEmpty() {
+        ModelStreamExecutor executor = new ModelStreamExecutor();
+        assertThrows(IllegalStateException.class, () -> executor
+                .stream(null, model -> Flux.just("ok"))
+                .collectList().block());
+        assertThrows(IllegalStateException.class, () -> executor
+                .stream(List.of(), model -> Flux.just("ok"))
+                .collectList().block());
+    }
+
+    @Test
+    void emptyTokensDoNotCountAsEmitted() {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> out = new ModelStreamExecutor().stream(List.of("a", "b"), model -> {
+            if (calls.getAndIncrement() == 0) {
+                // 空串（工具调用等无文本片段）不算已输出，后续失败仍应切换下一模型
+                return Flux.concat(Flux.just("", ""), Flux.error(new RuntimeException("boom")));
+            }
+            return Flux.just("ok");
+        }).collectList().block();
+        assertEquals(List.of("ok"), out);
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void filtersEmptyTokensFromOutput() {
+        List<String> out = new ModelStreamExecutor().stream(List.of("a"),
+                        model -> Flux.just("", "hello", ""))
+                .collectList().block();
+        assertEquals(List.of("hello"), out);
+    }
 }

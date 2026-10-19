@@ -14,7 +14,8 @@ import java.util.function.Function;
  * <ul>
  *     <li><b>首 token 前可重试</b>：模型调用失败且尚未产生 token 时，自动尝试链中的下一个模型；</li>
  *     <li><b>部分输出后不切换</b>：已向客户端推送 token 后再切换模型会造成内容拼接错乱，故直接透传异常；</li>
- *     <li><b>全部失败</b>：模型链耗尽后以 {@link IllegalStateException} 结束，由上层降级本地引擎。</li>
+ *     <li><b>空 token 不算输出</b>：null/空串（工具调用等无文本片段）先过滤，不置位 emitted，也不向下游透传；</li>
+ *     <li><b>全部失败</b>：模型链耗尽后以 {@link ModelChainExhaustedException} 结束，由上层降级本地引擎。</li>
  * </ul>
  *
  * @author yh
@@ -32,7 +33,7 @@ public class ModelStreamExecutor {
      */
     public Flux<String> stream(List<String> modelIds, Function<String, Flux<String>> call) {
         if (modelIds == null || modelIds.isEmpty()) {
-            return Flux.error(new IllegalStateException("无可用模型"));
+            return Flux.error(new ModelChainExhaustedException());
         }
         return tryAt(modelIds, 0, call, new AtomicBoolean(false));
     }
@@ -49,12 +50,25 @@ public class ModelStreamExecutor {
     private Flux<String> tryAt(List<String> ids, int index, Function<String, Flux<String>> call,
                                AtomicBoolean emitted) {
         if (index >= ids.size()) {
-            return Flux.error(new IllegalStateException("无可用模型"));
+            return Flux.error(new ModelChainExhaustedException());
         }
         return Flux.defer(() -> call.apply(ids.get(index)))
+                .filter(token -> token != null && !token.isEmpty())
                 .doOnNext(token -> emitted.set(true))
                 .onErrorResume(e -> emitted.get()
                         ? Flux.error(e)
                         : tryAt(ids, index + 1, call, emitted));
+    }
+
+    /**
+     * 模型链耗尽异常（主模型及所有备用模型均在首 token 前失败，或链为空）。
+     * <p>
+     * 独立类型便于上层在终止路径上区分「链耗尽」与其他流异常，做准确的失败计数。
+     */
+    public static class ModelChainExhaustedException extends IllegalStateException {
+
+        public ModelChainExhaustedException() {
+            super("无可用模型");
+        }
     }
 }

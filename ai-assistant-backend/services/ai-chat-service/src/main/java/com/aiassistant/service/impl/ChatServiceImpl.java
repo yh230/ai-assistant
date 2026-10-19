@@ -50,9 +50,11 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -186,8 +188,9 @@ public class ChatServiceImpl implements ChatService {
         StringBuffer full = new StringBuffer();
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
+        AtomicBoolean truncated = new AtomicBoolean(false);
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
-                ? buildAiContentFlux(ctx, full, usedFallback)
+                ? buildAiContentFlux(ctx, full, usedFallback, truncated)
                 : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
 
         Mono<Void> persist = Mono.defer(() -> {
@@ -197,10 +200,16 @@ public class ChatServiceImpl implements ChatService {
             return messagePersister.persistAssistant(ctx.sessionId(), full.toString(), null);
         });
 
-        Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
-                ServerSentEvent.builder(toJson(Map.of("localFallback", usedFallback.get())))
-                        .event(ChatConstants.EVENT_DONE)
-                        .build());
+        Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() -> {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("localFallback", usedFallback.get());
+            if (truncated.get()) {
+                payload.put("truncated", true);
+            }
+            return ServerSentEvent.builder(toJson(payload))
+                    .event(ChatConstants.EVENT_DONE)
+                    .build();
+        });
 
         return Flux.concat(Mono.just(sessionEvent), contentFlux, persist.then(doneEvent))
                 .doOnCancel(() -> {
@@ -213,19 +222,26 @@ public class ChatServiceImpl implements ChatService {
     /**
      * 构建 AI 模型流式内容：多模型故障转移 + 场景参数 + 空闲/总超时 + 用量计量，
      * 逐 token 推送并累积，失败时降级本地引擎继续累积。
+     * <p>
+     * 总超时由 {@code take} 正常结束（无异常信号），按耗时判定截断并置位 {@code truncated}，
+     * 由 done 事件透出，同时计入失败与截断指标。
      *
      * @param ctx          聊天上下文
      * @param full         回复内容累积器（AI token 与降级 token 共用）
      * @param usedFallback 降级标记
+     * @param truncated    总超时截断标记（供 done 事件上报）
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuffer full,
-                                                            AtomicBoolean usedFallback) {
+                                                            AtomicBoolean usedFallback, AtomicBoolean truncated) {
         String scene = "chat";
         List<String> chain = chatModelRegistry.getFallbackChain(ctx.modelId());
+        String primaryModel = chain.isEmpty() ? ctx.modelId() : chain.get(0);
+        Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
+        long startNanos = System.nanoTime();
 
         Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
-            long startNanos = System.nanoTime();
+            long startNanosPerModel = System.nanoTime();
             AtomicBoolean firstToken = new AtomicBoolean(true);
             return Flux.defer(() -> {
                         meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
@@ -242,11 +258,10 @@ public class ChatServiceImpl implements ChatService {
                     .doOnNext(token -> {
                         if (firstToken.compareAndSet(true, false)) {
                             meterRegistry.timer("ai.model.latency", "model", candidate)
-                                    .record(Duration.ofNanos(System.nanoTime() - startNanos));
+                                    .record(Duration.ofNanos(System.nanoTime() - startNanosPerModel));
                         }
                     })
-                    .doOnError(ex -> meterRegistry.counter("ai.model.failures", "model", candidate,
-                            "reason", failureReason(ex)).increment());
+                    .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
         });
 
         return tokens
@@ -256,12 +271,39 @@ public class ChatServiceImpl implements ChatService {
                     return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
                 })
                 .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
-                .take(Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds()))
+                .take(overallTimeout)
+                .doOnComplete(() -> {
+                    if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
+                        truncated.set(true);
+                        recordFailure(primaryModel, scene, "OverallTimeout");
+                        meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
+                                .increment();
+                        log.warn("AI 生成达总超时（{} 秒）被截断: sessionId={}",
+                                aiProperties.getChat().getOverallTimeoutSeconds(), ctx.sessionId());
+                    }
+                })
                 .onErrorResume(ex -> {
+                    if (ex instanceof TimeoutException) {
+                        recordFailure(primaryModel, scene, "IdleTimeout");
+                    } else if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException) {
+                        recordFailure(primaryModel, scene, "ChainExhausted");
+                    }
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
                     return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full);
                 });
+    }
+
+    /**
+     * 记录失败计数（model + reason 维度）。
+     *
+     * @param modelId 模型ID
+     * @param scene   场景标识
+     * @param reason  失败原因标签
+     */
+    private void recordFailure(String modelId, String scene, String reason) {
+        meterRegistry.counter("ai.model.failures", "model", modelId, "scene", scene, "reason", reason)
+                .increment();
     }
 
     /**

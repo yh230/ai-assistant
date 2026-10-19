@@ -40,7 +40,11 @@ public class SceneOptionsFactory {
                 ? assistantProperties.getSceneTemperature().getOrDefault(key, DEFAULT_TEMPERATURE)
                 : DEFAULT_TEMPERATURE;
         Integer maxTokens = aiProperties.getChat() != null ? aiProperties.getChat().getMaxTokens() : null;
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().temperature(temperature);
+        // Spring AI 1.0.x 的 OpenAiChatOptions 支持 streamUsage：请求 OpenAI 兼容服务在流式响应末尾返回 usage，
+        // 否则 ai.model.tokens 指标永远无数据（多数兼容服务默认不返回流式用量）
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                .temperature(temperature)
+                .streamUsage(true);
         if (maxTokens != null) {
             builder.maxTokens(maxTokens);
         }

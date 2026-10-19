@@ -57,6 +57,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -258,19 +259,18 @@ public class PatientChatServiceImpl implements PatientChatService {
         String modelId = assistantProperties.resolveModelId(null);
         boolean aiEnabled = !chatModelRegistry.getFallbackChain(modelId).isEmpty();
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
+        AtomicBoolean truncated = new AtomicBoolean(false);
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuffer full = new StringBuffer();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
-                ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, true))
+                ? buildAiContentFlux(ctx, full, fallback, truncated, resolvePatientToolCallbacks(ctx, true))
                 : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
 
         Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
-                ServerSentEvent.builder(toJson(Map.of("localFallback", fallback.get())))
-                        .event(ChatConstants.EVENT_DONE)
-                        .build());
+                buildDoneEvent(fallback.get(), truncated.get()));
 
         // 引用来源：仅在模型作答、未降级、未被输出风控拦截且有命中时下发（降级/拦截时展示来源会误导）
         Mono<ServerSentEvent<String>> referencesEvent = Mono.defer(() ->
@@ -357,22 +357,36 @@ public class PatientChatServiceImpl implements PatientChatService {
      * 构建 AI 模型流式内容：按场景装配请求参数 + 多模型故障转移 + 空闲/总超时 + 用量计量 + 流尾免责追加。
      * <p>
      * 故障转移仅在首 token 前生效（部分输出后切换会导致内容拼接错乱）；空闲超时按异常结束，
-     * 总超时按正常结束（已输出内容保留并照常追加免责）。
+     * 总超时按正常结束（已输出内容保留并照常追加免责），并通过 {@code truncated} 标记透出给 done 事件。
+     * <p>
+     * <b>写工具安全裁定（Task 8 review P1-1）</b>：导诊会话装配写工具时只使用主模型，禁用备用模型。
+     * 写工具会产生待确认操作（pending action）；若模型在调用写工具后、输出任何文本前失败，
+     * 重试下一模型会把同一写操作再执行一次，造成重复待确认记录。取舍：牺牲部分可用性
+     * （主模型失败直接降级本地引擎），换取写操作恰好一次。
      *
-     * @param ctx      患者聊天上下文
-     * @param full     回复内容累积器（供输出侧风控兜底与持久化使用）
-     * @param fallback 降级标记（AI 流异常置为 true，供结束事件上报）
-     * @param tools    本次请求装配的工具回调列表
+     * @param ctx       患者聊天上下文
+     * @param full      回复内容累积器（供输出侧风控兜底与持久化使用）
+     * @param fallback  降级标记（AI 流异常置为 true，供结束事件上报）
+     * @param truncated 总超时截断标记（流在总超时点结束置为 true，供结束事件上报）
+     * @param tools     本次请求装配的工具回调列表
      * @return SSE 事件流
      */
     private Flux<ServerSentEvent<String>> buildAiContentFlux(PatientChatContext ctx, StringBuffer full,
-                                                             AtomicBoolean fallback, List<ToolCallback> tools) {
+                                                             AtomicBoolean fallback, AtomicBoolean truncated,
+                                                             List<ToolCallback> tools) {
         String modelId = assistantProperties.resolveModelId(null);
-        List<String> chain = chatModelRegistry.getFallbackChain(modelId);
+        List<String> candidateChain = chatModelRegistry.getFallbackChain(modelId);
         String scene = resolveScene(ctx);
+        // 写工具场景禁用故障转移（详见方法注释中的安全裁定）；无写工具的会话保持完整降级链
+        List<String> chain = hasWriteTools(tools) && !candidateChain.isEmpty()
+                ? List.of(candidateChain.get(0))
+                : candidateChain;
+        String primaryModel = chain.isEmpty() ? modelId : chain.get(0);
+        Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
+        long startNanos = System.nanoTime();
 
         Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
-            long startNanos = System.nanoTime();
+            long startNanosPerModel = System.nanoTime();
             AtomicBoolean firstToken = new AtomicBoolean(true);
             return Flux.defer(() -> {
                         meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
@@ -392,11 +406,10 @@ public class PatientChatServiceImpl implements PatientChatService {
                     .doOnNext(token -> {
                         if (firstToken.compareAndSet(true, false)) {
                             meterRegistry.timer("ai.model.latency", "model", candidate)
-                                    .record(Duration.ofNanos(System.nanoTime() - startNanos));
+                                    .record(Duration.ofNanos(System.nanoTime() - startNanosPerModel));
                         }
                     })
-                    .doOnError(ex -> meterRegistry.counter("ai.model.failures", "model", candidate,
-                            "reason", failureReason(ex)).increment());
+                    .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
         });
 
         Flux<ServerSentEvent<String>> content = tokens
@@ -406,13 +419,28 @@ public class PatientChatServiceImpl implements PatientChatService {
                     return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
                 })
                 .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
-                .take(Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds()))
+                .take(overallTimeout)
+                .doOnComplete(() -> {
+                    // take 到点属正常完成，没有异常信号；按耗时判定是否被总超时截断
+                    if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
+                        truncated.set(true);
+                        recordFailure(primaryModel, scene, "OverallTimeout");
+                        meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
+                                .increment();
+                        log.warn("患者侧 AI 生成达总超时（{} 秒）被截断: sessionId={}",
+                                aiProperties.getChat().getOverallTimeoutSeconds(), ctx.session().getSessionId());
+                    }
+                })
                 .onErrorResume(ex -> {
                     if (ex instanceof TimeoutException) {
                         // 生成超时（空闲超时）：按异常处理，固定文案由顶层转为 error 事件
+                        recordFailure(primaryModel, scene, "IdleTimeout");
                         log.warn("患者侧 AI 生成超时（{} 秒无新 token）: sessionId={}",
                                 aiProperties.getChat().getIdleTimeoutSeconds(), ctx.session().getSessionId());
                         return Flux.error(new BusinessException("生成超时，请稍后重试"));
+                    }
+                    if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException) {
+                        recordFailure(primaryModel, scene, "ChainExhausted");
                     }
                     log.warn("患者侧 AI 流式异常，降级本地引擎: {}", ex.getMessage());
                     fallback.set(true);
@@ -421,6 +449,47 @@ public class PatientChatServiceImpl implements PatientChatService {
 
         // 免责强制追加：token 流结束后补一个 token 事件（AI 与本地降级分支同款）
         return Flux.concat(content, disclaimerTokenFlux());
+    }
+
+    /**
+     * 判断工具回调中是否包含写工具（写操作会产生待确认记录，需禁用故障转移重试）。
+     *
+     * @param tools 工具回调列表
+     * @return 含写工具时返回 true
+     */
+    private boolean hasWriteTools(List<ToolCallback> tools) {
+        return tools.stream().anyMatch(callback ->
+                WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()));
+    }
+
+    /**
+     * 记录失败计数（model + reason 维度）。
+     *
+     * @param modelId 模型ID
+     * @param scene   场景标识
+     * @param reason  失败原因标签
+     */
+    private void recordFailure(String modelId, String scene, String reason) {
+        meterRegistry.counter("ai.model.failures", "model", modelId, "scene", scene, "reason", reason)
+                .increment();
+    }
+
+    /**
+     * 构建取消/检查点用的结束事件 JSON：固定带 localFallback，被总超时截断时追加 truncated。
+     *
+     * @param localFallback 是否走了本地降级
+     * @param truncated     是否被总超时截断
+     * @return 结束事件
+     */
+    private ServerSentEvent<String> buildDoneEvent(boolean localFallback, boolean truncated) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("localFallback", localFallback);
+        if (truncated) {
+            payload.put("truncated", true);
+        }
+        return ServerSentEvent.builder(toJson(payload))
+                .event(ChatConstants.EVENT_DONE)
+                .build();
     }
 
     /**
@@ -636,19 +705,18 @@ public class PatientChatServiceImpl implements PatientChatService {
         String modelId = assistantProperties.resolveModelId(null);
         boolean aiEnabled = !chatModelRegistry.getFallbackChain(modelId).isEmpty();
         AtomicBoolean fallback = new AtomicBoolean(!aiEnabled);
+        AtomicBoolean truncated = new AtomicBoolean(false);
         AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean blocked = new AtomicBoolean(false);
         StringBuffer full = new StringBuffer();
         Flux<ServerSentEvent<String>> contentFlux = aiEnabled
-                ? buildAiContentFlux(ctx, full, fallback, resolvePatientToolCallbacks(ctx, false))
+                ? buildAiContentFlux(ctx, full, fallback, truncated, resolvePatientToolCallbacks(ctx, false))
                 : Flux.concat(buildLocalChunkFlux(ctx, full), disclaimerTokenFlux());
 
         Mono<Void> persist = buildPersistMono(ctx, full, persisted, fallback, blocked);
 
         Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
-                ServerSentEvent.builder(toJson(Map.of("localFallback", fallback.get())))
-                        .event(ChatConstants.EVENT_DONE)
-                        .build());
+                buildDoneEvent(fallback.get(), truncated.get()));
 
         return Flux.concat(contentFlux,
                         outputSafetyGuard(full, blocked),
