@@ -9,6 +9,7 @@ import com.aiassistant.service.AdminChatService;
 import com.api.client.PatientClient;
 import com.api.dto.UserBriefDTO;
 import com.common.auth.UserSnapshot;
+import com.common.constant.RoleConstants;
 import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
@@ -50,10 +51,7 @@ public class AdminChatServiceImpl implements AdminChatService {
 
     @Override
     public PageResult<AdminSessionDTO> pageSessions(String sessionType, long pageNum, long pageSize) {
-        UserSnapshot user = SecurityUtils.currentSnapshot();
-        if (user == null) {
-            throw new BusinessException("未登录");
-        }
+        UserSnapshot user = currentStaff();
         Specification<ChatSession> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             predicates.add(cb.equal(root.get("identity"), SecurityConstants.IDENTITY_PATIENT));
@@ -87,6 +85,29 @@ public class AdminChatServiceImpl implements AdminChatService {
     }
 
     /**
+     * 取当前员工快照，未登录、非员工身份或未绑定医院的非平台管理员拒绝访问管理端
+     * <p>
+     * 仅平台管理员（admin 角色且未绑定医院）可查看全部医院数据；
+     * 院长/门诊管理员等未绑定医院时不得跨院查看。
+     *
+     * @return 当前员工用户快照
+     */
+    private UserSnapshot currentStaff() {
+        UserSnapshot user = SecurityUtils.currentSnapshot();
+        if (user == null) {
+            throw new BusinessException("未登录");
+        }
+        if (!SecurityConstants.IDENTITY_STAFF.equals(user.getIdentity())) {
+            throw new BusinessException("无权访问管理端接口");
+        }
+        if (user.getHospitalId() == null
+                && (user.getRoles() == null || !user.getRoles().contains(RoleConstants.ADMIN))) {
+            throw new BusinessException("当前账号未绑定医院");
+        }
+        return user;
+    }
+
+    /**
      * 批量回填患者姓名/手机号（患者中心不可用时不阻断列表）
      *
      * @param sessions 当前页会话列表
@@ -110,16 +131,15 @@ public class AdminChatServiceImpl implements AdminChatService {
 
     @Override
     public ChatResponse getSessionHistory(String sessionId) {
-        UserSnapshot user = SecurityUtils.currentSnapshot();
+        UserSnapshot user = currentStaff();
         ChatSession session = sessionRepository.findBySessionId(sessionId)
                 .orElseThrow(() -> new BusinessException("会话不存在"));
         if (!SecurityConstants.IDENTITY_PATIENT.equals(session.getIdentity())) {
             throw new BusinessException("无权查看该会话");
         }
         // 口径与列表一致：平台管理员（未绑定医院）放行；本院管理员仅可查看本院（hospitalId 非空且相等）会话
-        if (user == null
-                || (user.getHospitalId() != null
-                && (session.getHospitalId() == null || !session.getHospitalId().equals(user.getHospitalId())))) {
+        if (user.getHospitalId() != null
+                && (session.getHospitalId() == null || !session.getHospitalId().equals(user.getHospitalId()))) {
             throw new BusinessException("无权查看该会话");
         }
         List<ChatResponse.ChatMessageDTO> messageDTOs =

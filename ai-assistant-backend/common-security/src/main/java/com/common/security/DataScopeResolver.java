@@ -2,6 +2,7 @@ package com.common.security;
 
 import com.common.auth.UserSnapshot;
 import com.common.constant.RoleConstants;
+import com.common.exception.BusinessException;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -58,5 +59,18 @@ public class DataScopeResolver {
             return DataScope.hospital(hospitalId);
         }
         return DataScope.self(snapshot.getUserId());
+    }
+
+    /**
+     * 解析当前登录人数据范围，未登录直接拒绝（供 /api 员工业务入口使用）
+     *
+     * @return 数据权限范围
+     */
+    public DataScope resolveRequired() {
+        // 员工入口必须携带登录快照；内部/定时任务调用应使用 resolve()
+        if (SecurityUtils.currentSnapshot() == null) {
+            throw new BusinessException("未登录");
+        }
+        return resolve();
     }
 }

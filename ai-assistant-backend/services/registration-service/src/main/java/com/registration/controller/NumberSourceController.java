@@ -33,7 +33,7 @@ public class NumberSourceController {
                                                @RequestParam(required = false) String date,
                                                @RequestParam(required = false) Integer period) {
         LocalDate d = (date != null && !date.isBlank()) ? LocalDate.parse(date) : null;
-        return Result.success(numberSourceService.listPools(doctorUserId, departmentId, d, period));
+        return Result.success(numberSourceService.listPools(null, doctorUserId, departmentId, d, period));
     }
 
     @GetMapping("/detail")

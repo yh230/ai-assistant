@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * MyBatis-Plus 公共配置：开启分页插件
+ * MyBatis-Plus 公共配置：开启分页插件（单页上限 100，防止超大分页拖垮数据库）
  *
  * @author yh
  * @date 2026-10-12
@@ -20,7 +20,10 @@ public class MybatisPlusAutoConfiguration {
     @Bean
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
-        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));
+        PaginationInnerInterceptor pagination = new PaginationInnerInterceptor(DbType.MYSQL);
+        // 单页上限：无论调用方传入多大 pageSize，最多取 100 条
+        pagination.setMaxLimit(100L);
+        interceptor.addInnerInterceptor(pagination);
         return interceptor;
     }
 }

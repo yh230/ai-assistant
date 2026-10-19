@@ -28,6 +28,9 @@ public class AiProperties {
     /** RAG 检索与切片参数 */
     private Rag rag = new Rag();
 
+    /** 对话运行参数 */
+    private Chat chat = new Chat();
+
     @Data
     public static class Prompt {
         /** 普通闲聊人设 */
@@ -47,9 +50,10 @@ public class AiProperties {
         /** 命中后的标准提示文案 */
         private String blockedMessage = "该问题涉及诊疗建议，我仅能提供导诊参考，不能提供诊断或用药建议，请以执业医师面诊为准。";
 
-        /** 急症红线词表（命中即短路返回紧急就医指引） */
+        /** 急症红线词表（命中即短路返回紧急就医指引；口语化变体与书面词并存） */
         private List<String> emergencyKeywords = new ArrayList<>(List.of(
-                "胸痛", "呼吸困难", "喘不上气", "意识不清", "昏迷", "抽搐", "偏瘫", "口齿不清",
+                "胸痛", "胸口疼", "心梗", "呼吸困难", "喘不上气", "喘不过气", "窒息",
+                "意识不清", "昏迷", "抽搐", "偏瘫", "口齿不清",
                 "大出血", "咯血", "呕血", "剧烈头痛", "农药中毒", "服毒", "自杀", "割腕",
                 "车祸", "高处坠落"));
 
@@ -71,5 +75,55 @@ public class AiProperties {
         private String vectorPath = "data/vector";
         /** 本地嵌入模型文件路径（空=使用框架默认并自动下载） */
         private String embeddingModelPath = "";
+        /** 向量存储实现：simple | elasticsearch */
+        private String store = "simple";
+        /** 切片重叠比例（0~0.5） */
+        private double chunkOverlap = 0.15;
+        /** 嵌入维度（与索引 mapping 一致） */
+        private int embeddingDimensions = 384;
+        /** groundedness 覆盖率阈值 */
+        private double groundednessThreshold = 0.35;
+        /** ES 配置 */
+        private Elasticsearch elasticsearch = new Elasticsearch();
+    }
+
+    /**
+     * Elasticsearch 连接与索引配置。
+     *
+     * @author yh
+     * @date 2026-10-19
+     */
+    @Data
+    public static class Elasticsearch {
+        /** ES 服务地址 */
+        private String uri = "http://localhost:9200";
+        /** 知识片段索引名 */
+        private String indexName = "ai_knowledge_chunk_v1";
+        /** 分词器名称 */
+        private String analyzer = "cjk_ngram";
+    }
+
+    /**
+     * 对话运行参数（流式超时、token 预算、工具调用上限）。
+     *
+     * @author yh
+     * @date 2026-10-19
+     */
+    @Data
+    public static class Chat {
+        /** token 间隔超时（秒） */
+        private int idleTimeoutSeconds = 60;
+        /** 单次回答总超时（秒） */
+        private int overallTimeoutSeconds = 180;
+        /** 会话上下文 token 预算 */
+        private int contextTokenBudget = 3000;
+        /** 单条用户消息最大字符数 */
+        private int maxInputChars = 4000;
+        /** 单次请求工具调用轮数上限 */
+        private int toolMaxIterations = 5;
+        /** 单工具执行超时（秒） */
+        private int toolTimeoutSeconds = 5;
+        /** 单次回答最大输出 token */
+        private int maxTokens = 1024;
     }
 }

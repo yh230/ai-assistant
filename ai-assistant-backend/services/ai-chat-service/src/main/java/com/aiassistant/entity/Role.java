@@ -19,7 +19,9 @@ import java.time.LocalDateTime;
  */
 @Data
 @Entity
-@Table(name = "ai_role")
+@Table(name = "ai_role",
+        uniqueConstraints = @UniqueConstraint(name = "uk_ai_role_scope",
+                columnNames = {"scope", "hospital_id", "session_type"}))
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -54,18 +56,40 @@ public class Role {
     @Column(nullable = false, columnDefinition = "tinyint(1) default 1")
     private Boolean enabled;
 
+    /** 角色域：STAFF-员工，PATIENT-患者 */
+    @Builder.Default
+    @Column(nullable = false, length = 10, columnDefinition = "varchar(10) default 'STAFF'")
+    private String scope = "STAFF";
+
+    /** 患者会话类型：CHAT/TRIAGE/RAG（员工角色为空） */
+    @Column(name = "session_type", length = 10)
+    private String sessionType;
+
+    /** 所属医院 ID（患者角色必填；员工角色为空表示全局） */
+    @Column(name = "hospital_id")
+    private Long hospitalId;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * 持久化前生命周期回调：补齐创建/更新时间与默认值
+     * <p>
+     * 无参构造、Builder 与全参构造三条路径都经过本回调，
+     * 因此在此兜底 {@code enabled} 与 {@code scope}，避免向非空列写入 null
+     */
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
         if (this.enabled == null) {
             this.enabled = Boolean.TRUE;
+        }
+        if (this.scope == null || this.scope.isBlank()) {
+            this.scope = "STAFF";
         }
     }
 

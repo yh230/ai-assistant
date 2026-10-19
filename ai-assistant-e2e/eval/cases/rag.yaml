@@ -1,0 +1,9 @@
+- id: rag-01
+  doc_name: "__eval__门诊须知.md"
+  doc_content: |
+    # 门诊须知
+    本院普通门诊挂号费为 10 元。急诊科 24 小时开放。
+    门诊时间为工作日上午 8 点至下午 5 点。
+  question: "本院门诊挂号费是多少？"
+  expect_source: "__eval__门诊须知.md"
+  key_facts: ["10"]

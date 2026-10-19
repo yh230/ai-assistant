@@ -22,6 +22,9 @@ public class KnowledgeDocument {
     /** 状态：就绪 */
     public static final int STATUS_READY = 1;
 
+    /** 状态：处理失败（重试耗尽转入死信） */
+    public static final int STATUS_FAILED = 2;
+
     /** 主键 ID */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -46,11 +49,15 @@ public class KnowledgeDocument {
     @Column(name = "chunk_count")
     private Integer chunkCount;
 
-    /** 处理状态：0-处理中（待切片向量化），1-就绪 */
+    /** 处理状态：0-处理中（待切片向量化），1-就绪，2-处理失败 */
     @Column(nullable = false)
     private Integer status = STATUS_PENDING;
 
-    /** 文档全文（删除重建向量用） */
+    /** 处理失败原因（供管理端提示用户） */
+    @Column(name = "error_msg", length = 500)
+    private String errorMsg;
+
+    /** 文档全文（供异步切片与失败重试使用） */
     @Lob
     @Column(columnDefinition = "LONGTEXT")
     private String content;

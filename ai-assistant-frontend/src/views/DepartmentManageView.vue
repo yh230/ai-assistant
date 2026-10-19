@@ -143,7 +143,8 @@ async function ensureOptions() {
     hospitalOptions.value = await listHospitals()
   } catch (e) { hospitalOptions.value = [] }
   try {
-    const res = await pageEmployees({ pageNum: 1, pageSize: 1000 })
+    // 全局分页上限 100
+    const res = await pageEmployees({ pageNum: 1, pageSize: 100 })
     employeeOptions.value = res.list || []
   } catch (e) { employeeOptions.value = [] }
 }

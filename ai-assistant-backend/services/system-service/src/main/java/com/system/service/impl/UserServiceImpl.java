@@ -10,12 +10,14 @@ import com.api.dto.UserBriefDTO;
 import com.api.dto.UserCreateRequest;
 import com.api.dto.UserPageRequest;
 import com.api.dto.UserUpdateRequest;
+import com.common.auth.UserSnapshot;
 import com.common.constant.RoleConstants;
 import com.common.constant.SecurityConstants;
 import com.common.constant.StatusConstants;
 import com.common.exception.BusinessException;
 import com.common.jwt.TokenRevocationService;
 import com.common.result.PageResult;
+import com.common.security.RoleGrantPolicy;
 import com.common.security.SecurityUtils;
 import com.common.support.StatusValidator;
 import com.system.entity.SysRole;
@@ -27,6 +29,8 @@ import com.system.mapper.SysUserRoleMapper;
 import com.system.service.MenuService;
 import com.system.service.UserService;
 import com.system.support.PasswordSupport;
+import com.system.support.UserRoleBatchLoader;
+import com.system.support.UserRoleBatchLoader.RoleView;
 import com.system.support.UserRoleBinder;
 import com.system.vo.UserVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -39,9 +43,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -61,6 +67,7 @@ public class UserServiceImpl implements UserService {
     private final SysUserMapper userMapper;
     private final SysUserRoleMapper userRoleMapper;
     private final SysRoleMapper roleMapper;
+    private final UserRoleBatchLoader roleBatchLoader;
     private final SysMenuMapper menuMapper;
     private final MenuService menuService;
     private final PasswordEncoder passwordEncoder;
@@ -86,7 +93,11 @@ public class UserServiceImpl implements UserService {
         }
         qw.orderByDesc(SysUser::getId);
         userMapper.selectPage(page, qw);
-        List<UserVO> list = page.getRecords().stream().map(this::toVO).toList();
+        // 角色一次性批量加载，避免逐行查询角色造成的 N+1
+        Map<Long, RoleView> roleViews = roleBatchLoader.load(
+                page.getRecords().stream().map(SysUser::getId).toList());
+        List<UserVO> list = page.getRecords().stream()
+                .map(user -> toVO(user, roleViews.get(user.getId()))).toList();
         return PageResult.of(page, list);
     }
 
@@ -194,7 +205,11 @@ public class UserServiceImpl implements UserService {
         }
         qw.orderByDesc(SysUser::getId);
         userMapper.selectPage(page, qw);
-        List<UserBriefDTO> list = page.getRecords().stream().map(this::toBrief).toList();
+        // 角色一次性批量加载，避免逐行查询角色造成的 N+1
+        Map<Long, RoleView> roleViews = roleBatchLoader.load(
+                page.getRecords().stream().map(SysUser::getId).toList());
+        List<UserBriefDTO> list = page.getRecords().stream()
+                .map(user -> toBrief(user, roleViews.get(user.getId()))).toList();
         return PageResult.of(page, list);
     }
 
@@ -224,6 +239,8 @@ public class UserServiceImpl implements UserService {
                 new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, dto.getUsername())) > 0) {
             throw new BusinessException("账号已存在");
         }
+        // 角色授予兜底校验：仅对转发身份的调用生效，内部无身份调用视为可信
+        assertRoleGrantable(dto.getRoleIds());
         SysUser user = new SysUser();
         user.setUsername(dto.getUsername());
         user.setPassword(PasswordSupport.encodeOrDefault(dto.getPassword(), passwordEncoder));
@@ -252,6 +269,27 @@ public class UserServiceImpl implements UserService {
         SysUser user = userMapper.selectById(id);
         if (user == null) {
             throw new BusinessException("员工不存在");
+        }
+        // 管理员目标保护（兜底）：非 admin 不得改动管理员账号，与是否携带角色无关
+        assertAdminTargetOperable(id, "无权修改管理员账号");
+        // 自提权拦截（兜底），内部无身份调用视为可信
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        List<Long> currentRoleIds = dto.getRoleIds() == null
+                ? List.of() : nullSafe(userRoleMapper.selectRoleIdsByUserId(id));
+        boolean selfUnchanged = operator != null && id.equals(operator.getUserId())
+                && dto.getRoleIds() != null && asSet(dto.getRoleIds()).equals(asSet(currentRoleIds));
+        if (operator != null && dto.getRoleIds() != null) {
+            List<String> operatorRoles = operator.getRoles() == null ? List.of() : operator.getRoles();
+            if (!operatorRoles.contains(RoleConstants.ADMIN)) {
+                // 自提权拦截：非 admin 仅可提交与现状一致的角色集合，实际变更一律拒绝
+                if (id.equals(operator.getUserId()) && !selfUnchanged) {
+                    throw new BusinessException("不能修改自己的角色");
+                }
+            }
+        }
+        // 角色授予兜底校验（本人提交未变更角色集合视为回显，跳过白名单）
+        if (!selfUnchanged) {
+            assertRoleGrantable(dto.getRoleIds());
         }
         user.setName(dto.getName());
         user.setPhone(dto.getPhone());
@@ -288,6 +326,8 @@ public class UserServiceImpl implements UserService {
         if (id.equals(getCurrentUserId())) {
             throw new BusinessException("不能删除当前登录账号");
         }
+        // 管理员目标保护：非 admin 不得删除管理员账号
+        assertAdminTargetOperable(id, "无权操作管理员账号");
         userMapper.deleteById(id);
         userRoleMapper.deleteByUserId(id);
         evictAuth(id);
@@ -310,6 +350,8 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
+        // 管理员目标保护：非 admin 不得禁用/启用管理员账号
+        assertAdminTargetOperable(id, "无权操作管理员账号");
         user.setStatus(status);
         user.setUpdateTime(LocalDateTime.now());
         userMapper.updateById(user);
@@ -332,6 +374,8 @@ public class UserServiceImpl implements UserService {
         if (user == null) {
             throw new BusinessException("员工不存在");
         }
+        // 管理员目标保护：非 admin 不得重置管理员密码
+        assertAdminTargetOperable(id, "无权操作管理员账号");
         PasswordSupport.resetPassword(user, dto.getNewPassword(), passwordEncoder);
         userMapper.updateById(user);
         // 改密后踢下线：旧 access 与 refresh 均失效，需重新登录
@@ -399,7 +443,24 @@ public class UserServiceImpl implements UserService {
         kickout(id);
     }
 
+    /**
+     * 单行组装 UserVO（详情/非分页场景保留按用户单查角色）
+     *
+     * @param user 用户实体
+     * @return 用户视图
+     */
     private UserVO toVO(SysUser user) {
+        return toVO(user, loadRoleView(user.getId()));
+    }
+
+    /**
+     * 组装 UserVO（角色由调用方批量预加载，避免 N+1）
+     *
+     * @param user 用户实体
+     * @param roleView 已预加载的角色视图（可空，表示无角色）
+     * @return 用户视图
+     */
+    private UserVO toVO(SysUser user, RoleView roleView) {
         UserVO vo = new UserVO();
         vo.setId(user.getId());
         vo.setUsername(user.getUsername());
@@ -408,16 +469,32 @@ public class UserServiceImpl implements UserService {
         vo.setEmail(user.getEmail());
         vo.setStatus(user.getStatus());
         vo.setCreateTime(user.getCreateTime());
-        List<Long> roleIds = userRoleMapper.selectRoleIdsByUserId(user.getId());
+        List<Long> roleIds = roleView == null ? List.of() : nullSafe(roleView.roleIds());
         vo.setRoleIds(roleIds);
         if (!roleIds.isEmpty()) {
-            List<SysRole> roles = roleMapper.selectByUserId(user.getId());
-            vo.setRoleNames(roles.stream().map(SysRole::getRoleName).collect(Collectors.joining(",")));
+            vo.setRoleNames(roleView.roleNames());
         }
         return vo;
     }
 
+    /**
+     * 单行组装 UserBriefDTO（详情/非分页场景保留按用户单查角色）
+     *
+     * @param user 用户实体
+     * @return 用户简要信息
+     */
     private UserBriefDTO toBrief(SysUser user) {
+        return toBrief(user, loadRoleView(user.getId()));
+    }
+
+    /**
+     * 组装 UserBriefDTO（角色由调用方批量预加载，避免 N+1）
+     *
+     * @param user 用户实体
+     * @param roleView 已预加载的角色视图（可空，表示无角色）
+     * @return 用户简要信息
+     */
+    private UserBriefDTO toBrief(SysUser user, RoleView roleView) {
         UserBriefDTO dto = new UserBriefDTO();
         dto.setId(user.getId());
         dto.setUsername(user.getUsername());
@@ -427,13 +504,25 @@ public class UserServiceImpl implements UserService {
         dto.setStatus(user.getStatus());
         dto.setHospitalId(user.getHospitalId());
         dto.setDepartmentId(user.getDepartmentId());
-        List<Long> roleIds = userRoleMapper.selectRoleIdsByUserId(user.getId());
+        List<Long> roleIds = roleView == null ? List.of() : nullSafe(roleView.roleIds());
         dto.setRoleIds(roleIds);
         if (!roleIds.isEmpty()) {
-            List<SysRole> roles = roleMapper.selectByUserId(user.getId());
-            dto.setRoleNames(roles.stream().map(SysRole::getRoleName).collect(Collectors.joining(",")));
+            dto.setRoleNames(roleView.roleNames());
         }
         return dto;
+    }
+
+    /**
+     * 按用户单查角色视图（保持原有详情语义：角色名称逗号分隔）
+     *
+     * @param userId 用户 ID
+     * @return 角色视图
+     */
+    private RoleView loadRoleView(Long userId) {
+        List<Long> roleIds = nullSafe(userRoleMapper.selectRoleIdsByUserId(userId));
+        String roleNames = roleIds.isEmpty() ? "" : nullSafe(roleMapper.selectByUserId(userId)).stream()
+                .map(SysRole::getRoleName).collect(Collectors.joining(","));
+        return new RoleView(roleIds, roleNames);
     }
 
     /**
@@ -460,6 +549,90 @@ public class UserServiceImpl implements UserService {
         } catch (Exception e) {
             log.warn("强制用户下线失败: userId={}, {}", userId, e.getMessage());
         }
+    }
+
+    /**
+     * 管理员目标保护：非 admin 操作管理员账号一律拒绝
+     * <p>
+     * 目标当前角色无条件读取（不依赖入参是否携带 roleIds），防止医院端借改密、禁用、
+     * 删除等不传角色的入口接管管理员账号；无登录快照的内部调用视为受信链路。
+     *
+     * @param id 目标用户 ID
+     * @param failMessage 越权提示文案
+     */
+    private void assertAdminTargetOperable(Long id, String failMessage) {
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        if (operator == null) {
+            return;
+        }
+        List<String> operatorRoles = operator.getRoles() == null ? List.of() : operator.getRoles();
+        if (operatorRoles.contains(RoleConstants.ADMIN)) {
+            return;
+        }
+        if (roleCodes(nullSafe(userRoleMapper.selectRoleIdsByUserId(id))).contains(RoleConstants.ADMIN)) {
+            throw new BusinessException(failMessage);
+        }
+    }
+
+    /**
+     * 角色授予兜底校验：转发身份存在时按白名单校验目标角色，未转发身份的内部调用视为可信
+     * <p>
+     * 未知角色 ID 直接拒绝（与医院侧一致），避免静默忽略造成两处语义不一致。
+     *
+     * @param roleIds 目标角色 ID 列表（空表示不调整角色）
+     */
+    private void assertRoleGrantable(List<Long> roleIds) {
+        UserSnapshot operator = SecurityUtils.currentSnapshot();
+        if (operator == null || roleIds == null || roleIds.isEmpty()) {
+            return;
+        }
+        if (roleIds.stream().anyMatch(Objects::isNull)) {
+            throw new BusinessException("角色不存在");
+        }
+        List<Long> distinctIds = roleIds.stream().distinct().toList();
+        List<SysRole> roles = nullSafe(roleMapper.selectBatchIds(distinctIds));
+        if (roles.size() != distinctIds.size()) {
+            Set<Long> foundIds = roles.stream().map(SysRole::getId).collect(Collectors.toSet());
+            List<Long> missing = distinctIds.stream().filter(roleId -> !foundIds.contains(roleId)).toList();
+            throw new BusinessException("角色不存在：" + missing);
+        }
+        List<String> targetCodes = roles.stream().map(SysRole::getRoleCode).toList();
+        RoleGrantPolicy.assertGrantable(operator.getRoles(), targetCodes);
+    }
+
+    /**
+     * 按角色 ID 查询角色编码（已删除/不存在的 ID 忽略，用于读取现状）
+     *
+     * @param roleIds 角色 ID 列表
+     * @return 角色编码列表（无匹配返回空列表）
+     */
+    private List<String> roleCodes(List<Long> roleIds) {
+        if (roleIds.isEmpty()) {
+            return List.of();
+        }
+        return nullSafe(roleMapper.selectBatchIds(roleIds)).stream()
+                .map(SysRole::getRoleCode).toList();
+    }
+
+    /**
+     * 角色 ID 集合化（用于按集合比较角色是否有实际变化）
+     *
+     * @param roleIds 角色 ID 列表（可空）
+     * @return 角色 ID 集合
+     */
+    private static Set<Long> asSet(List<Long> roleIds) {
+        return roleIds == null ? Set.of() : new HashSet<>(roleIds);
+    }
+
+    /**
+     * 空集合兜底
+     *
+     * @param list 列表（可空）
+     * @param <T> 元素类型
+     * @return 非空列表
+     */
+    private static <T> List<T> nullSafe(List<T> list) {
+        return list == null ? List.of() : list;
     }
 
     /**

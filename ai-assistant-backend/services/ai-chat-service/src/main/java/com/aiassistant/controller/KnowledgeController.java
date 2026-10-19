@@ -6,6 +6,7 @@ import com.common.result.PageResult;
 import com.common.result.Result;
 import com.common.security.operlog.OperLog;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -28,6 +29,7 @@ public class KnowledgeController {
      * @param file 上传文件
      * @return 新文档 ID
      */
+    @PreAuthorize("hasAuthority('ai:knowledge:manage')")
     @OperLog(module = "知识库", action = "上传文档")
     @PostMapping("/upload")
     public Result<Long> upload(@RequestParam("file") MultipartFile file) {
@@ -41,6 +43,7 @@ public class KnowledgeController {
      * @param pageSize 每页大小
      * @return 文档分页数据
      */
+    @PreAuthorize("hasAuthority('ai:knowledge:manage')")
     @GetMapping
     public Result<PageResult<KnowledgeDocumentDTO>> page(@RequestParam(defaultValue = "1") long pageNum,
                                                          @RequestParam(defaultValue = "10") long pageSize) {
@@ -53,6 +56,7 @@ public class KnowledgeController {
      * @param id 文档 ID
      * @return 空结果
      */
+    @PreAuthorize("hasAuthority('ai:knowledge:manage')")
     @OperLog(module = "知识库", action = "删除文档")
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {

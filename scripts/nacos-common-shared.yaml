@@ -6,6 +6,10 @@ security:
     expiration-seconds: 3600
   internal:
     token: aidaima-internal-token-please-override
+  # ===== 网关 CORS 白名单（仅网关消费；逗号分隔）=====
+  cors:
+    # 开发默认仅允许本地前端；生产环境必须在 Nacos 覆盖为真实域名，localhost/127.0.0.1 会被启动守卫拒绝
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173
   qr:
     # 扫码场景有效期（秒）
     ttl-seconds: 120

@@ -29,6 +29,9 @@ public class UserInfoVO {
     /** 账号状态：1-启用，0-禁用 */
     private Integer status;
 
+    /** 所属医院ID（未绑定为 null） */
+    private Long hospitalId;
+
     /** 角色编码集合（如 ["admin"]） */
     private List<String> roles;
 

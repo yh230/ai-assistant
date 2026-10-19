@@ -1,5 +1,6 @@
 package com.aiassistant.config;
 
+import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -8,6 +9,7 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -36,10 +38,12 @@ public class ChatModelRegistry {
     private static final String DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
     private final AssistantProperties assistantProperties;
+    private final ObservationRegistry observationRegistry;
     private final Map<String, ChatModel> modelCache = new ConcurrentHashMap<>();
 
-    public ChatModelRegistry(AssistantProperties assistantProperties) {
+    public ChatModelRegistry(AssistantProperties assistantProperties, ObservationRegistry observationRegistry) {
         this.assistantProperties = assistantProperties;
+        this.observationRegistry = observationRegistry;
         initModels();
     }
 
@@ -90,6 +94,7 @@ public class ChatModelRegistry {
                 return OpenAiChatModel.builder()
                         .openAiApi(api)
                         .defaultOptions(options)
+                        .observationRegistry(observationRegistry)
                         .build();
             case OLLAMA:
                 log.warn("Ollama 模型类型暂未实现，模型[{}]已跳过", props.getBaseUrl());
@@ -137,6 +142,27 @@ public class ChatModelRegistry {
      */
     public Set<String> getActiveModelIds() {
         return new LinkedHashSet<>(modelCache.keySet());
+    }
+
+    /**
+     * 构建故障转移模型链：主模型优先（仅当可用），随后按配置顺序追加可用备用模型，自动去重。
+     *
+     * @param primary 主模型ID
+     * @return 有序模型链（可能为空，表示无可用模型）
+     */
+    public List<String> getFallbackChain(String primary) {
+        LinkedHashSet<String> chain = new LinkedHashSet<>();
+        if (isActive(primary)) {
+            chain.add(primary);
+        }
+        if (assistantProperties.getFallbackModelIds() != null) {
+            assistantProperties.getFallbackModelIds().forEach(id -> {
+                if (isActive(id)) {
+                    chain.add(id);
+                }
+            });
+        }
+        return List.copyOf(chain);
     }
 
     /**

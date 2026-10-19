@@ -37,7 +37,7 @@ public interface ChatService {
     Flux<ServerSentEvent<String>> chatStream(ChatRequest request);
 
     /**
-     * 获取可选角色列表（来自配置 ai.assistant.roles）。
+     * 获取可选员工角色（来自数据库 ai_role）。
      *
      * @return 角色视图列表
      */

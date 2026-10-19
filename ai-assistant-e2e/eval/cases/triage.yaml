@@ -1,0 +1,6 @@
+- id: triage-01
+  message: "头痛三天，想挂神经内科"
+  expect_departments: ["神经内科"]
+- id: triage-02
+  message: "最近总是胃疼，该看哪个科"
+  expect_departments: ["消化内科", "普外科"]

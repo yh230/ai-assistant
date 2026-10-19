@@ -10,8 +10,8 @@ import java.util.List;
  */
 public interface NumberSourceService {
 
-    /** 按医生/日期/时段查询号源池列表（含余量） */
-    List<NumberSourceVO> listPools(Long doctorUserId, Long departmentId, LocalDate date, Integer period);
+    /** 按医生/日期/时段查询号源池列表（含余量；hospitalId 非空时按院约束） */
+    List<NumberSourceVO> listPools(Long hospitalId, Long doctorUserId, Long departmentId, LocalDate date, Integer period);
 
     /** 单个排班的号源池明细 */
     NumberSourceVO detail(Long scheduleId);

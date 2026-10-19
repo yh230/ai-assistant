@@ -5,15 +5,19 @@ import api from './index'
  */
 
 /**
- * 获取全部角色（含禁用），供管理页面表格展示
+ * 获取角色列表（按角色域；患者域需带医院 ID，已绑院账号由服务端自动使用所属医院）
+ * @param {String} scope 角色域 STAFF/PATIENT
+ * @param {Number|null} hospitalId 医院 ID（仅未绑院的平台管理员需要显式传入）
  */
-export function getAdminRoles() {
-  return api.get('/roles/admin')
+export function getAdminRoles(scope = 'STAFF', hospitalId = null) {
+  const params = { scope }
+  if (hospitalId) params.hospitalId = hospitalId
+  return api.get('/roles/admin', { params })
 }
 
 /**
  * 新增角色
- * @param {Object} data 角色表单 { id, name, avatar, description, systemPrompt, sortOrder, enabled }
+ * @param {Object} data 角色表单 { id, name, avatar, description, systemPrompt, sortOrder, enabled, scope, sessionType }
  */
 export function createRole(data) {
   return api.post('/roles/admin', data)

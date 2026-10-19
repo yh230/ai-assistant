@@ -2,6 +2,8 @@ package com.aiassistant.dto;
 
 import lombok.Data;
 
+import jakarta.validation.constraints.Size;
+
 /**
  * 患者聊天请求
  *
@@ -15,6 +17,7 @@ public class PatientChatRequest {
     private String sessionId;
 
     /** 用户消息内容 */
+    @Size(max = 4000, message = "消息长度不能超过4000字")
     private String message;
 
     /** 会话类型：CHAT=闲聊 / TRIAGE=导诊 / RAG=知识库（新建会话时生效，缺省 CHAT） */

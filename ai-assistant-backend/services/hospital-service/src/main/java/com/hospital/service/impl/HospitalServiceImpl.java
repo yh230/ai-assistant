@@ -86,21 +86,23 @@ public class HospitalServiceImpl implements HospitalService {
 
     @Override
     public HospitalVO get(Long id) {
-        Hospital h = hospitalMapper.selectById(id);
-        if (h == null) {
-            throw new BusinessException("医院不存在");
-        }
+        Hospital h = requireHospital(id);
+        dataScopeResolver.resolveRequired().assertCanAccess(h.getId(), null, null, "无权查看该医院");
         return toVO(h);
     }
 
     /**
-     * 新增医院（状态为空默认启用）
+     * 新增医院（状态为空默认启用）；仅超级管理员可创建医院
      *
      * @param dto 医院保存入参
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void create(HospitalSaveDTO dto) {
+        // 医院为系统级数据，创建入口仅 admin（ALL）可用
+        if (!dataScopeResolver.resolveRequired().isAll()) {
+            throw new BusinessException("无权新增医院");
+        }
         Hospital h = new Hospital();
         h.setName(dto.getName());
         h.setAddress(dto.getAddress());
@@ -114,10 +116,8 @@ public class HospitalServiceImpl implements HospitalService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void update(Long id, HospitalSaveDTO dto) {
-        Hospital h = hospitalMapper.selectById(id);
-        if (h == null) {
-            throw new BusinessException("医院不存在");
-        }
+        Hospital h = requireHospital(id);
+        dataScopeResolver.resolveRequired().assertCanAccess(h.getId(), null, null, "无权操作该医院");
         h.setName(dto.getName());
         h.setAddress(dto.getAddress());
         h.setPhone(dto.getPhone());
@@ -129,10 +129,8 @@ public class HospitalServiceImpl implements HospitalService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
-        Hospital h = hospitalMapper.selectById(id);
-        if (h == null) {
-            throw new BusinessException("医院不存在");
-        }
+        Hospital h = requireHospital(id);
+        dataScopeResolver.resolveRequired().assertCanAccess(h.getId(), null, null, "无权操作该医院");
         // 完整性校验：存在下属科室时禁止删除
         long deptCount = departmentMapper.selectCount(
                 new LambdaQueryWrapper<com.hospital.entity.Department>().eq(
@@ -153,13 +151,25 @@ public class HospitalServiceImpl implements HospitalService {
     @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long id, Integer status) {
         StatusValidator.checkEnabledDisabled(status, "非法的状态值");
+        Hospital h = requireHospital(id);
+        dataScopeResolver.resolveRequired().assertCanAccess(h.getId(), null, null, "无权操作该医院");
+        h.setStatus(status);
+        h.setUpdateTime(LocalDateTime.now());
+        hospitalMapper.updateById(h);
+    }
+
+    /**
+     * 按 ID 查询医院，不存在时抛出业务异常
+     *
+     * @param id 医院 ID
+     * @return 医院实体
+     */
+    private Hospital requireHospital(Long id) {
         Hospital h = hospitalMapper.selectById(id);
         if (h == null) {
             throw new BusinessException("医院不存在");
         }
-        h.setStatus(status);
-        h.setUpdateTime(LocalDateTime.now());
-        hospitalMapper.updateById(h);
+        return h;
     }
 
     private HospitalVO toVO(Hospital h) {

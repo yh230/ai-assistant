@@ -1,7 +1,9 @@
 package com.registration.service.impl;
 
 import com.api.client.OrgClient;
+import com.api.client.PatientClient;
 import com.api.client.UserClient;
+import com.api.dto.AuthInfoDTO;
 import com.api.dto.OrgBriefDTO;
 import com.api.dto.UserBriefDTO;
 import com.common.exception.BusinessException;
@@ -31,13 +33,17 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.DigestUtils;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -89,6 +95,10 @@ public class RegistrationServiceImpl implements RegistrationService {
     private static final String REGISTRATION_LOCK_PREFIX = "lock:registration:";
     /** 排班锁前缀（+排班ID；防号源双卖与占用数丢失更新） */
     private static final String SCHEDULE_LOCK_PREFIX = "lock:schedule:";
+    /** 匿名预约幂等键前缀（+SHA-256 幂等键；5 分钟内重复提交直接返回原单） */
+    private static final String IDEMPOTENCY_KEY_PREFIX = "reg:idem:";
+    /** 匿名预约幂等窗口（分钟） */
+    private static final long IDEMPOTENCY_TTL_MINUTES = 5;
     /** 常规等锁时长（秒） */
     private static final long LOCK_WAIT_SECONDS = 3;
     /** 锁租期（秒，覆盖 DB 操作） */
@@ -101,6 +111,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final DoctorScheduleMapper scheduleMapper;
     private final UserClient userClient;
     private final OrgClient orgClient;
+    private final PatientClient patientClient;
     private final DataScopeResolver dataScopeResolver;
     private final RedissonClient redissonClient;
     private final TransactionTemplate txTemplate;
@@ -110,6 +121,8 @@ public class RegistrationServiceImpl implements RegistrationService {
 
     /**
      * 患者线上预约（锁内重复检查，条件抢占号源；固定锁序 patient → schedule）
+     * <p>匿名路径（patientId 为空）额外做幂等：Redis 键先占位（5 分钟窗口），
+     * 同参数重复提交直接返回原单；失败释放键允许重试；唯一索引兜底并发穿透。</p>
      *
      * @param dto 预约参数
      * @return 挂号视图
@@ -117,14 +130,40 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     public RegistrationVO createAppointment(AppointmentCreateDTO dto) {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
+        assertPatientInScheduleHospital(dto.getPatientId(), schedule.getHospitalId());
         Registration reg;
         if (dto.getPatientId() != null) {
             String patientKey = PATIENT_DAY_LOCK_PREFIX + dto.getPatientId() + ":" + dto.getScheduleDate();
             reg = withLock(patientKey, false, () -> withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
-                    () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule))));
+                    () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, null))));
         } else {
-            reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
-                    () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule)));
+            String idempotencyKey = buildIdempotencyKey(dto, schedule);
+            RBucket<String> bucket = redissonClient.getBucket(IDEMPOTENCY_KEY_PREFIX + idempotencyKey);
+            // 键已存在：仅当原单仍进行中（RESERVED/CALLED）才返回；终态单不得作为成功幂等结果复用
+            if (!bucket.trySet("1", IDEMPOTENCY_TTL_MINUTES, TimeUnit.MINUTES)) {
+                Registration existing = findActiveByIdempotencyKey(idempotencyKey);
+                if (existing == null) {
+                    // 键可能属于尚未落库的在途首次请求：不得删除，等待 5 分钟窗口自然过期
+                    throw new BusinessException("请勿重复提交");
+                }
+                return enrichSafe(List.of(existing)).get(0);
+            }
+            try {
+                reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
+                        () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, idempotencyKey)));
+            } catch (DuplicateKeyException e) {
+                // 并发穿透：唯一索引 uk_registration_idem 兜底，仅回查进行中记录（键保留在窗口内）
+                Registration existing = findActiveByIdempotencyKey(idempotencyKey);
+                if (existing == null) {
+                    releaseIdempotencyKey(idempotencyKey);
+                    throw new BusinessException("请勿重复提交");
+                }
+                return enrichSafe(List.of(existing)).get(0);
+            } catch (RuntimeException e) {
+                // 校验/锁失败/DB 异常：释放幂等键，患者可立即重试
+                releaseIdempotencyKey(idempotencyKey);
+                throw e;
+            }
         }
         RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
         eventPublisher.publishCreated(reg, vo);
@@ -132,13 +171,93 @@ public class RegistrationServiceImpl implements RegistrationService {
     }
 
     /**
+     * 校验患者所属医院与排班所属医院一致（AI 写工具租户强校验）
+     * <p>
+     * 匿名路径（patientId 为空）不校验；患者医院经内部接口权威查询，不信任调用方传参。
+     *
+     * @param patientId 患者账号 ID（可空=匿名预约）
+     * @param scheduleHospitalId 排班所属医院 ID
+     * @throws BusinessException 患者医院查询失败或与排班医院不一致
+     */
+    void assertPatientInScheduleHospital(Long patientId, Long scheduleHospitalId) {
+        if (patientId == null) {
+            return;
+        }
+        Result<AuthInfoDTO> result;
+        try {
+            result = patientClient.authInfo(patientId);
+        } catch (Exception e) {
+            log.warn("患者归属医院查询失败: patientId={}, {}", patientId, e.getMessage());
+            throw new BusinessException("无法确认患者归属医院，请稍后重试");
+        }
+        if (result == null || result.getCode() != 200 || result.getData() == null
+                || result.getData().getHospitalId() == null) {
+            throw new BusinessException("无法确认患者归属医院，请稍后重试");
+        }
+        if (!result.getData().getHospitalId().equals(scheduleHospitalId)) {
+            throw new BusinessException("该医生不属于您所属医院，无法预约");
+        }
+    }
+
+    // ===================== 内部辅助：匿名预约幂等 =====================
+
+    /**
+     * 构造匿名预约幂等键：SHA-256(手机号|身份证|排班ID|日期|时段)
+     *
+     * @param dto 预约参数
+     * @param schedule 已解析排班（避免信任调用方日期/时段，取排班 ID 与 DTO 规范化字段）
+     * @return 64 位十六进制幂等键
+     */
+    private String buildIdempotencyKey(AppointmentCreateDTO dto, DoctorSchedule schedule) {
+        String raw = dto.getPatientPhone() + "|" + dto.getPatientIdCard() + "|"
+                + schedule.getId() + "|" + dto.getScheduleDate() + "|" + dto.getPeriod();
+        return DigestUtils.sha256DigestAsHex(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 按幂等键查进行中的预约（仅 RESERVED/CALLED；唯一索引保证至多一条；键为空返回 null）
+     * <p>终态记录（CANCELLED/EXPIRED/REFUNDED）即使残留唯一键也不得作为重复提交的成功结果返回。</p>
+     *
+     * @param idempotencyKey 幂等键
+     * @return 进行中的挂号记录（无则 null）
+     */
+    private Registration findActiveByIdempotencyKey(String idempotencyKey) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            return null;
+        }
+        return registrationMapper.selectOne(new LambdaQueryWrapper<Registration>()
+                .eq(Registration::getIdempotencyKey, idempotencyKey)
+                .in(Registration::getStatus,
+                        RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
+    }
+
+    /**
+     * 回收匿名预约幂等键（取消/过期后允许立即重新预约同一排班）
+     * <p>DB 列已在条件更新中清空，此处尽力删除 Redis 窗口键；失败仅告警，等待窗口自然过期。</p>
+     *
+     * @param idempotencyKey 原幂等键（可空）
+     */
+    private void releaseIdempotencyKey(String idempotencyKey) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            return;
+        }
+        try {
+            redissonClient.getBucket(IDEMPOTENCY_KEY_PREFIX + idempotencyKey).delete();
+        } catch (Exception e) {
+            log.warn("幂等键回收失败，等待窗口自然过期: key={}, {}", idempotencyKey, e.getMessage());
+        }
+    }
+
+    /**
      * 线上预约事务体（锁内执行）：重复检查 → 生成挂号单 → 条件抢占号源 → 占用 +1
      *
      * @param dto 预约参数
      * @param schedule 已解析排班（锁外只读快照）
+     * @param idempotencyKey 匿名预约幂等键（患者账号预约为 null）
      * @return 新挂号单
      */
-    private Registration doCreateAppointment(AppointmentCreateDTO dto, DoctorSchedule schedule) {
+    private Registration doCreateAppointment(AppointmentCreateDTO dto, DoctorSchedule schedule,
+            String idempotencyKey) {
         // ① AI 挂号（带患者账号）：同一患者同一天已有进行中的预约则拦截（锁内检查防重复窗口）
         if (dto.getPatientId() != null) {
             Long dupCount = registrationMapper.selectCount(new LambdaQueryWrapper<Registration>()
@@ -149,6 +268,17 @@ public class RegistrationServiceImpl implements RegistrationService {
             if (dupCount > 0) {
                 throw new BusinessException("您在该时段已有预约，请勿重复预约");
             }
+        } else {
+            // ①' 匿名预约：同一手机号+身份证当日已有进行中的预约则拦截（锁内兜底防并发重复）
+            Long dupCount = registrationMapper.selectCount(new LambdaQueryWrapper<Registration>()
+                    .eq(Registration::getPatientPhone, dto.getPatientPhone())
+                    .eq(Registration::getPatientIdCard, dto.getPatientIdCard())
+                    .eq(Registration::getScheduleDate, dto.getScheduleDate())
+                    .in(Registration::getStatus,
+                            RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
+            if (dupCount != null && dupCount > 0) {
+                throw new BusinessException("您在该时段已有预约，请勿重复预约");
+            }
         }
         // ② 挑空闲号源并生成挂号单骨架
         Registration reg = buildRegistration(schedule, dto.getSeqNo());
@@ -156,6 +286,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         reg.setPatientPhone(dto.getPatientPhone());
         reg.setPatientIdCard(dto.getPatientIdCard());
         reg.setPatientId(dto.getPatientId());
+        reg.setIdempotencyKey(idempotencyKey);
         reg.setSourceType(SourceType.ONLINE.getCode());
         reg.setPayStatus(PayStatus.UNPAID.getCode());
         reg.setStatus(RegistrationStatus.RESERVED.getCode());
@@ -210,7 +341,8 @@ public class RegistrationServiceImpl implements RegistrationService {
             qw.eq(Registration::getPatientPhone, phone);
             qw.eq(Registration::getPatientIdCard, idCard);
         }
-        qw.orderByDesc(Registration::getCreateTime);
+        // 患者自助查询按创建时间倒序，硬上限 50 条，避免无界 selectList 拖垮接口
+        qw.orderByDesc(Registration::getCreateTime).last("LIMIT 50");
         return enrich(registrationMapper.selectList(qw));
     }
 
@@ -361,14 +493,19 @@ public class RegistrationServiceImpl implements RegistrationService {
                                     .set(Registration::getStatus, RegistrationStatus.REFUNDED.getCode())
                                     .set(Registration::getRefundAmount, reg.getPayAmount())
                                     .set(Registration::getRefundTime, now)
-                                    .set(Registration::getRemark, remark));
+                                    .set(Registration::getRemark, remark)
+                                    // 退号后清空幂等键，避免终态单永久占用唯一键导致无法重新预约
+                                    .set(Registration::getIdempotencyKey, null));
                             // 条件跃迁成功后：释放号源 + 占用数回退
                             releaseSource(reg.getNumberSourceId(), id);
                             incrRegisteredCount(reg.getScheduleId(), -1);
+                            // 回收 Redis 窗口键，退号后允许立即重新预约同一排班
+                            releaseIdempotencyKey(reg.getIdempotencyKey());
                             reg.setStatus(RegistrationStatus.REFUNDED.getCode());
                             reg.setRefundAmount(reg.getPayAmount());
                             reg.setRefundTime(now);
                             reg.setRemark(remark);
+                            reg.setIdempotencyKey(null);
                             reg.setUpdateTime(now);
                             return reg;
                         })));
@@ -446,9 +583,12 @@ public class RegistrationServiceImpl implements RegistrationService {
             return false;
         }
         transit(id, RegistrationStatus.RESERVED, uw -> uw
-                .set(Registration::getStatus, RegistrationStatus.EXPIRED.getCode()));
+                .set(Registration::getStatus, RegistrationStatus.EXPIRED.getCode())
+                .set(Registration::getIdempotencyKey, null));
         releaseSource(reg.getNumberSourceId(), id);
         incrRegisteredCount(reg.getScheduleId(), -1);
+        // 回收 Redis 窗口键，允许同一患者重新预约（DB 列已随条件跃迁清空）
+        releaseIdempotencyKey(reg.getIdempotencyKey());
         return true;
     }
 
@@ -636,12 +776,17 @@ public class RegistrationServiceImpl implements RegistrationService {
                             String remark = appendReason(reg.getRemark(), "患者取消：" + (reason == null ? "" : reason));
                             transit(reg.getId(), from, uw -> uw
                                     .set(Registration::getStatus, RegistrationStatus.CANCELLED.getCode())
-                                    .set(Registration::getRemark, remark));
+                                    .set(Registration::getRemark, remark)
+                                    // 取消后清空幂等键，允许同一患者重新预约同一排班
+                                    .set(Registration::getIdempotencyKey, null));
                             // 条件跃迁成功后：释放号源 + 占用数回退
                             releaseSource(reg.getNumberSourceId(), reg.getId());
                             incrRegisteredCount(reg.getScheduleId(), -1);
+                            // 回收 Redis 窗口键，取消后允许立即重新预约同一排班
+                            releaseIdempotencyKey(reg.getIdempotencyKey());
                             reg.setStatus(RegistrationStatus.CANCELLED.getCode());
                             reg.setRemark(remark);
+                            reg.setIdempotencyKey(null);
                             reg.setUpdateTime(LocalDateTime.now());
                             return reg;
                         })));

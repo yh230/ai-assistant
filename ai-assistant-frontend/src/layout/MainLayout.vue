@@ -18,10 +18,6 @@
           <el-icon><Sunny /></el-icon>
           <span>天气查询</span>
         </el-menu-item>
-        <el-menu-item index="/roles">
-          <el-icon><MagicStick /></el-icon>
-          <span>聊天人设</span>
-        </el-menu-item>
 
         <!-- 系统管理（登录后按 userInfo.permissions 过滤渲染） -->
         <el-menu-item-group v-if="token && hasAnySystemPerm">
@@ -41,6 +37,10 @@
           <el-menu-item v-if="hasPerm(PERMS.SYSTEM_OPERLOG_LIST)" index="/system/operlog">
             <el-icon><Clock /></el-icon>
             <span>操作日志</span>
+          </el-menu-item>
+          <el-menu-item v-if="hasPerm(PERMS.AI_ROLE_MANAGE)" index="/roles">
+            <el-icon><MagicStick /></el-icon>
+            <span>AI 人设</span>
           </el-menu-item>
         </el-menu-item-group>
 
@@ -155,7 +155,8 @@ const hasAnySystemPerm = computed(() =>
     PERMS.SYSTEM_USER_LIST,
     PERMS.SYSTEM_ROLE_LIST,
     PERMS.SYSTEM_MENU_LIST,
-    PERMS.SYSTEM_OPERLOG_LIST
+    PERMS.SYSTEM_OPERLOG_LIST,
+    PERMS.AI_ROLE_MANAGE
   ])
 )
 

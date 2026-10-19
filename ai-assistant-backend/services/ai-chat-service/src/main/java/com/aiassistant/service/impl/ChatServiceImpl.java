@@ -1,9 +1,12 @@
 package com.aiassistant.service.impl;
 
+import com.aiassistant.config.AiProperties;
 import com.aiassistant.config.AssistantProperties;
 import com.aiassistant.config.ChatClientFactory;
 import com.aiassistant.config.ChatModelRegistry;
 import com.aiassistant.config.ModelProperties;
+import com.aiassistant.config.ModelStreamExecutor;
+import com.aiassistant.config.SceneOptionsFactory;
 import com.aiassistant.dto.ChatRequest;
 import com.aiassistant.dto.ChatResponse;
 import com.aiassistant.dto.ModelInfo;
@@ -12,24 +15,28 @@ import com.aiassistant.dto.SessionDTO;
 import com.aiassistant.dto.WeatherResponse;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.entity.ChatSession;
+import com.aiassistant.memory.ConversationMemory;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
+import com.aiassistant.safety.OutputSafetyFilter;
+import com.aiassistant.safety.StreamingSafetyGuard;
 import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
+import com.aiassistant.service.UserMemoryBuilder;
 import com.aiassistant.service.WeatherService;
+import com.aiassistant.service.support.ChatMessagePersister;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
 import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.security.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
@@ -37,19 +44,21 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -64,8 +73,11 @@ import java.util.stream.Collectors;
  *     <li><b>多角色</b>：角色人设来自数据库（ai_role 表，可在「角色管理」页面维护），运行时按 roleId 选择，并注入跨会话的 DB 用户画像。</li>
  *     <li><b>多模型</b>：模型来自配置（ai.assistant.models），运行时按 modelId 选择 ChatClient；
  *         模型不可用时自动降级为本地回复引擎，对话不中断。</li>
- *     <li><b>上下文管理</b>：长对话自动摘要压缩，保留最近 N 条完整消息；用户画像从全量历史中提取。</li>
+ *     <li><b>上下文管理</b>：按 token 预算组装历史（{@link ConversationMemory}），超预算时保留最近消息并压缩早期消息为摘要；
+ *         用户画像仅从当前登录人自身历史中提取。</li>
  *     <li><b>会话隔离</b>：会话按归属用户 + 身份绑定，员工侧读写一律限定当前登录人（identity=staff）的会话。</li>
+ *     <li><b>输入输出风控</b>：输入命中敏感词直接拦截并落库标准文案；输出以流式守卫在 token 级拦截
+ *         （含跨 token 拆分），命中后仅下发标准文案并按标准文案落库。</li>
  * </ul>
  *
  * @author yh
@@ -82,16 +94,6 @@ public class ChatServiceImpl implements ChatService {
     private static final Pattern CITY_PATTERN =
             Pattern.compile("([\\u4e00-\\u9fa5]{2,8})(?:市|地区)?的?(?:今天|现在|明天|当前)?(?:实时)?(?:的)?天气");
 
-    /** 用户名提取正则 */
-    private static final Pattern NAME_PATTERN =
-            Pattern.compile("(?:我叫|我是|我的名字是|叫我)\\s*([\\u4e00-\\u9fa5]{2,4})");
-
-    /** 旧对话摘要前缀 */
-    private static final String SUMMARY_HEADER = "以下是之前对话的摘要信息，帮助你理解上下文：\n";
-
-    /** 最近对话分隔说明 */
-    private static final String RECENT_HEADER = "\n\n--- 以下是最近的对话内容 ---";
-
     /** 用户画像注入分隔符 */
     private static final String MEMORY_SEPARATOR = "\n\n## 你对用户的了解（来自过去的对话记录）\n";
 
@@ -101,14 +103,22 @@ public class ChatServiceImpl implements ChatService {
     // ==================== 依赖 ====================
 
     private final AssistantProperties assistantProperties;
+    private final AiProperties aiProperties;
     private final AssistantRoleService assistantRoleService;
     private final ChatClientFactory chatClientFactory;
     private final ChatModelRegistry chatModelRegistry;
+    private final ModelStreamExecutor modelStreamExecutor;
+    private final SceneOptionsFactory sceneOptionsFactory;
+    private final MeterRegistry meterRegistry;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
+    private final ConversationMemory conversationMemory;
+    private final UserMemoryBuilder userMemoryBuilder;
     private final WeatherService weatherService;
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
+    private final ChatMessagePersister messagePersister;
+    private final OutputSafetyFilter safetyFilter;
 
     @Value("${ai.local-fallback:true}")
     private boolean useLocalFallback;
@@ -122,10 +132,10 @@ public class ChatServiceImpl implements ChatService {
 
         // 登录快照在请求线程捕获，随上下文传入弹性线程池（SecurityContext 为 ThreadLocal）
         UserSnapshot snapshot = currentStaffSnapshot();
-        String roleId = assistantRoleService.resolveRoleId(request.getRoleId());
+        String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
         String modelId = assistantProperties.resolveModelId(request.getModel());
 
-        return Mono.fromCallable(() -> prepareContext(request, roleId, modelId, snapshot))
+        return Mono.fromCallable(() -> prepareContext(request, requestedRoleId, modelId, snapshot))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(this::buildReplyFlux)
                 .onErrorResume(this::buildErrorFlux);
@@ -134,21 +144,37 @@ public class ChatServiceImpl implements ChatService {
     /**
      * 准备流式回复所需的上下文（阻塞型 DB 操作，运行在弹性线程池）。
      *
-     * @param request  聊天请求
-     * @param roleId   解析后的角色ID
-     * @param modelId  解析后的模型ID
-     * @param snapshot 当前登录人快照（请求线程捕获）
+     * @param request         聊天请求
+     * @param requestedRoleId 请求角色ID（已有会话以库中绑定为准）
+     * @param modelId         解析后的模型ID
+     * @param snapshot        当前登录人快照（请求线程捕获）
      * @return 聊天上下文
      */
-    private ChatContext prepareContext(ChatRequest request, String roleId, String modelId, UserSnapshot snapshot) {
-        String sessionId = ensureSession(request, snapshot);
+    private ChatContext prepareContext(ChatRequest request, String requestedRoleId, String modelId, UserSnapshot snapshot) {
+        validateInput(request.getMessage());
+        String sessionId = ensureSession(request, snapshot, requestedRoleId);
+        ChatSession session = requireOwnedSession(sessionId, snapshot);
+        String roleId = resolveEffectiveRoleId(session, requestedRoleId);
+        if (session.getRoleId() == null || session.getRoleId().isBlank()) {
+            session.setRoleId(roleId);
+            sessionRepository.save(session);
+        }
         String title = resolveTitle(request);
         saveUserMessage(sessionId, request.getMessage());
 
+        // 输入侧风控：命中敏感词不调用大模型，落库标准文案后以 error 事件输出
+        if (safetyFilter.blockedInput(request.getMessage())) {
+            String blockedMessage = safetyFilter.blockedMessage();
+            saveAssistantMessage(sessionId, blockedMessage);
+            log.info("输入侧命中风控敏感词，拦截本次请求 sessionId={}", sessionId);
+            throw new BusinessException(blockedMessage);
+        }
+
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        List<Message> contextMessages = buildContextMessages(history);
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
-        boolean aiEnabled = chatModelRegistry.isActive(modelId);
+        List<Message> contextMessages = conversationMemory.build(session, history);
+        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
+                snapshot.getUserId(), memoryIdentity(snapshot));
+        boolean aiEnabled = !chatModelRegistry.getFallbackChain(modelId).isEmpty();
 
         log.info("流式聊天 sessionId={}, roleId={}, modelId={}, aiEnabled={}, 历史消息数={}",
                 sessionId, roleId, modelId, aiEnabled, history.size());
@@ -158,7 +184,10 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 结束事件。
+     * 构建完整回复流：会话事件 + 内容流（AI 或本地降级）+ 落库 + 结束事件。
+     * <p>
+     * 落库作为流内节点在 done 之前完成（不再 fire-and-forget），保证 done 到达时消息已可见；
+     * AI 与本地降级 token 统一累积进同一个 {@code full}，客户端取消时按已产生的部分内容落库一次。
      *
      * @param ctx 聊天上下文
      * @return SSE 事件流
@@ -169,70 +198,218 @@ public class ChatServiceImpl implements ChatService {
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
+        // 取消回调可能在其他线程读取累积器，使用线程安全的 StringBuffer
+        StringBuffer full = new StringBuffer();
+        AtomicBoolean persisted = new AtomicBoolean(false);
         AtomicBoolean usedFallback = new AtomicBoolean(!ctx.aiEnabled());
+        AtomicBoolean truncated = new AtomicBoolean(false);
+        AtomicBoolean blocked = new AtomicBoolean(false);
+        // 守卫实例引用：取消时先冲刷滞留尾部再落库（取消信号自下游向上游传播，外层 doOnCancel 先于守卫自身执行）
+        AtomicReference<StreamingSafetyGuard.Guarded> guardRef = new AtomicReference<>();
         Flux<ServerSentEvent<String>> contentFlux = ctx.aiEnabled()
-                ? buildAiContentFlux(ctx, usedFallback)
-                : buildLocalContentFlux(ctx);
+                ? buildAiContentFlux(ctx, full, usedFallback, truncated, blocked, guardRef)
+                : buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()), full, blocked,
+                        guardRef);
 
-        Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() ->
-                ServerSentEvent.builder(toJson(Map.of("localFallback", usedFallback.get())))
-                        .event(ChatConstants.EVENT_DONE)
-                        .build());
+        Mono<Void> persist = Mono.defer(() -> {
+            if (!persisted.compareAndSet(false, true)) {
+                return Mono.empty();
+            }
+            return messagePersister.persistAssistant(ctx.sessionId(), persistedBody(full, blocked), null);
+        });
 
-        return Flux.concat(Mono.just(sessionEvent), contentFlux, doneEvent);
+        Mono<ServerSentEvent<String>> doneEvent = Mono.fromCallable(() -> {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("localFallback", usedFallback.get());
+            if (truncated.get()) {
+                payload.put("truncated", true);
+            }
+            return ServerSentEvent.builder(toJson(payload))
+                    .event(ChatConstants.EVENT_DONE)
+                    .build();
+        });
+
+        return Flux.concat(Mono.just(sessionEvent), contentFlux, persist.then(doneEvent))
+                .doOnCancel(() -> {
+                    // 先冲刷守卫滞留尾部再落库，避免客户端断开时丢失最后一段已生成内容
+                    GuardedSse.flush(guardRef.get(), full, blocked);
+                    if (persisted.compareAndSet(false, true) && (blocked.get() || full.length() > 0)) {
+                        messagePersister.persistBlocking(ctx.sessionId(), persistedBody(full, blocked), null);
+                    }
+                });
     }
 
     /**
-     * 构建 AI 模型流式内容（逐 token 推送，失败时降级本地引擎）。
-     */
-    private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, AtomicBoolean usedFallback) {
-        ChatClient client = chatClientFactory.getChatClient(ctx.modelId());
-        StringBuilder fullResponse = new StringBuilder();
-
-        return client.prompt()
-                .system(ctx.systemPrompt())
-                .messages(ctx.messages())
-                .stream()
-                .content()
-                .publishOn(Schedulers.boundedElastic())
-                .map(token -> {
-                    fullResponse.append(token);
-                    return ServerSentEvent.builder(token).event(ChatConstants.EVENT_TOKEN).build();
-                })
-                .onErrorResume(ex -> {
-                    log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
-                    usedFallback.set(true);
-                    return buildLocalChunkFlux(ctx.sessionId(),
-                            generateLocalResponse(ctx.userMessage(), ctx.history()));
-                })
-                .doOnComplete(() -> persistReplyAsync(ctx.sessionId(), fullResponse.toString()));
-    }
-
-    /**
-     * 构建本地降级流式内容（按字符切片，模拟打字机效果）。
-     */
-    private Flux<ServerSentEvent<String>> buildLocalContentFlux(ChatContext ctx) {
-        String localReply = generateLocalResponse(ctx.userMessage(), ctx.history());
-        return buildLocalChunkFlux(ctx.sessionId(), localReply);
-    }
-
-    /**
-     * 将文本切片为 SSE token 流（本地降级复用）。
+     * 计算落库正文：流式风控命中时只落标准拦截文案，绝不落原始（可能不安全的）部分正文。
      *
-     * @param sessionId 会话ID（用于落库）
-     * @param text      完整文本
+     * @param full    回复正文累积器
+     * @param blocked 输出侧流式风控拦截标记
+     * @return 可落库的回复正文
+     */
+    private String persistedBody(StringBuffer full, AtomicBoolean blocked) {
+        return blocked.get() ? safetyFilter.blockedMessage() : full.toString();
+    }
+
+    /**
+     * 构建 AI 模型流式内容：多模型故障转移 + 场景参数 + 空闲/总超时 + 用量计量，
+     * 逐 token 推送并累积，失败时降级本地引擎继续累积。
+     * <p>
+     * 总超时由 {@code take} 正常结束（无异常信号），按耗时判定截断并置位 {@code truncated}，
+     * 由 done 事件透出，同时计入失败与截断指标。
+     *
+     * @param ctx          聊天上下文
+     * @param full         回复内容累积器（AI token 与降级 token 共用）
+     * @param usedFallback 降级标记
+     * @param truncated    总超时截断标记（供 done 事件上报）
+     * @param blocked      输出侧流式风控拦截标记（守卫命中时置位）
+     * @param guardRef     守卫实例引用（取消/落库前冲刷滞留尾部）
      * @return SSE 事件流
      */
-    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String sessionId, String text) {
-        StringBuilder fullResponse = new StringBuilder(text);
-        List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
-        return Flux.fromIterable(chunks)
-                .delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS))
-                .map(chunk -> {
-                    fullResponse.append(chunk);
-                    return ServerSentEvent.builder(chunk).event(ChatConstants.EVENT_TOKEN).build();
+    private Flux<ServerSentEvent<String>> buildAiContentFlux(ChatContext ctx, StringBuffer full,
+                                                            AtomicBoolean usedFallback, AtomicBoolean truncated,
+                                                            AtomicBoolean blocked,
+                                                            AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
+        String scene = "chat";
+        List<String> chain = chatModelRegistry.getFallbackChain(ctx.modelId());
+        boolean emptyChain = chain.isEmpty();
+        String primaryModel = emptyChain ? ctx.modelId() : chain.get(0);
+        Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
+        long startNanos = System.nanoTime();
+
+        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
+            long startNanosPerModel = System.nanoTime();
+            AtomicBoolean firstToken = new AtomicBoolean(true);
+            return Flux.defer(() -> {
+                        meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
+                        return chatClientFactory.getChatClient(candidate).prompt()
+                                .system(ctx.systemPrompt())
+                                .messages(ctx.messages())
+                                .options(sceneOptionsFactory.options(scene))
+                                .stream()
+                                .chatResponse();
+                    })
+                    .doOnNext(response -> recordUsage(candidate, scene, response))
+                    .map(this::extractText)
+                    .filter(StringUtils::hasText)
+                    .doOnNext(token -> {
+                        if (firstToken.compareAndSet(true, false)) {
+                            meterRegistry.timer("ai.model.latency", "model", candidate)
+                                    .record(Duration.ofNanos(System.nanoTime() - startNanosPerModel));
+                        }
+                    })
+                    .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
+        });
+
+        return GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
+                        aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
+                        guardRef::set)
+                .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
+                .take(overallTimeout)
+                .doOnComplete(() -> {
+                    if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
+                        truncated.set(true);
+                        recordFailure(primaryModel, scene, "OverallTimeout");
+                        meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
+                                .increment();
+                        log.warn("AI 生成达总超时（{} 秒）被截断: sessionId={}",
+                                aiProperties.getChat().getOverallTimeoutSeconds(), ctx.sessionId());
+                    }
                 })
-                .doOnComplete(() -> persistReplyAsync(sessionId, fullResponse.toString()));
+                .onErrorResume(ex -> {
+                    if (ex instanceof TimeoutException) {
+                        recordFailure(primaryModel, scene, "IdleTimeout");
+                    } else if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
+                        // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
+                        recordFailure(primaryModel, scene, "EmptyChain");
+                    }
+                    log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
+                    usedFallback.set(true);
+                    return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()),
+                            full, blocked, guardRef);
+                });
+    }
+
+    /**
+     * 记录失败计数（model + reason 维度）。
+     *
+     * @param modelId 模型ID
+     * @param scene   场景标识
+     * @param reason  失败原因标签
+     */
+    private void recordFailure(String modelId, String scene, String reason) {
+        meterRegistry.counter("ai.model.failures", "model", modelId, "scene", scene, "reason", reason)
+                .increment();
+    }
+
+    /**
+     * 从模型响应中提取正文（工具调用等无文本片段返回空串，由调用方过滤）。
+     *
+     * @param response 模型响应
+     * @return 正文文本
+     */
+    private String extractText(org.springframework.ai.chat.model.ChatResponse response) {
+        if (response == null || response.getResult() == null || response.getResult().getOutput() == null
+                || response.getResult().getOutput().getText() == null) {
+            return "";
+        }
+        return response.getResult().getOutput().getText();
+    }
+
+    /**
+     * 记录模型用量指标（提示/补全 token）；流式响应未携带用量时静默跳过。
+     *
+     * @param modelId  模型ID
+     * @param scene    场景标识
+     * @param response 模型响应
+     */
+    private void recordUsage(String modelId, String scene, org.springframework.ai.chat.model.ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return;
+        }
+        Usage usage = response.getMetadata().getUsage();
+        if (usage == null) {
+            return;
+        }
+        Integer promptTokens = usage.getPromptTokens();
+        if (promptTokens != null && promptTokens > 0) {
+            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "prompt")
+                    .increment(promptTokens);
+        }
+        Integer completionTokens = usage.getCompletionTokens();
+        if (completionTokens != null && completionTokens > 0) {
+            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "completion")
+                    .increment(completionTokens);
+        }
+    }
+
+    /**
+     * 归一化失败原因标签（异常类型名），用于失败计数维度。
+     *
+     * @param ex 异常
+     * @return 失败原因标签
+     */
+    private String failureReason(Throwable ex) {
+        return ex.getClass().getSimpleName();
+    }
+
+    /**
+     * 将文本切片为 SSE token 流（本地降级复用）：token 先经流式风控守卫，
+     * 再映射为 SSE 并累积正文，不落库。
+     *
+     * @param text     完整文本
+     * @param full     回复内容累积器
+     * @param blocked  输出侧流式风控拦截标记
+     * @param guardRef 守卫实例引用（取消/落库前冲刷滞留尾部，可为 null）
+     * @return SSE 事件流
+     */
+    private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuffer full,
+                                                              AtomicBoolean blocked,
+                                                              AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
+        List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
+        return GuardedSse.guardedSse(
+                Flux.fromIterable(chunks).delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
+                full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
+                guardRef == null ? null : guardRef::set);
     }
 
     /**
@@ -254,12 +431,21 @@ public class ChatServiceImpl implements ChatService {
     public ChatResponse chat(ChatRequest request) {
         Assert.notNull(request, "请求参数不能为空");
         Assert.hasText(request.getMessage(), "消息内容不能为空");
+        validateInput(request.getMessage());
 
-        String roleId = assistantRoleService.resolveRoleId(request.getRoleId());
+        UserSnapshot snapshot = currentStaffSnapshot();
+        String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
         String modelId = assistantProperties.resolveModelId(request.getModel());
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId));
 
-        String sessionId = ensureSession(request, currentStaffSnapshot());
+        String sessionId = ensureSession(request, snapshot, requestedRoleId);
+        ChatSession session = requireOwnedSession(sessionId, snapshot);
+        String roleId = resolveEffectiveRoleId(session, requestedRoleId);
+        if (session.getRoleId() == null || session.getRoleId().isBlank()) {
+            session.setRoleId(roleId);
+            sessionRepository.save(session);
+        }
+        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
+                snapshot.getUserId(), memoryIdentity(snapshot));
         saveUserMessage(sessionId, request.getMessage());
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
@@ -268,7 +454,7 @@ public class ChatServiceImpl implements ChatService {
 
         if (chatModelRegistry.isActive(modelId)) {
             try {
-                reply = callAi(systemPrompt, history, modelId);
+                reply = callAi(systemPrompt, session, history, modelId);
             } catch (Exception e) {
                 log.warn("AI 调用失败，切换本地回复: {}", e.getMessage());
                 if (useLocalFallback) {
@@ -290,9 +476,9 @@ public class ChatServiceImpl implements ChatService {
     /**
      * 调用指定模型生成完整回复（非流式）。
      */
-    private String callAi(String systemPrompt, List<ChatMessage> history, String modelId) {
+    private String callAi(String systemPrompt, ChatSession session, List<ChatMessage> history, String modelId) {
         ChatClient client = chatClientFactory.getChatClient(modelId);
-        List<Message> messages = buildContextMessages(history);
+        List<Message> messages = conversationMemory.build(session, history);
         return client.prompt()
                 .system(systemPrompt)
                 .messages(messages)
@@ -329,121 +515,34 @@ public class ChatServiceImpl implements ChatService {
         return result;
     }
 
-    // ==================== 上下文构建（DB 驱动） ====================
+    // ==================== 输入校验 ====================
 
     /**
-     * 构建对话上下文消息列表。
-     * <ul>
-     *     <li>短对话（≤ SUMMARY_THRESHOLD）：全部历史作为上下文；</li>
-     *     <li>长对话（> SUMMARY_THRESHOLD）：旧消息压缩为摘要，保留最近 RECENT_CONTEXT_SIZE 条完整消息。</li>
-     * </ul>
+     * 校验用户消息长度（服务层兜底，上限来自 {@code ai.chat.max-input-chars}）。
+     *
+     * @param message 用户消息
      */
-    private List<Message> buildContextMessages(List<ChatMessage> history) {
-        if (history.size() <= ChatConstants.SUMMARY_THRESHOLD) {
-            return toMessages(history);
+    private void validateInput(String message) {
+        int maxChars = aiProperties.getChat().getMaxInputChars();
+        if (message != null && message.length() > maxChars) {
+            throw new BusinessException("消息长度不能超过" + maxChars + "字");
         }
-
-        int splitPoint = history.size() - ChatConstants.RECENT_CONTEXT_SIZE;
-        List<ChatMessage> oldMessages = new ArrayList<>(history.subList(0, splitPoint));
-        List<ChatMessage> recentMessages = new ArrayList<>(history.subList(splitPoint, history.size()));
-
-        String summary = summarizeOldMessages(oldMessages);
-        List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(SUMMARY_HEADER + summary + RECENT_HEADER));
-        messages.addAll(toMessages(recentMessages));
-        return messages;
-    }
-
-    /**
-     * 将实体消息列表转换为 Spring AI Message 列表。
-     */
-    private List<Message> toMessages(List<ChatMessage> messages) {
-        List<Message> result = new ArrayList<>(messages.size());
-        for (ChatMessage m : messages) {
-            if ("user".equals(m.getRole())) {
-                result.add(new UserMessage(m.getContent()));
-            } else {
-                result.add(new AssistantMessage(m.getContent()));
-            }
-        }
-        return result;
-    }
-
-    /**
-     * 对旧消息进行轻量摘要：提取城市、话题、情绪、关键问题。
-     */
-    private String summarizeOldMessages(List<ChatMessage> oldMessages) {
-        Set<String> cities = new LinkedHashSet<>();
-        Set<String> topics = new LinkedHashSet<>();
-        List<String> userQuestions = new ArrayList<>();
-        String userMood = "情绪平稳";
-
-        for (ChatMessage m : oldMessages) {
-            if (!"user".equals(m.getRole()) || m.getContent() == null) {
-                continue;
-            }
-            String content = m.getContent();
-
-            Matcher cityMatcher = CITY_PATTERN.matcher(content);
-            while (cityMatcher.find()) {
-                String city = cityMatcher.group(1);
-                if (!city.matches("(查|问|看|找|这|那|个|的|我|你|他|她|今|明|后|白|晚)+")) {
-                    cities.add(city);
-                }
-            }
-
-            if (content.contains("游戏")) topics.add("游戏");
-            if (content.contains("电影")) topics.add("电影");
-            if (content.contains("工作")) topics.add("工作");
-            if (content.contains("学习")) topics.add("学习");
-            if (content.contains("美食") || content.contains("吃")) topics.add("美食");
-            if (content.contains("旅游") || content.contains("旅行")) topics.add("旅游");
-            if (content.contains("音乐")) topics.add("音乐");
-            if (content.contains("运动") || content.contains("健身")) topics.add("运动");
-            if (content.contains("代码") || content.contains("编程") || content.contains("程序")) topics.add("编程");
-
-            if (content.contains("难过") || content.contains("伤心") || content.contains("不开心") || content.contains("emo")) {
-                userMood = "有些低落";
-            } else if (content.contains("开心") || content.contains("高兴") || content.contains("哈哈")) {
-                userMood = "心情不错";
-            } else if (content.contains("累") || content.contains("烦") || content.contains("压力")) {
-                userMood = "有些疲惫";
-            }
-
-            if ((content.endsWith("？") || content.endsWith("?")) && content.length() > 5 && content.length() < 50) {
-                userQuestions.add(content);
-            }
-        }
-
-        StringBuilder sb = new StringBuilder("在之前的对话中");
-        if (!cities.isEmpty()) {
-            sb.append("，用户问了").append(String.join("、", cities)).append("的天气");
-        }
-        if (!topics.isEmpty()) {
-            sb.append("，聊过").append(String.join("、", topics)).append("等话题");
-        }
-        if (!"情绪平稳".equals(userMood)) {
-            sb.append("，用户当时").append(userMood);
-        }
-        if (!userQuestions.isEmpty()) {
-            sb.append("，问过「").append(userQuestions.get(userQuestions.size() - 1)).append("」");
-        }
-        sb.append("。");
-        return sb.toString();
     }
 
     // ==================== 动态系统提示词（用户画像注入） ====================
 
     /**
-     * 构建最终系统提示词 = 角色人设 + 跨会话用户画像。
+     * 构建最终系统提示词 = 角色人设 + 当前登录人的跨会话画像
      *
      * @param systemPrompt 角色系统提示词（来自数据库，已含兜底默认值）
+     * @param userId       登录人 ID
+     * @param identity     身份（staff/patient）
      * @return 系统提示词
      */
-    private String buildSystemPrompt(String systemPrompt) {
+    private String buildSystemPrompt(String systemPrompt, Long userId, String identity) {
         String base = (systemPrompt != null && !systemPrompt.isBlank())
                 ? systemPrompt : "你是用户的 AI 助手，请友好、简洁、真诚地回应。";
-        String memory = buildUserMemory();
+        String memory = userMemoryBuilder.build(userId, identity);
         if (memory != null && !memory.isBlank()) {
             return base + MEMORY_SEPARATOR + memory;
         }
@@ -451,73 +550,14 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 从数据库历史对话中提取用户画像（聊天次数、名字、常聊城市、话题偏好）。
+     * 解析画像查询使用的身份：空值按旧数据员工处理
      *
-     * @return 用户画像文本；无数据时返回空字符串（不返回 null）
+     * @param snapshot 当前登录人快照
+     * @return 身份（staff/patient）
      */
-    private String buildUserMemory() {
-        try {
-            long sessionCount = sessionRepository.count();
-            long messageCount = messageRepository.countByRole("user");
-            if (sessionCount == 0) {
-                return "";
-            }
-
-            List<ChatMessage> recentUserMessages = messageRepository.findRecentUserMessages(50);
-            Set<String> cities = new LinkedHashSet<>();
-            Set<String> topics = new LinkedHashSet<>();
-            String userName = null;
-
-            for (ChatMessage m : recentUserMessages) {
-                String content = m.getContent();
-                if (content == null) {
-                    continue;
-                }
-
-                Matcher cityMatcher = CITY_PATTERN.matcher(content);
-                while (cityMatcher.find()) {
-                    String city = cityMatcher.group(1);
-                    if (!city.matches("(查|问|看|找|这|那|个|的|我|你|他|她|今|明|后|白|晚)+")) {
-                        cities.add(city);
-                    }
-                }
-
-                if (userName == null) {
-                    Matcher nameMatcher = NAME_PATTERN.matcher(content);
-                    if (nameMatcher.find()) {
-                        userName = nameMatcher.group(1);
-                    }
-                }
-
-                if (content.contains("游戏")) topics.add("游戏");
-                if (content.contains("电影")) topics.add("电影");
-                if (content.contains("工作")) topics.add("工作");
-                if (content.contains("学习")) topics.add("学习");
-                if (content.contains("美食") || content.contains("吃")) topics.add("美食");
-                if (content.contains("旅游") || content.contains("旅行")) topics.add("旅游");
-                if (content.contains("音乐")) topics.add("音乐");
-                if (content.contains("运动") || content.contains("健身")) topics.add("运动");
-                if (content.contains("代码") || content.contains("编程") || content.contains("程序")) topics.add("编程");
-            }
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("- 你们之前已经聊过 ").append(sessionCount).append(" 次，共 ").append(messageCount).append(" 条对话");
-            if (userName != null) {
-                sb.append("\n- 用户可能叫「").append(userName).append("」，可以在合适的时候自然地称呼");
-            }
-            if (!cities.isEmpty()) {
-                List<String> cityList = new ArrayList<>(cities);
-                sb.append("\n- 用户经常关心的城市：")
-                        .append(String.join("、", cityList.size() > 5 ? cityList.subList(0, 5) : cityList));
-            }
-            if (!topics.isEmpty()) {
-                sb.append("\n- 用户感兴趣的话题：").append(String.join("、", topics));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            log.warn("构建用户记忆失败: {}", e.getMessage());
-            return "";
-        }
+    private String memoryIdentity(UserSnapshot snapshot) {
+        String identity = snapshot.getIdentity();
+        return (identity == null || identity.isBlank()) ? SecurityConstants.IDENTITY_STAFF : identity;
     }
 
     // ==================== 历史与列表 ====================
@@ -562,7 +602,7 @@ public class ChatServiceImpl implements ChatService {
         UserSnapshot snapshot = currentStaffSnapshot();
         String sessionId = UUID.randomUUID().toString().replace("-", "");
         String sessionTitle = (title == null || title.trim().isEmpty()) ? "新对话" : title;
-        createSessionEntity(sessionId, sessionTitle, snapshot);
+        createSessionEntity(sessionId, sessionTitle, snapshot, null);
         return ChatResponse.builder()
                 .sessionId(sessionId).timestamp(LocalDateTime.now()).build();
     }
@@ -570,21 +610,36 @@ public class ChatServiceImpl implements ChatService {
     // ==================== DB 辅助 ====================
 
     /**
-     * 确保会话存在且归属当前登录员工：携带 sessionId 时校验归属，否则新建并绑定归属
+     * 确保会话存在且归属当前登录员工：携带 sessionId 时校验归属，否则新建并绑定归属与人设
      *
      * @param request  聊天请求
      * @param snapshot 当前登录人快照
+     * @param roleId   解析后的角色ID（新会话写入）
      * @return 会话标识
      */
-    private String ensureSession(ChatRequest request, UserSnapshot snapshot) {
+    private String ensureSession(ChatRequest request, UserSnapshot snapshot, String roleId) {
         String sessionId = request.getSessionId();
         if (sessionId != null && !sessionId.trim().isEmpty()) {
             requireOwnedSession(sessionId, snapshot);
             return sessionId;
         }
         String newId = UUID.randomUUID().toString().replace("-", "");
-        createSessionEntity(newId, resolveTitle(request), snapshot);
+        createSessionEntity(newId, resolveTitle(request), snapshot, roleId);
         return newId;
+    }
+
+    /**
+     * 解析会话实际人设：已有会话以库中 role_id 为准，缺失时回退请求值
+     *
+     * @param session 会话实体（可为空）
+     * @param requestedRoleId 请求角色 ID（可为空）
+     * @return 实际角色 ID
+     */
+    String resolveEffectiveRoleId(ChatSession session, String requestedRoleId) {
+        if (session != null && session.getRoleId() != null && !session.getRoleId().isBlank()) {
+            return session.getRoleId();
+        }
+        return assistantRoleService.resolveRoleId(requestedRoleId);
     }
 
     /**
@@ -649,17 +704,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 异步落库 AI 回复（卸载到弹性线程池，避免阻塞响应流）。
-     */
-    private void persistReplyAsync(String sessionId, String content) {
-        if (content == null || content.isBlank()) {
-            return;
-        }
-        Schedulers.boundedElastic().schedule(() -> saveAssistantMessage(sessionId, content));
-    }
-
-    /**
-     * 落库 AI 回复（事务内）并更新会话时间。
+     * 落库 AI 回复（事务内）并更新会话时间（非流式兼容接口使用）。
      */
     private void saveAssistantMessage(String sessionId, String content) {
         new TransactionTemplate(txManager).executeWithoutResult(status -> {
@@ -678,8 +723,9 @@ public class ChatServiceImpl implements ChatService {
      * @param sessionId 会话标识
      * @param title     会话标题
      * @param snapshot  当前登录人快照
+     * @param roleId    绑定的人设ID（可为空）
      */
-    private void createSessionEntity(String sessionId, String title, UserSnapshot snapshot) {
+    private void createSessionEntity(String sessionId, String title, UserSnapshot snapshot, String roleId) {
         sessionRepository.save(ChatSession.builder()
                 .sessionId(sessionId)
                 .title(title)
@@ -687,6 +733,7 @@ public class ChatServiceImpl implements ChatService {
                 .identity(SecurityConstants.IDENTITY_STAFF)
                 .sessionType(SESSION_TYPE_CHAT)
                 .hospitalId(snapshot.getHospitalId())
+                .roleId(roleId)
                 .build());
     }
 

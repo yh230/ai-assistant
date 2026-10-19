@@ -182,7 +182,8 @@ function statusTagType(status) {
 async function ensureOptions() {
   if (canViewAll.value) {
     try { hospitalOptions.value = await listHospitals() } catch (e) { hospitalOptions.value = [] }
-    try { employeeOptions.value = (await pageEmployees({ pageNum: 1, pageSize: 1000 })).list || [] } catch (e) { employeeOptions.value = [] }
+    // 全局分页上限 100
+    try { employeeOptions.value = (await pageEmployees({ pageNum: 1, pageSize: 100 })).list || [] } catch (e) { employeeOptions.value = [] }
   }
 }
 async function onHospitalChange() {

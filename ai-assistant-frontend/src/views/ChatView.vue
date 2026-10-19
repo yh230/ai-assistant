@@ -111,6 +111,14 @@
             @keydown="handleKeydown"
           />
           <el-button
+            v-if="loading"
+            type="danger"
+            class="stop-btn"
+            title="停止生成"
+            :icon="VideoPause"
+            @click="stopGeneration"
+          />
+          <el-button
             type="primary"
             class="send-btn"
             :disabled="!inputText.trim() || loading"
@@ -127,8 +135,8 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted } from 'vue'
-import { Plus, Close, ChatDotRound, Position } from '@element-plus/icons-vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { Plus, Close, ChatDotRound, Position, VideoPause } from '@element-plus/icons-vue'
 import { sendMessageStream, getChatHistory, getSessions, deleteSession, getRoles, getModels } from '../api/chat'
 import { confirm as showConfirm, toast } from '../utils/message'
 import { renderMarkdownSafe } from '../utils/safeMarkdown'
@@ -156,6 +164,29 @@ const showTypingDots = computed(() => {
   return false
 })
 
+// 当前流式请求控制器与序号（防止旧请求写入新会话）
+let currentController = null
+let requestSeq = 0
+let historySeq = 0
+
+// 停止生成：中断当前流、复位 loading，保留已生成内容
+function stopGeneration() {
+  if (currentController && typeof currentController.abort === 'function') {
+    currentController.abort()
+  }
+  currentController = null
+  // 使被停止请求的迟到 onDone/onError 失效，避免它们再改 loading / 刷新会话
+  requestSeq++
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].streaming) {
+      messages.value[i].streaming = false
+      if (!messages.value[i].content) messages.value[i].content = '（已停止生成）'
+      break
+    }
+  }
+  loading.value = false
+}
+
 // 加载会话列表
 async function loadSessions() {
   try {
@@ -168,6 +199,9 @@ async function loadSessions() {
 
 // 新建对话
 function newChat() {
+  stopGeneration()
+  // 使仍在途的 loadSession 失效，避免旧历史覆盖这次的新会话
+  historySeq++
   messages.value = []
   currentSessionId.value = null
   inputText.value = ''
@@ -178,6 +212,9 @@ function newChat() {
 // 点击当前已选角色时不做任何操作，避免误清空一个空会话
 function switchRole(roleId) {
   if (roleId === selectedRoleId.value) return
+  stopGeneration()
+  // 使仍在途的 loadSession 失效，避免旧历史覆盖切换后的空会话
+  historySeq++
   selectedRoleId.value = roleId
   messages.value = []
   currentSessionId.value = null
@@ -187,9 +224,13 @@ function switchRole(roleId) {
 
 // 加载会话历史
 async function loadSession(sessionId) {
+  stopGeneration()
+  const seq = ++historySeq
+  const previousSessionId = currentSessionId.value
+  currentSessionId.value = sessionId
   try {
-    currentSessionId.value = sessionId
     const data = await getChatHistory(sessionId)
+    if (seq !== historySeq) return
     messages.value = (data.messages || []).map(m => ({
       role: m.role,
       content: m.content,
@@ -197,7 +238,11 @@ async function loadSession(sessionId) {
     }))
     nextTick(scrollToBottom)
   } catch (e) {
-    console.error('加载会话历史失败:', e)
+    if (seq === historySeq) {
+      // 仅最新请求提示错误；回退 currentSessionId，保持它与当前展示的消息一致
+      currentSessionId.value = previousSessionId
+      toast.error('加载会话历史失败：' + e.message)
+    }
   }
 }
 
@@ -246,9 +291,15 @@ async function loadModels() {
 const currentRole = computed(() => roles.value.find(r => r.id === selectedRoleId.value) || null)
 
 // 发送消息（流式）
-async function sendMessage() {
+function sendMessage() {
   const text = inputText.value.trim()
   if (!text || loading.value) return
+
+  stopGeneration()
+
+  // 记录本次请求所属会话，避免切换会话后旧回调越界
+  const requestSessionId = currentSessionId.value
+  const requestId = ++requestSeq
 
   // 添加用户消息
   messages.value.push({ role: 'user', content: text })
@@ -260,49 +311,57 @@ async function sendMessage() {
     role: 'assistant',
     content: '',
     streaming: true,
-    localFallback: false
+    localFallback: false,
+    requestId
   })
   const assistantIndex = messages.value.length - 1
+  const bubble = () => {
+    const item = messages.value[assistantIndex]
+    // 请求号不符或气泡已非流式（停止/完成/出错后）都不再写入
+    return item && item.requestId === requestId && item.streaming ? item : null
+  }
 
   nextTick(scrollToBottom)
 
-  try {
-    await sendMessageStream({
-      sessionId: currentSessionId.value,
-      message: text,
-      roleId: selectedRoleId.value,
-      model: selectedModelId.value
-    }, {
-      onSession: (info) => {
-        if (!currentSessionId.value && info.sessionId) {
-          currentSessionId.value = info.sessionId
-        }
-      },
-      onToken: (token) => {
-        messages.value[assistantIndex].content += token
-        nextTick(scrollToBottom)
-      },
-      onDone: (info) => {
-        messages.value[assistantIndex].streaming = false
-        messages.value[assistantIndex].localFallback = info.localFallback
-        loading.value = false
-        loadSessions()
-      },
-      onError: (msg) => {
-        messages.value[assistantIndex].streaming = false
-        if (!messages.value[assistantIndex].content) {
-          messages.value[assistantIndex].content = `抱歉，出了点问题：${msg}`
-        }
-        loading.value = false
+  currentController = sendMessageStream({
+    sessionId: requestSessionId,
+    message: text,
+    roleId: selectedRoleId.value,
+    model: selectedModelId.value
+  }, {
+    onSession: (info) => {
+      if (bubble() && !requestSessionId && !currentSessionId.value && info?.sessionId) {
+        currentSessionId.value = info.sessionId
       }
-    })
-  } catch (e) {
-    messages.value[assistantIndex].streaming = false
-    if (!messages.value[assistantIndex].content) {
-      messages.value[assistantIndex].content = `抱歉，发送消息时出了点问题：${e.message}`
+    },
+    onToken: (token) => {
+      const target = bubble()
+      if (!target) return
+      target.content += token
+      nextTick(scrollToBottom)
+    },
+    onDone: (info) => {
+      const target = bubble()
+      if (target) {
+        target.streaming = false
+        target.localFallback = info.localFallback
+      }
+      if (requestId !== requestSeq) return
+      loading.value = false
+      currentController = null
+      loadSessions()
+    },
+    onError: (msg) => {
+      const target = bubble()
+      if (target) {
+        target.streaming = false
+        if (!target.content) target.content = `抱歉，出了点问题：${msg}`
+      }
+      if (requestId !== requestSeq) return
+      loading.value = false
+      currentController = null
     }
-    loading.value = false
-  }
+  })
 }
 
 // 快捷消息
@@ -332,6 +391,13 @@ onMounted(() => {
   loadRoles()
   loadModels()
   nextTick(() => inputRef.value?.focus())
+})
+
+onBeforeUnmount(() => {
+  if (currentController && typeof currentController.abort === 'function') {
+    currentController.abort()
+  }
+  currentController = null
 })
 </script>
 
@@ -705,6 +771,10 @@ onMounted(() => {
 }
 
 .send-btn {
+  flex-shrink: 0;
+}
+
+.stop-btn {
   flex-shrink: 0;
 }
 

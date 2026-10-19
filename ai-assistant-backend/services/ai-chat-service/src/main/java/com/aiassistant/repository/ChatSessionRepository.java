@@ -38,4 +38,13 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long>,
      * @return 会话列表；无数据返回空列表
      */
     List<ChatSession> findAllByUserIdAndIdentityOrderByUpdatedAtDesc(Long userId, String identity);
+
+    /**
+     * 统计某用户某身份的会话数
+     *
+     * @param userId   归属用户 ID
+     * @param identity 归属身份（staff/patient）
+     * @return 会话数
+     */
+    long countByUserIdAndIdentity(Long userId, String identity);
 }

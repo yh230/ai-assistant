@@ -21,13 +21,15 @@ import com.registration.mapper.RegistrationMapper;
 import com.registration.mq.RegistrationEventPublisher;
 import com.registration.service.DoctorScheduleService;
 import com.registration.service.NumberSourceService;
+import com.registration.support.ScheduleLock;
 import com.registration.vo.ScheduleVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -57,6 +59,8 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     private final DataScopeResolver dataScopeResolver;
     private final RegistrationMapper registrationMapper;
     private final RegistrationEventPublisher eventPublisher;
+    private final ScheduleLock scheduleLock;
+    private final TransactionTemplate txTemplate;
 
     /**
      * 分页查询出诊排班（按当前登录人数据范围过滤）
@@ -85,73 +89,116 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
 
     @Override
     public ScheduleVO get(Long id) {
-        DoctorSchedule s = scheduleMapper.selectById(id);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(id);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权查看该排班");
         return enrich(List.of(s)).get(0);
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public ScheduleVO save(ScheduleSaveDTO dto) {
+        DataScope scope = dataScopeResolver.resolveRequired();
         UserBriefDTO doctor = loadDoctor(dto.getDoctorUserId());
+        // 医院/科室由医生归属推导后仍需落在操作人范围内（忽略前端传值）
+        scope.assertCanAccess(doctor.getHospitalId(), doctor.getDepartmentId(), doctor.getId(), "无权操作该排班");
         DoctorSchedule s = new DoctorSchedule();
         copyFromDto(s, dto, doctor);
         s.setStatus(1);
         s.setRegisteredCount(0);
         s.setCreateTime(LocalDateTime.now());
         s.setUpdateTime(LocalDateTime.now());
-        scheduleMapper.insert(s);
-        numberSourceService.generateForSchedule(s);
-        return enrich(List.of(s)).get(0);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public ScheduleVO update(Long id, ScheduleSaveDTO dto) {
-        DoctorSchedule s = scheduleMapper.selectById(id);
-        if (s == null) throw new BusinessException("排班不存在");
-        UserBriefDTO doctor = loadDoctor(dto.getDoctorUserId());
-        // 若出诊医生/日期/时段/号源总数变化 → 重生成号源（作废空闲号源，保留占用）
-        boolean scheduleChanged = !Objects.equals(s.getDoctorUserId(), dto.getDoctorUserId())
-                || !Objects.equals(s.getScheduleDate(), dto.getScheduleDate())
-                || !Objects.equals(s.getPeriod(), dto.getPeriod())
-                || !Objects.equals(s.getTotalLimit(), dto.getTotalLimit());
-        copyFromDto(s, dto, doctor);
-        s.setUpdateTime(LocalDateTime.now());
-        scheduleMapper.updateById(s);
-        if (scheduleChanged) {
+        // 号源槽锁：同医生+日期+时段串行化“插入排班 + 生成号源”，锁覆盖事务提交；
+        // 号源再生内部再取排班ID锁（与预约抢号共用），其 REQUIRED 事务加入当前事务。
+        String slotKey = ScheduleLock.SCHEDULE_SLOT_LOCK_PREFIX
+                + s.getDoctorUserId() + ":" + s.getScheduleDate() + ":" + s.getPeriod();
+        return scheduleLock.withLock(slotKey, () -> txTemplate.execute(status -> {
+            try {
+                scheduleMapper.insert(s);
+            } catch (DuplicateKeyException e) {
+                // 并发插入穿透：uk_doctor_active_slot 唯一索引兜底
+                throw new BusinessException("该医生该时段已有排班");
+            }
             numberSourceService.generateForSchedule(s);
-        }
-        return enrich(List.of(s)).get(0);
+            return enrich(List.of(s)).get(0);
+        }));
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    public ScheduleVO update(Long id, ScheduleSaveDTO dto) {
+        // 锁覆盖事务提交：先取锁 → 事务内完成 select + 校验 + 更新 + 号源再生 → 提交 → 释放锁；
+        // 再生对同键重入（Redisson RLock 线程可重入，外层持锁计数保证提交后才真正释放）。
+        DoctorSchedule updated = scheduleLock.withLock(id, () -> txTemplate.execute(status -> {
+            DoctorSchedule s = requireSchedule(id);
+            DataScope scope = dataScopeResolver.resolveRequired();
+            scope.assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
+            UserBriefDTO doctor = loadDoctor(dto.getDoctorUserId());
+            // 改派医生同样不得越出操作人范围
+            scope.assertCanAccess(doctor.getHospitalId(), doctor.getDepartmentId(), doctor.getId(), "无权操作该排班");
+            // 若出诊医生/日期/时段/号源总数变化 → 重生成号源（作废空闲号源，保留占用）
+            boolean scheduleChanged = !Objects.equals(s.getDoctorUserId(), dto.getDoctorUserId())
+                    || !Objects.equals(s.getScheduleDate(), dto.getScheduleDate())
+                    || !Objects.equals(s.getPeriod(), dto.getPeriod())
+                    || !Objects.equals(s.getTotalLimit(), dto.getTotalLimit());
+            copyFromDto(s, dto, doctor);
+            s.setUpdateTime(LocalDateTime.now());
+            try {
+                scheduleMapper.updateById(s);
+            } catch (DuplicateKeyException e) {
+                // 改派/改期撞上 uk_doctor_active_slot：与新增保持一致的友好提示
+                throw new BusinessException("该医生该时段已有排班");
+            }
+            if (scheduleChanged) {
+                numberSourceService.generateForSchedule(s);
+            }
+            return s;
+        }));
+        return enrich(List.of(updated)).get(0);
+    }
+
+    @Override
     public void remove(Long id) {
+        // 与预约抢号共用排班锁：停用与释放空闲号源需原子完成，锁覆盖事务提交
+        scheduleLock.withLock(id, () -> txTemplate.execute(status -> {
+            DoctorSchedule s = requireSchedule(id);
+            dataScopeResolver.resolveRequired()
+                    .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
+            // 停用排班
+            s.setStatus(0);
+            s.setUpdateTime(LocalDateTime.now());
+            scheduleMapper.updateById(s);
+            // 释放该排班下空闲号源（占用中的保留，待退号/过期再回收）
+            numberSourceMapper.delete(new LambdaQueryWrapper<com.registration.entity.NumberSource>()
+                    .eq(com.registration.entity.NumberSource::getScheduleId, id)
+                    .eq(com.registration.entity.NumberSource::getStatus, 1));
+            // 停诊通知：对该排班下仍有效（已预约/已取号）的挂号单逐条发布事件（事务提交后发送）
+            List<Registration> affected = registrationMapper.selectList(new LambdaQueryWrapper<Registration>()
+                    .eq(Registration::getScheduleId, id)
+                    .in(Registration::getStatus,
+                            RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
+            eventPublisher.publishScheduleCancelled(s, affected);
+            return null;
+        }));
+    }
+
+    @Override
+    public void generateSources(Long scheduleId) {
+        // 校验在锁外只读完成；实际再生由 generateForSchedule 内部取排班锁并用 TransactionTemplate 提交
+        DoctorSchedule s = requireSchedule(scheduleId);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权操作该排班");
+        numberSourceService.generateForSchedule(s);
+    }
+
+    /**
+     * 按 ID 查询排班，不存在时抛出业务异常
+     *
+     * @param id 排班 ID
+     * @return 排班实体
+     */
+    private DoctorSchedule requireSchedule(Long id) {
         DoctorSchedule s = scheduleMapper.selectById(id);
         if (s == null) throw new BusinessException("排班不存在");
-        // 停用排班
-        s.setStatus(0);
-        s.setUpdateTime(LocalDateTime.now());
-        scheduleMapper.updateById(s);
-        // 释放该排班下空闲号源（占用中的保留，待退号/过期再回收）
-        numberSourceMapper.delete(new LambdaQueryWrapper<com.registration.entity.NumberSource>()
-                .eq(com.registration.entity.NumberSource::getScheduleId, id)
-                .eq(com.registration.entity.NumberSource::getStatus, 1));
-        // 停诊通知：对该排班下仍有效（已预约/已取号）的挂号单逐条发布事件（事务提交后发送）
-        List<Registration> affected = registrationMapper.selectList(new LambdaQueryWrapper<Registration>()
-                .eq(Registration::getScheduleId, id)
-                .in(Registration::getStatus,
-                        RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
-        eventPublisher.publishScheduleCancelled(s, affected);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void generateSources(Long scheduleId) {
-        DoctorSchedule s = scheduleMapper.selectById(scheduleId);
-        if (s == null) throw new BusinessException("排班不存在");
-        numberSourceService.generateForSchedule(s);
+        return s;
     }
 
     @Override

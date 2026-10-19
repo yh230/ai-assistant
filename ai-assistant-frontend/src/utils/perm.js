@@ -16,7 +16,8 @@ export const PERMS = {
   REGISTRATION_REGISTER_TAKE: 'registration:register:take', // 挂号-取号
   REGISTRATION_REGISTER_REFUND: 'registration:register:refund', // 挂号-退号
   REGISTRATION_REGISTER_TREAT: 'registration:register:treat', // 挂号-就诊
-  HOSPITAL_ATTENDANCE_EDIT: 'hospital:attendance:edit' // 出勤-编辑
+  HOSPITAL_ATTENDANCE_EDIT: 'hospital:attendance:edit', // 出勤-编辑
+  AI_ROLE_MANAGE: 'ai:role:manage', // AI 人设管理
 }
 
 /**

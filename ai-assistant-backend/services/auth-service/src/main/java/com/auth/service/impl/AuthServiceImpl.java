@@ -200,11 +200,11 @@ public class AuthServiceImpl implements AuthService {
     public LoginVO refresh(String refreshToken) {
         RefreshTokenStore.RefreshTokenInfo info = refreshTokenStore.consume(refreshToken);
         if (info == null) {
-            throw new BusinessException("登录已过期，请重新登录");
+            throw new BusinessException(401, "登录已过期，请重新登录");
         }
         long kickedAt = tokenRevocationService.kickoutAt(info.identity(), info.userId());
         if (kickedAt != 0 && info.issuedAtMillis() <= kickedAt) {
-            throw new BusinessException("登录已过期，请重新登录");
+            throw new BusinessException(401, "登录已过期，请重新登录");
         }
         LoginVO vo = new LoginVO();
         vo.setToken(jwtTokenService.issue(info.userId(), info.identity()));
@@ -254,6 +254,7 @@ public class AuthServiceImpl implements AuthService {
         }
         vo.setRoles(snapshot.getRoles());
         vo.setPermissions(snapshot.getPerms());
+        vo.setHospitalId(snapshot.getHospitalId());
         vo.setMenus(info != null ? info.getMenus() : null);
         return vo;
     }

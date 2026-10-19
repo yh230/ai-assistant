@@ -30,5 +30,6 @@ export function getRoleMenus(id) {
 
 // 用于用户表单的角色下拉（一次拉全量）
 export function listAllRoles() {
-  return pageRoles({ pageNum: 1, pageSize: 1000 })
+  // 全局分页上限 100
+  return pageRoles({ pageNum: 1, pageSize: 100 })
 }

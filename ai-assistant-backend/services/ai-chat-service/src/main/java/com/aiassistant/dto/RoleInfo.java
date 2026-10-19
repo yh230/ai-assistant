@@ -16,7 +16,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class RoleInfo {
 
-    /** 角色ID，对应配置 ai.assistant.roles 的 key */
+    /** 角色ID（数据库 ai_role.id） */
     private String id;
 
     /** 角色名称，如「聊天伙伴」 */

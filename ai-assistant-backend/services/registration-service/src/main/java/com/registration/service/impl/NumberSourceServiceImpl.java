@@ -12,12 +12,13 @@ import com.registration.enums.Period;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
 import com.registration.service.NumberSourceService;
+import com.registration.support.ScheduleLock;
 import com.registration.vo.NumberSourceVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -43,10 +44,13 @@ public class NumberSourceServiceImpl implements NumberSourceService {
     private final DoctorScheduleMapper scheduleMapper;
     private final UserClient userClient;
     private final DataScopeResolver dataScopeResolver;
+    private final ScheduleLock scheduleLock;
+    private final TransactionTemplate txTemplate;
 
     /**
      * 查询号源池列表（按当前登录人数据范围过滤）
      *
+     * @param hospitalId 医院 ID（可空；内部调用按院约束）
      * @param doctorUserId 医生用户 ID（可空）
      * @param departmentId 科室 ID（可空）
      * @param date 出诊日期（可空）
@@ -54,10 +58,11 @@ public class NumberSourceServiceImpl implements NumberSourceService {
      * @return 号源池列表
      */
     @Override
-    public List<NumberSourceVO> listPools(Long doctorUserId, Long departmentId, LocalDate date, Integer period) {
+    public List<NumberSourceVO> listPools(Long hospitalId, Long doctorUserId, Long departmentId, LocalDate date, Integer period) {
         DataScope scope = dataScopeResolver.resolve();
         LambdaQueryWrapper<DoctorSchedule> qw = new LambdaQueryWrapper<>();
         scope.applyTo(qw, DoctorSchedule::getHospitalId, DoctorSchedule::getDepartmentId, DoctorSchedule::getDoctorUserId);
+        if (hospitalId != null) qw.eq(DoctorSchedule::getHospitalId, hospitalId);
         if (scope.isAll() && departmentId != null) qw.eq(DoctorSchedule::getDepartmentId, departmentId);
         if (doctorUserId != null) qw.eq(DoctorSchedule::getDoctorUserId, doctorUserId);
         if (date != null) qw.eq(DoctorSchedule::getScheduleDate, date);
@@ -86,8 +91,9 @@ public class NumberSourceServiceImpl implements NumberSourceService {
 
     @Override
     public NumberSourceVO detail(Long scheduleId) {
-        DoctorSchedule s = scheduleMapper.selectById(scheduleId);
-        if (s == null) throw new BusinessException("排班不存在");
+        DoctorSchedule s = requireSchedule(scheduleId);
+        dataScopeResolver.resolveRequired()
+                .assertCanAccess(s.getHospitalId(), s.getDepartmentId(), s.getDoctorUserId(), "无权查看该号源");
         List<NumberSource> sources = numberSourceMapper.selectList(
                 new LambdaQueryWrapper<NumberSource>().eq(NumberSource::getScheduleId, scheduleId)
                         .orderByAsc(NumberSource::getSeqNo));
@@ -95,9 +101,36 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         return buildPool(s, sources, uNames);
     }
 
+    /**
+     * 按 ID 查询排班，不存在时抛出业务异常
+     *
+     * @param scheduleId 排班 ID
+     * @return 排班实体
+     */
+    private DoctorSchedule requireSchedule(Long scheduleId) {
+        DoctorSchedule s = scheduleMapper.selectById(scheduleId);
+        if (s == null) throw new BusinessException("排班不存在");
+        return s;
+    }
+
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void generateForSchedule(DoctorSchedule schedule) {
+        // 与预约抢号共用排班锁，避免重生成按旧快照算 maxSeq 后与并发占号互相覆盖。
+        // 锁必须覆盖事务提交：事务由 TransactionTemplate 在锁内开启/提交，提交后才释放锁；
+        // 若在外层事务中调用（save/update），内层 REQUIRED 直接加入同一事务，仍由外层锁兜底。
+        scheduleLock.withLock(schedule.getId(), () ->
+                txTemplate.execute(status -> {
+                    doGenerateForSchedule(schedule);
+                    return null;
+                }));
+    }
+
+    /**
+     * 实际重生成逻辑（调用方须已持有排班锁）
+     *
+     * @param schedule 排班
+     */
+    private void doGenerateForSchedule(DoctorSchedule schedule) {
         if (schedule.getTotalLimit() == null || schedule.getTotalLimit() <= 0) {
             return; // 无号源总数，不生成
         }

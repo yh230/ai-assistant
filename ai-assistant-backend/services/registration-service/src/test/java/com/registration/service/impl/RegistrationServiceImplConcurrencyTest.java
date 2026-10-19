@@ -24,6 +24,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.transaction.TransactionStatus;
@@ -44,6 +45,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -104,6 +106,10 @@ class RegistrationServiceImplConcurrencyTest {
 
         RLock scheduleLock = lockByKey.computeIfAbsent("lock:schedule:1", k -> mock(RLock.class));
         when(scheduleLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+        // 匿名路径新增幂等键占位：键写入成功后才进入加锁分支
+        RBucket<String> bucket = mock(RBucket.class);
+        doReturn(bucket).when(redissonClient).getBucket(anyString());
+        when(bucket.trySet(anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
 
         AppointmentCreateDTO dto = new AppointmentCreateDTO();
         dto.setDoctorUserId(10L);

@@ -3,6 +3,7 @@
 -- 执行：mysql -uroot -p < sql/init.sql
 -- 可重复执行（CREATE DATABASE/TABLE IF NOT EXISTS）；全新环境执行一次即建好全部表。
 -- 角色/菜单/演示数据由各服务首次启动时的 Seeder 播种，本脚本只建结构。
+-- 存量库升级请执行 sql/upgrade-2026-10-19-hardening.sql（幂等，与下列结构一致）。
 -- =============================================================
 
 -- =============================================================
@@ -187,10 +188,12 @@ CREATE TABLE IF NOT EXISTS doctor_schedule (
   registered_count INT          NOT NULL DEFAULT 0 COMMENT '已挂号数（冗余，便于统计/余量计算）',
   status           TINYINT      NOT NULL DEFAULT 1 COMMENT '状态 1=启用 0=停用/作废',
   remark           VARCHAR(255) DEFAULT NULL COMMENT '备注',
+  active_slot      VARCHAR(128) GENERATED ALWAYS AS (IF(status = 1, CONCAT(doctor_user_id, '-', schedule_date, '-', period), NULL)) STORED COMMENT '启用排班唯一槽位（停用为 NULL）',
   create_time      DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   update_time      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_schedule (doctor_user_id, schedule_date, period),
+  UNIQUE KEY uk_doctor_active_slot (active_slot),
+  KEY idx_doctor_date (doctor_user_id, schedule_date),
   KEY idx_hospital (hospital_id),
   KEY idx_dept (department_id),
   KEY idx_date (schedule_date)
@@ -211,7 +214,8 @@ CREATE TABLE IF NOT EXISTS number_source (
   PRIMARY KEY (id),
   KEY idx_schedule (schedule_id),
   KEY idx_doctor_date (doctor_user_id, schedule_date, period),
-  KEY idx_hospital (hospital_id)
+  KEY idx_hospital (hospital_id),
+  UNIQUE KEY uk_schedule_seq (schedule_id, seq_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='号源池';
 
 CREATE TABLE IF NOT EXISTS registration (
@@ -239,16 +243,20 @@ CREATE TABLE IF NOT EXISTS registration (
   refund_amount    DECIMAL(10,2) DEFAULT NULL COMMENT '退款金额',
   refund_time      DATETIME      DEFAULT NULL COMMENT '退款时间',
   remark           VARCHAR(255)  DEFAULT NULL COMMENT '备注',
+  idempotency_key  VARCHAR(64)   DEFAULT NULL COMMENT '匿名预约幂等键（无键为 NULL，唯一索引允许多 NULL）',
   create_time      DATETIME      DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   update_time      DATETIME      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_reg_no (registration_no),
+  UNIQUE KEY uk_registration_idem (idempotency_key),
   KEY idx_hospital (hospital_id),
   KEY idx_dept (department_id),
   KEY idx_doctor_date (doctor_user_id, schedule_date),
   KEY idx_phone (patient_phone),
   KEY idx_status (status),
-  KEY idx_registration_patient (patient_id)
+  KEY idx_registration_patient (patient_id),
+  KEY idx_expire_status (expire_time, status),
+  KEY idx_patient_day (patient_phone, patient_id_card, schedule_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='挂号/预约/取号记录（状态机核心）';
 
 -- =============================================================
@@ -264,11 +272,15 @@ CREATE TABLE IF NOT EXISTS ai_role (
   avatar        VARCHAR(16)  DEFAULT NULL COMMENT '角色图标（emoji）',
   description   VARCHAR(255) DEFAULT NULL COMMENT '角色简介',
   system_prompt TEXT         NOT NULL COMMENT '系统提示词（人设与行为规范）',
+  scope         VARCHAR(10)  NOT NULL DEFAULT 'STAFF' COMMENT '角色域：STAFF-员工/PATIENT-患者',
+  session_type  VARCHAR(10)  DEFAULT NULL COMMENT '患者会话类型：CHAT/TRIAGE/RAG（员工角色为空）',
+  hospital_id   BIGINT       DEFAULT NULL COMMENT '所属医院ID（患者角色必填；员工角色为空=全局）',
   sort_order    INT          DEFAULT NULL COMMENT '展示排序（越小越靠前）',
   enabled       TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
   created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at    DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_ai_role_scope (scope, hospital_id, session_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 助手角色';
 
 CREATE TABLE IF NOT EXISTS chat_session (
@@ -279,6 +291,9 @@ CREATE TABLE IF NOT EXISTS chat_session (
   identity     VARCHAR(10)  DEFAULT NULL COMMENT '归属身份：staff/patient',
   session_type VARCHAR(10)  DEFAULT NULL COMMENT '会话类型：CHAT=闲聊/TRIAGE=导诊/RAG=知识库',
   hospital_id  BIGINT       DEFAULT NULL COMMENT '归属医院ID（管理端数据权限过滤）',
+  role_id      VARCHAR(32)  DEFAULT NULL COMMENT '会话绑定的人设ID',
+  summary            TEXT         DEFAULT NULL COMMENT '历史消息摘要',
+  summary_updated_at DATETIME     DEFAULT NULL COMMENT '摘要更新时间',
   created_at   DATETIME     DEFAULT NULL COMMENT '创建时间',
   updated_at   DATETIME     DEFAULT NULL COMMENT '更新时间',
   PRIMARY KEY (id),
@@ -293,7 +308,8 @@ CREATE TABLE IF NOT EXISTS chat_message (
   reference_json TEXT        DEFAULT NULL COMMENT '引用来源 JSON（RAG 回答的知识库来源；无来源为 NULL）',
   created_at     DATETIME    DEFAULT NULL COMMENT '创建时间',
   PRIMARY KEY (id),
-  KEY idx_chat_message_session (session_id)
+  KEY idx_chat_message_session (session_id),
+  KEY idx_session_created (session_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 聊天消息';
 
 CREATE TABLE IF NOT EXISTS knowledge_document (
@@ -304,11 +320,13 @@ CREATE TABLE IF NOT EXISTS knowledge_document (
   size        BIGINT       DEFAULT NULL COMMENT '文件大小（字节）',
   chunk_count INT          DEFAULT NULL COMMENT '切片数量',
   status      INT          NOT NULL DEFAULT 0 COMMENT '处理状态：0-处理中（待切片向量化），1-就绪',
+  error_msg   VARCHAR(500) DEFAULT '' COMMENT '处理失败原因',
   content     LONGTEXT     DEFAULT NULL COMMENT '文档全文（删除重建向量用）',
   create_by   BIGINT       DEFAULT NULL COMMENT '上传人（员工用户ID）',
   create_time DATETIME     DEFAULT NULL COMMENT '上传时间',
   PRIMARY KEY (id),
-  KEY idx_knowledge_hospital (hospital_id)
+  KEY idx_knowledge_hospital (hospital_id),
+  KEY idx_hospital_status (hospital_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库文档';
 
 CREATE TABLE IF NOT EXISTS pending_action (

@@ -5,11 +5,22 @@ const KEY_USER = 'patient_user'
 const KEY_REFRESH = 'patient_refresh_token'
 
 /**
+ * 读取缓存的用户信息：损坏的 JSON 按未登录处理（返回 null）
+ */
+function parseUser() {
+  try {
+    return JSON.parse(localStorage.getItem(KEY_USER) || 'null')
+  } catch {
+    return null
+  }
+}
+
+/**
  * 患者登录态（独立于员工 auth store，localStorage key 亦独立）
  */
 export const patientAuth = reactive({
   token: localStorage.getItem(KEY_TOKEN) || '',
-  user: JSON.parse(localStorage.getItem(KEY_USER) || 'null'),
+  user: parseUser(),
   refreshToken: localStorage.getItem(KEY_REFRESH) || ''
 })
 

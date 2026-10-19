@@ -93,6 +93,23 @@ cd ai-assistant-e2e
 
 Run: `scripts\run-e2e.bat tests\test_sms_qr_login.py -v`（或 `-k "sms or qr"`）
 
+## 租户校验（P0-A）
+
+AI 发起的预约挂号由挂号服务端做租户强校验：排班所属医院必须等于患者所属医院。
+
+- **无法通过产品界面构造跨院预约**：导诊工具（科室/号源）按登录患者医院作用域返回，模型不会得到他院 `doctorUserId`；因此跨院拒绝以**单元测试**覆盖（`RegistrationServiceImplTenantCheckTest`）。
+- **回归**：既有 `test_03_registration.py`（导诊→预约→确认）必须保持通过，验证同院正常链路未受影响。
+- 匿名自助预约（`/api/registration/appointments`）不校验，行为不变。
+
+## AI 角色库化（员工/患者双域）
+
+- 员工角色：`GET /api/roles/admin?scope=STAFF`（全局）。
+- 患者角色：`GET /api/roles/admin?scope=PATIENT&hospitalId=<id>`；已绑院账号强制使用本人医院；未绑院管理员（如平台管理员）必须显式传 `hospitalId`，管理端页面提供医院选择器。
+- 权限：`ai:role:manage`（system-service 启动时幂等播种）；缺失时普通员工返回 403。
+- 患者角色由管理端患者列表幂等补齐三类默认人设（`pat_<hospitalId>_<CHAT|TRIAGE|RAG>`），首次打开列表即可见；患者聊天时也会按需惰性建库。Nacos `ai.prompt.*` 仅作模板与兜底。
+
+> 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。患者域用例直接 GET 列表断言三类默认角色；提示词更新用例写回后会在 `finally` 中还原原提示词（仅在成功捕获原提示词时执行）。
+
 ## 不覆盖范围
 
 - 前端浏览器行为（localStorage、确认弹窗 UI、停止按钮）与 Playwright UI 测试

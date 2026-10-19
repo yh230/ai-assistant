@@ -3,6 +3,7 @@
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="topbar-brand">
+        <el-button class="mobile-menu-btn" :icon="Menu" circle text title="会话列表" @click="sidebarOpen = !sidebarOpen" />
         <span class="brand-badge">医</span>
         <div class="brand-text">
           <div class="brand-name">AI 医院助手</div>
@@ -21,8 +22,11 @@
     </header>
 
     <div class="chat-body">
-      <!-- 会话侧边栏 -->
-      <div class="session-panel">
+      <!-- 移动端抽屉遮罩 -->
+      <div v-if="isMobile && sidebarOpen" class="session-mask" @click="sidebarOpen = false"></div>
+
+      <!-- 会话侧边栏（≤768px 为抽屉） -->
+      <div class="session-panel" :class="{ open: sidebarOpen }">
         <div class="session-header">
           <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu">新对话</el-button>
           <div v-if="showTypeMenu" class="type-menu">
@@ -147,7 +151,7 @@
     </el-dialog>
 
     <!-- 通知抽屉（站内信） -->
-    <el-drawer v-model="notifyVisible" title="我的通知" size="360px">
+    <el-drawer v-model="notifyVisible" title="我的通知" :size="isMobile ? '100%' : '360px'">
       <div class="notify-actions">
         <el-button size="small" text :disabled="unreadCount === 0" @click="markAllRead">全部已读</el-button>
       </div>
@@ -168,7 +172,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Close, ChatDotRound, Position, VideoPause, Bell } from '@element-plus/icons-vue'
+import { Plus, Close, ChatDotRound, Position, VideoPause, Bell, Menu } from '@element-plus/icons-vue'
 import { patientAuth, clearPatientAuth } from '../../store/patientAuth'
 import {
   patientSessions,
@@ -214,6 +218,18 @@ const confirmLoading = ref(false)
 const inputRef = ref(null)
 const messageListRef = ref(null)
 let currentController = null
+// 历史加载请求序号：切换/新建会话时自增，慢响应返回后序号不一致则丢弃，避免覆盖新会话
+let historySeq = 0
+
+// 移动端（≤768px）会话抽屉
+const mediaQuery = window.matchMedia('(max-width: 768px)')
+const isMobile = ref(mediaQuery.matches)
+const sidebarOpen = ref(false)
+
+function onMediaChange(event) {
+  isMobile.value = event.matches
+  if (!event.matches) sidebarOpen.value = false
+}
 
 // 通知（站内信）状态
 const unreadCount = ref(0)
@@ -292,6 +308,8 @@ function onDocumentClick(e) {
 async function createSession(type) {
   showTypeMenu.value = false
   if (loading.value) return
+  // 新建会话即作废在途的历史加载，防止旧会话响应覆盖新对话
+  historySeq += 1
   try {
     const res = await createPatientSession(type)
     currentSessionId.value = res.sessionId
@@ -300,6 +318,7 @@ async function createSession(type) {
     inputText.value = ''
     await loadSessions()
     nextTick(() => inputRef.value?.focus())
+    if (isMobile.value) sidebarOpen.value = false
   } catch (e) {
     msg('新建会话失败：' + e.message)
   }
@@ -308,19 +327,27 @@ async function createSession(type) {
 // 加载会话历史
 async function loadSession(s) {
   if (loading.value) return
-  if (currentSessionId.value === s.sessionId) return
+  if (currentSessionId.value === s.sessionId) {
+    if (isMobile.value) sidebarOpen.value = false
+    return
+  }
+  const seq = ++historySeq
   try {
     currentSessionId.value = s.sessionId
     currentSessionType.value = s.sessionType || 'CHAT'
     const data = await patientHistory(s.sessionId)
+    // 期间已切换/新建/重置会话：丢弃过期响应，避免覆盖当前对话
+    if (seq !== historySeq) return
     messages.value = (data.messages || []).map(m => ({
       role: m.role,
       content: m.content,
       createdAt: m.createdAt,
       references: parseReferences(m.referenceJson)
     }))
+    if (isMobile.value) sidebarOpen.value = false
     nextTick(scrollToBottom)
   } catch (e) {
+    if (seq !== historySeq) return
     msg('加载会话历史失败：' + e.message)
   }
 }
@@ -352,6 +379,8 @@ function parseReferences(raw) {
 }
 
 function resetCurrentSession() {
+  // 重置会话同样作废在途的历史加载
+  historySeq += 1
   currentSessionId.value = null
   currentSessionType.value = 'CHAT'
   messages.value = []
@@ -362,12 +391,20 @@ function sendMessage() {
   const text = inputText.value.trim()
   if (!text || loading.value) return
 
+  // 发送即作废在途的历史加载：服务端可能回显同一 sessionId（不会进入 onSession 的自增分支），
+  // 若不作废，迟到的历史响应会覆盖本次乐观插入的用户消息与流式气泡
+  historySeq += 1
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
 
   // 预先创建一条空的 assistant 消息，用于流式追加内容
   messages.value.push({ role: 'assistant', content: '', streaming: true, references: [] })
   const assistantIndex = messages.value.length - 1
+  // 仅当该索引仍指向本次的流式气泡时才允许写入（防止迟到回调写到别的气泡或越界）
+  const streamTarget = () => {
+    const item = messages.value[assistantIndex]
+    return item && item.role === 'assistant' && item.streaming ? item : null
+  }
   loading.value = true
   nextTick(scrollToBottom)
 
@@ -376,20 +413,25 @@ function sendMessage() {
     {
       onSession: (info) => {
         if (info && info.sessionId) {
+          // 服务端新建了会话：作废在途的历史加载，避免旧响应覆盖新对话
+          if (currentSessionId.value !== info.sessionId) historySeq += 1
           currentSessionId.value = info.sessionId
           loadSessions()
         }
       },
       onToken: (token) => {
-        messages.value[assistantIndex].content += token
+        const target = streamTarget()
+        if (!target) return
+        target.content += token
         nextTick(scrollToBottom)
       },
       onConfirm: (info) => {
         pendingConfirm.value = info
       },
       onReferences: (refs) => {
-        if (Array.isArray(refs)) {
-          messages.value[assistantIndex].references = refs
+        const target = streamTarget()
+        if (target && Array.isArray(refs)) {
+          target.references = refs
         }
       },
       onDone: () => {
@@ -411,8 +453,10 @@ function sendQuickMessage(text) {
 }
 
 function finishStreaming(index) {
-  if (index >= 0 && messages.value[index]) {
-    messages.value[index].streaming = false
+  const item = index >= 0 ? messages.value[index] : null
+  // 仅当仍指向本次的流式气泡时才收尾，避免迟到回调影响到别的消息
+  if (item && item.role === 'assistant' && item.streaming) {
+    item.streaming = false
   }
   loading.value = false
   currentController = null
@@ -421,7 +465,7 @@ function finishStreaming(index) {
 // 出错：空占位气泡移除，错误文案以系统消息样式展示
 function failStreaming(index, message) {
   const item = index >= 0 ? messages.value[index] : null
-  if (item && item.role === 'assistant') {
+  if (item && item.role === 'assistant' && item.streaming) {
     if (!item.content) {
       messages.value.splice(index, 1)
     } else {
@@ -595,11 +639,13 @@ onMounted(() => {
   loadSessions()
   loadUnread()
   document.addEventListener('click', onDocumentClick)
+  mediaQuery.addEventListener('change', onMediaChange)
   nextTick(() => inputRef.value?.focus())
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick)
+  mediaQuery.removeEventListener('change', onMediaChange)
   if (currentController) currentController.abort()
 })
 </script>
@@ -1145,5 +1191,70 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 6px;
+}
+
+/* 移动端会话抽屉（≤768px） */
+.mobile-menu-btn {
+  display: none;
+  flex-shrink: 0;
+}
+
+.session-mask {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .patient-chat {
+    height: 100dvh;
+  }
+
+  .mobile-menu-btn {
+    display: inline-flex;
+  }
+
+  .topbar {
+    padding: 8px 12px;
+  }
+
+  .brand-sub,
+  .user-phone {
+    display: none;
+  }
+
+  .session-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(15, 23, 42, 0.35);
+  }
+
+  .session-panel {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 82vw;
+    max-width: 320px;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .session-panel.open {
+    transform: translateX(0);
+  }
+
+  .chat-area {
+    width: 100%;
+  }
+
+  .message-list {
+    padding: 16px 12px;
+  }
+
+  .input-area {
+    padding: 8px 12px 12px;
+  }
 }
 </style>
