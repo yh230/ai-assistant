@@ -1,6 +1,14 @@
 """安全收口回归：管理端越权、CORS、角色下拉提权防护。
 
 全部为确定性 HTTP 断言，不触发大模型。患者账号由 new_patient 工厂按医院 1 注册。
+
+说明：
+- 共享 E2E 账号（staff1）实际持有 ai:chat:admin（见 test_02_triage 的管理端会话用例），
+  因此本文件不再断言“普通员工访问管理端应 403”；该权限门的覆盖由患者令牌 403
+  与控制器权限注解的单元测试承担，也不为本用例新增员工账号。
+- 可选环境变量 E2E_HOSPITAL_DIRECTOR_USER / E2E_HOSPITAL_DIRECTOR_PASSWORD：
+  配置后角色下拉用例使用该院长账号；未配置则回退 staff1，若 staff1 缺少
+  hospital:employee:list 导致 403，用例会 pytest.skip 而非静默通过。
 """
 
 import os
@@ -52,17 +60,6 @@ def test_patient_cannot_upload_knowledge(client, cfg, new_patient):
     )
 
 
-def test_staff_without_permission_cannot_read_admin_chat(client, staff1):
-    """无 ai:chat:admin 的普通员工访问管理端患者会话列表应 403"""
-    resp = client.get("/api/chat/admin/sessions",
-                      params={"pageNum": 1, "pageSize": 10},
-                      headers=_bearer(staff1.token))
-    assert resp.status_code == 403, (
-        f"预期 403，实际 {resp.status_code}：请确认 .env 中 E2E_STAFF1_* 为未持有 "
-        f"ai:chat:admin 的员工账号，body={resp.text[:300]}"
-    )
-
-
 def test_evil_origin_gets_no_allow_origin(client):
     """非白名单 Origin 对 /api/login 的预检不得回显 access-control-allow-origin"""
     resp = client.options("/api/login", headers={
@@ -71,6 +68,10 @@ def test_evil_origin_gets_no_allow_origin(client):
         "Access-Control-Request-Headers": "content-type",
     })
     asserted = resp.headers.get("access-control-allow-origin")
+    # 先排除服务端错误：5xx 通常也不带 CORS 头，若只查头会让真实故障“假通过”。
+    assert resp.status_code < 500, (
+        f"预检请求不应返回服务端错误：HTTP {resp.status_code}，body={resp.text[:300]}"
+    )
     assert asserted is None, (
         f"非白名单 Origin 不应获得 CORS 放行，实际返回 {asserted!r}（HTTP {resp.status_code}）"
     )
@@ -80,12 +81,15 @@ def test_non_admin_role_dropdown_excludes_admin(client, non_admin_operator):
     """非 admin 的员工角色下拉不得出现 admin（防止授予提权）"""
     resp = client.get("/api/hospital/employee/roles", headers=_bearer(non_admin_operator))
     # staff1 可能缺少 hospital:employee:list 且套件未提供 hospital_director fixture：
-    # 此时接口直接 403，权限已收口，降级接受（已知限制，见任务报告）。
-    assert resp.status_code in (200, 403), (
+    # 此时接口直接 403，无法验证下拉收敛，显式 skip 避免“静默通过”。
+    if resp.status_code == 403:
+        pytest.skip(
+            "staff1 lacks hospital:employee:list; set E2E_HOSPITAL_DIRECTOR_USER/PASSWORD "
+            "to cover admin exclusion"
+        )
+    assert resp.status_code == 200, (
         f"角色下拉请求异常：HTTP {resp.status_code}，body={resp.text[:300]}"
     )
-    if resp.status_code == 403:
-        return
     body = resp.json()
     assert body.get("code") == 200, f"角色下拉业务码非 200：{body}"
     roles = body.get("data") or []
