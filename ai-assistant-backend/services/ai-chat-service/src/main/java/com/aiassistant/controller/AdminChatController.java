@@ -7,6 +7,7 @@ import com.common.result.PageResult;
 import com.common.result.Result;
 import com.common.security.operlog.OperLog;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -30,6 +31,7 @@ public class AdminChatController {
      * @param pageSize    每页大小
      * @return 患者会话分页数据
      */
+    @PreAuthorize("hasAuthority('ai:chat:admin')")
     @GetMapping("/sessions")
     public Result<PageResult<AdminSessionDTO>> sessions(@RequestParam(required = false) String sessionType,
                                                         @RequestParam(defaultValue = "1") long pageNum,
@@ -43,6 +45,7 @@ public class AdminChatController {
      * @param sessionId 会话标识
      * @return 会话消息历史
      */
+    @PreAuthorize("hasAuthority('ai:chat:admin')")
     @OperLog(module = "患者会话", action = "调阅会话历史")
     @GetMapping("/sessions/{sessionId}/history")
     public Result<ChatResponse> history(@PathVariable String sessionId) {

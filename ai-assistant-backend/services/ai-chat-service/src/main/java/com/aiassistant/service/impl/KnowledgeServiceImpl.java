@@ -7,6 +7,7 @@ import com.aiassistant.rag.KnowledgeVectorStore;
 import com.aiassistant.repository.KnowledgeDocumentRepository;
 import com.aiassistant.service.KnowledgeService;
 import com.common.auth.UserSnapshot;
+import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
 import com.common.security.SecurityUtils;
@@ -130,13 +131,16 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     }
 
     /**
-     * 取当前员工快照，医院未绑定则拒绝知识库操作
+     * 取当前员工快照，非员工身份或医院未绑定则拒绝知识库操作
      *
      * @return 已绑定医院的当前用户快照
      */
     private UserSnapshot currentStaffWithHospital() {
         UserSnapshot user = SecurityUtils.currentSnapshot();
-        if (user == null || user.getHospitalId() == null) {
+        if (user == null || !SecurityConstants.IDENTITY_STAFF.equals(user.getIdentity())) {
+            throw new BusinessException("无权访问管理端接口");
+        }
+        if (user.getHospitalId() == null) {
             throw new BusinessException("当前账号未绑定医院，无法管理知识库");
         }
         return user;

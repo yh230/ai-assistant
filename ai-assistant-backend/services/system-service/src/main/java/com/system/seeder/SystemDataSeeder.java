@@ -77,6 +77,8 @@ public class SystemDataSeeder implements CommandLineRunner {
         ensureHospitalModule();
         // 门诊挂号取号模块的固定角色与菜单播种
         ensureRegistrationModule();
+        // AI 管理端权限播种（患者会话/知识库），幂等补齐
+        ensureAiAdminPermissions();
     }
 
     /**
@@ -154,6 +156,66 @@ public class SystemDataSeeder implements CommandLineRunner {
         }
         button(parent.getId(), "AI 人设管理", "ai:role:manage", 11);
         log.info("AI 人设管理权限已播种");
+    }
+
+    /**
+     * 播种 AI 管理端权限（患者会话 / 知识库），并授予管理员、院长、门诊管理员角色。
+     * <p>
+     * 权限菜单按 perms 幂等复用；角色关联仅追加缺失项，不覆盖已有分配。
+     */
+    private void ensureAiAdminPermissions() {
+        SysMenu parent = menuMapper.selectOne(new LambdaQueryWrapper<SysMenu>()
+                .eq(SysMenu::getMenuName, "系统管理")
+                .eq(SysMenu::getParentId, 0L)
+                .last("LIMIT 1"));
+        if (parent == null) {
+            log.warn("未找到「系统管理」菜单，跳过 AI 管理权限播种");
+            return;
+        }
+        Long chat = ensureButton(parent.getId(), "患者会话管理", "ai:chat:admin", 20);
+        Long knowledge = ensureButton(parent.getId(), "知识库管理", "ai:knowledge:manage", 21);
+        grantToRole(RoleConstants.ADMIN, chat, knowledge);
+        grantToRole(RoleConstants.HOSPITAL_DIRECTOR, chat, knowledge);
+        grantToRole(RoleConstants.CLINIC_ADMIN, chat, knowledge);
+    }
+
+    /**
+     * 按权限标识取按钮菜单，不存在则创建
+     *
+     * @param parentId 父菜单 ID
+     * @param name     菜单名称
+     * @param perms    权限标识
+     * @param sort     排序
+     * @return 按钮菜单 ID
+     */
+    private Long ensureButton(Long parentId, String name, String perms, int sort) {
+        SysMenu existing = menuMapper.selectOne(new LambdaQueryWrapper<SysMenu>()
+                .eq(SysMenu::getPerms, perms).last("LIMIT 1"));
+        if (existing != null) {
+            return existing.getId();
+        }
+        return button(parentId, name, perms, sort);
+    }
+
+    /**
+     * 为角色追加缺失的菜单权限，已有分配不覆盖
+     *
+     * @param roleCode 角色编码
+     * @param menuIds  待关联的菜单 ID
+     */
+    private void grantToRole(String roleCode, Long... menuIds) {
+        SysRole role = roleMapper.selectOne(new LambdaQueryWrapper<SysRole>()
+                .eq(SysRole::getRoleCode, roleCode).last("LIMIT 1"));
+        if (role == null) {
+            return;
+        }
+        Set<Long> linked = roleMenuMapper.listByRoleId(role.getId()).stream()
+                .map(SysRoleMenu::getMenuId).collect(Collectors.toSet());
+        for (Long menuId : menuIds) {
+            if (menuId != null && linked.add(menuId)) {
+                roleMenuMapper.insertRelation(role.getId(), menuId);
+            }
+        }
     }
 
     private Long ensureAdminUser() {
