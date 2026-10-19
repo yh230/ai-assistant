@@ -40,6 +40,16 @@ public class Registration {
     /** 患者账号 ID（AI 挂号来源；匿名预约/窗口为 null） */
     private Long patientId;
 
+    /**
+     * 匿名预约幂等键（患者账号预约为空）
+     * <p>SHA-256(手机号|身份证|排班ID|日期|时段)，对应唯一索引 uk_registration_idem；
+     * 取消/过期后清空以便同一患者重新预约。</p>
+     *
+     * @author yh
+     * @date 2026-10-19
+     */
+    private String idempotencyKey;
+
     /** 来源 1=线上预约 2=现场窗口 3=自助机（见 SourceType） */
     private Integer sourceType;
     /** 0=未支付 1=已支付 2=超时作废（见 PayStatus） */
