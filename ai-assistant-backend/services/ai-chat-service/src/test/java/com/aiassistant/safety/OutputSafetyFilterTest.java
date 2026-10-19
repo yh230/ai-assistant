@@ -75,4 +75,77 @@ class OutputSafetyFilterTest {
         props.getSafety().setEmergencyMessage("紧急就医指引");
         assertEquals("紧急就医指引", new OutputSafetyFilter(props).emergencyMessage());
     }
+
+    @Test
+    void emergencyIgnoresNegatedSymptom() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertFalse(new OutputSafetyFilter(props).emergencyHit("我没有胸痛，只是有点咳嗽"));
+    }
+
+    @Test
+    void emergencyHitsPlainSymptom() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("胸痛"));
+    }
+
+    @Test
+    void emergencyIgnoresNegationVariants() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        OutputSafetyFilter filter = new OutputSafetyFilter(props);
+        assertFalse(filter.emergencyHit("不胸痛"));
+        assertFalse(filter.emergencyHit("无胸痛"));
+        assertFalse(filter.emergencyHit("未胸痛"));
+        assertFalse(filter.emergencyHit("否认胸痛"));
+        assertFalse(filter.emergencyHit("不伴胸痛"));
+        assertFalse(filter.emergencyHit("没有胸痛"));
+    }
+
+    @Test
+    void emergencyStillHitsWhenNegationIsFarAway() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("不发烧，但突然胸痛伴大汗"));
+    }
+
+    @Test
+    void emergencyNormalizesSpaces() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("胸 痛 伴 大 汗"));
+    }
+
+    @Test
+    void emergencyNormalizesFullWidthCharacters() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("胸痛"));
+        // 全角字形 + 全角空格（U+3000）
+        assertTrue(new OutputSafetyFilter(props).emergencyHit("胸　痛"));
+    }
+
+    @Test
+    void emergencyDefaultListContainsColloquialVariants() {
+        OutputSafetyFilter filter = new OutputSafetyFilter(new AiProperties());
+        assertTrue(filter.emergencyHit("胸口疼得厉害"));
+        assertTrue(filter.emergencyHit("怀疑心梗"));
+        assertTrue(filter.emergencyHit("感觉窒息"));
+        assertTrue(filter.emergencyHit("喘不过气"));
+    }
+
+    @Test
+    void blockedInputNormalizesSpaces() {
+        AiProperties props = new AiProperties();
+        props.getSafety().setKeywords(List.of("开药"));
+        OutputSafetyFilter filter = new OutputSafetyFilter(props);
+        assertTrue(filter.blockedInput("帮 我 开 药"));
+        assertTrue(filter.blockedInput("帮　我　开　药"));
+    }
+
+    @Test
+    void blockedInputKeepsNegatedKeywordBlocked() {
+        // 输入侧为敏感句式，否定词不豁免
+        assertTrue(filterWith(List.of("开药")).blockedInput("不要开药，只想知道挂什么科"));
+    }
 }
