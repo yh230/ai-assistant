@@ -11,6 +11,8 @@
 ![Vue](https://img.shields.io/badge/Vue-3-42B883.svg)
 ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1.svg)
 ![E2E](https://img.shields.io/badge/E2E-pytest-0A9EDC.svg)
+[![CI](https://github.com/yh230/ai-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/yh230/ai-assistant/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## 目录
 
@@ -113,10 +115,15 @@ aidaima/
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | JDK | 17 | 自行安装并配置 `JAVA_HOME` |
+| Maven | 3.9+（可选） | 仓库自带 Maven Wrapper，优先使用 `./mvnw` / `mvnw.cmd` |
 | MySQL | 8 | 需先建好四个库（见快速开始第 1 步） |
 | Redis | ≥ 6.2 | 默认 `localhost:6379`（刷新令牌消费用 GETDEL） |
 | Node.js | 18+ | 前端构建与开发 |
-| Nacos | 3.x | 服务端口 8848，控制台 8849（安装路径自定，见快速开始第 2 步） |
+| Nacos | 3.x | 服务端口 8848，控制台 8849；需设置 `NACOS_HOME`（见快速开始第 2 步） |
+| Kafka | 3.x | 站内信、审计落库、知识库异步向量化；未启动时相关异步链路不可用 |
+| Elasticsearch | 8.x（可选） | 仅当 `AI_RAG_STORE=elasticsearch` 时启用混合检索；默认 `simple` 本地向量 |
+| Python | 3.10+（可选） | 仅运行 `ai-assistant-e2e/` 测试套件时需要 |
+| Zipkin | 可选 | 链路追踪 UI；不启动不影响业务 |
 
 ## 快速开始
 
@@ -134,7 +141,21 @@ mysql -uroot -p < sql/init.sql
 
 ### 2. 启动 Nacos
 
-运行 `scripts/start-nacos.bat`，控制台 `http://localhost:8849`（首次登录按提示初始化 admin 口令）。
+先设置 `NACOS_HOME` 指向 Nacos 3.x 安装目录，再运行启动脚本：
+
+```bat
+setx NACOS_HOME "D:\tools\nacos"
+scripts\start-nacos.bat
+```
+
+macOS / Linux：
+
+```bash
+export NACOS_HOME=/opt/nacos
+scripts/start-nacos.sh
+```
+
+控制台 `http://localhost:8849`（首次登录按提示初始化 admin 口令）。
 
 ### 3. 创建共享配置
 
@@ -148,11 +169,19 @@ setx DEEPSEEK_API_KEY sk-你的大模型Key
 setx AMAP_KEY 你的高德Key
 ```
 
+macOS / Linux：
+
+```bash
+export DB_PASSWORD='你的MySQL密码'
+export DEEPSEEK_API_KEY='sk-你的大模型Key'
+export AMAP_KEY='你的高德Key'
+```
+
 设置后重开终端生效；开发机也可直接改各服务 yml 占位符默认值，但不要提交真实密钥。
 
 ### 5. 启动后端
 
-运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关），各窗口日志出现 `Started` 后进入下一步。
+Windows 运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关）；macOS / Linux 运行 `scripts/start-services.sh`（后台启动，日志在 `ai-assistant-backend/logs/`）。各服务日志出现 `Started` 后进入下一步。
 
 > **ai-chat-service 首次启动**：知识库向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会从 GitHub 下载并加载，可能明显变慢（缓存于 `%TEMP%\spring-ai-onnx-generative\`；网络受限时确保代理可用，或改用离线预置：把模型 `.onnx` 放到任意路径，在 Nacos `ai.rag.embedding-model-path` 填完整路径，tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」）。未配置 `DEEPSEEK_API_KEY` 时对话自动降级本地回复引擎，不影响启动。
 >
@@ -162,7 +191,7 @@ setx AMAP_KEY 你的高德Key
 
 ```bash
 cd ai-assistant-frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -205,12 +234,12 @@ scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模
 
 ## 构建
 
-```bat
+```bash
 cd ai-assistant-backend
-mvn -DskipTests clean package
+./mvnw -DskipTests clean package        # Windows: mvnw.cmd -DskipTests clean package
 ```
 
-需 JDK 17 与 Maven 3.9+，并确保 `JAVA_HOME` 指向 JDK 17；依赖可配置阿里云镜像加速（Maven `conf/settings.xml`）。
+需 JDK 17，并确保 `JAVA_HOME` 指向 JDK 17。仓库自带 Maven Wrapper，无需单独安装 Maven；如需使用本地 Maven，请选择 3.9+，并可通过 `conf/settings.xml` 配置镜像加速。
 
 ## 常见问题
 
@@ -232,7 +261,7 @@ mvn -DskipTests clean package
 
 ## 许可
 
-本项目当前未附许可证文件，默认仅供学习与交流使用；如需开源分发，请先补充 `LICENSE`（例如 MIT）。
+本项目采用 [MIT License](LICENSE) 开源，可自由使用、修改与分发（须保留版权声明）。
 
 ---
 

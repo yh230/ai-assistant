@@ -1,2 +1,8 @@
 # Windows 批处理脚本按 CRLF 检出（cmd + CP936 下 LF + 中文 + 括号块存在解析问题）
 *.bat text eol=crlf
+ai-assistant-backend/mvnw.cmd text eol=crlf
+
+# Unix 脚本与 Maven Wrapper 保持 LF
+*.sh text eol=lf
+ai-assistant-backend/mvnw text eol=lf
+ai-assistant-backend/.mvn/wrapper/maven-wrapper.properties text eol=lf
