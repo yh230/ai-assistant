@@ -218,6 +218,8 @@ const confirmLoading = ref(false)
 const inputRef = ref(null)
 const messageListRef = ref(null)
 let currentController = null
+// 历史加载请求序号：切换/新建会话时自增，慢响应返回后序号不一致则丢弃，避免覆盖新会话
+let historySeq = 0
 
 // 移动端（≤768px）会话抽屉
 const mediaQuery = window.matchMedia('(max-width: 768px)')
@@ -306,6 +308,8 @@ function onDocumentClick(e) {
 async function createSession(type) {
   showTypeMenu.value = false
   if (loading.value) return
+  // 新建会话即作废在途的历史加载，防止旧会话响应覆盖新对话
+  historySeq += 1
   try {
     const res = await createPatientSession(type)
     currentSessionId.value = res.sessionId
@@ -327,10 +331,13 @@ async function loadSession(s) {
     if (isMobile.value) sidebarOpen.value = false
     return
   }
+  const seq = ++historySeq
   try {
     currentSessionId.value = s.sessionId
     currentSessionType.value = s.sessionType || 'CHAT'
     const data = await patientHistory(s.sessionId)
+    // 期间已切换/新建/重置会话：丢弃过期响应，避免覆盖当前对话
+    if (seq !== historySeq) return
     messages.value = (data.messages || []).map(m => ({
       role: m.role,
       content: m.content,
@@ -340,6 +347,7 @@ async function loadSession(s) {
     if (isMobile.value) sidebarOpen.value = false
     nextTick(scrollToBottom)
   } catch (e) {
+    if (seq !== historySeq) return
     msg('加载会话历史失败：' + e.message)
   }
 }
@@ -371,6 +379,8 @@ function parseReferences(raw) {
 }
 
 function resetCurrentSession() {
+  // 重置会话同样作废在途的历史加载
+  historySeq += 1
   currentSessionId.value = null
   currentSessionType.value = 'CHAT'
   messages.value = []
@@ -395,6 +405,8 @@ function sendMessage() {
     {
       onSession: (info) => {
         if (info && info.sessionId) {
+          // 服务端新建了会话：作废在途的历史加载，避免旧响应覆盖新对话
+          if (currentSessionId.value !== info.sessionId) historySeq += 1
           currentSessionId.value = info.sessionId
           loadSessions()
         }

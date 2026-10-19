@@ -14,7 +14,8 @@ import axios from 'axios'
  * - 刷新请求带 15s 超时，避免某个 tab 持锁后长时间挂起拖死其它 tab
  * - 代际校验：登出（本地 forceLogin 或其它 tab 广播的 logout）会推进 generation，
  *   刷新请求返回后若代际已变化，则丢弃刷新结果、不写入 token
- * - 网络异常 / 5xx 不登出（抛 NetworkError），仅刷新接口明确返回 400/401/403 才登出
+ * - 网络异常 / 5xx 不登出（抛 NetworkError），仅刷新接口明确返回 400/401/403，
+ *   或 HTTP 200 但业务码 401 / 「登录已过期/无效/过期」文案时才登出
  * - 已取消的请求（AbortError / ERR_CANCELED）原样透传，不转换成 NetworkError
  * - 登出通过 BroadcastChannel 同步到其它 tab
  * - axios 拦截器对 401 只重试一次
@@ -113,6 +114,16 @@ async function withRefreshLock(name, fn) {
 
 function isAuthFailureCode(code) {
   return code === 400 || code === 401 || code === 403
+}
+
+// 刷新接口可能以 HTTP 200 + 业务码 500 返回「登录已过期」类文案（旧版后端），
+// 只有同时命中「登录态主体（登录/令牌/凭证/认证）」与「失效语义（过期/失效/无效）」
+// 的文案才允许登出，避免把「参数无效」这类普通业务错误误判为过期。
+const AUTH_SUBJECT_RE = /登录|令牌|凭证|认证|refresh/i
+const AUTH_INVALID_RE = /过期|失效|无效/
+
+function isAuthExpiryMessage(msg) {
+  return typeof msg === 'string' && AUTH_SUBJECT_RE.test(msg) && AUTH_INVALID_RE.test(msg)
 }
 
 function isRefreshUrl(url) {
@@ -285,8 +296,13 @@ export function createAuthHttp({ tokenKey, refreshKey, userKey, loginPath }) {
       }
 
       const data = await res.json().catch(() => null)
+      // 业务码 401（后端过期码）/400/403 视为登录态失效，登出并抛 AuthExpiredError
       if (data && isAuthFailureCode(data.code)) {
         throw expire(data.msg || '登录已过期')
+      }
+      // 兼容旧后端：HTTP 200 + 业务码 >=500 但文案明确表示登录已过期/无效
+      if (data && typeof data.code === 'number' && data.code >= 500 && isAuthExpiryMessage(data.msg)) {
+        throw expire(data.msg)
       }
       if (!data || data.code !== 200 || !data.data || !data.data.token) {
         throw new NetworkError((data && data.msg) || '刷新登录态失败')
