@@ -168,6 +168,34 @@ class KnowledgeTaskConsumerTest {
     }
 
     @Test
+    void shouldAckAndSkipWhenEnvelopeMalformed() {
+        assertDoesNotThrow(() -> consumer.onMessage(new ConsumerRecord<>(
+                MqTopics.KNOWLEDGE_TASK, 0, 0L, "k", "{bad"), ack));
+
+        verifyNoInteractions(idempotentGuard);
+        verify(documentRepository, never()).findById(any());
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldAckAndSkipWhenEventIdMissing() throws Exception {
+        MqEnvelope envelope = new MqEnvelope();
+        envelope.setEventType(KnowledgeMqEvent.KNOWLEDGE_UPLOADED);
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        envelope.setPayload(objectMapper.writeValueAsString(event));
+        String envelopeJson = objectMapper.writeValueAsString(envelope);
+
+        assertDoesNotThrow(() -> consumer.onMessage(new ConsumerRecord<>(
+                MqTopics.KNOWLEDGE_TASK, 0, 0L, "k", envelopeJson), ack));
+
+        verifyNoInteractions(idempotentGuard);
+        verify(documentRepository, never()).findById(any());
+        verify(ack).acknowledge();
+    }
+
+    @Test
     void shouldMarkDocumentFailedOnDlt() throws Exception {
         KnowledgeMqEvent event = new KnowledgeMqEvent();
         event.setDocumentId(9L);
@@ -179,6 +207,23 @@ class KnowledgeTaskConsumerTest {
 
         verify(documentRepository).save(argThat(d -> d.getStatus() == KnowledgeDocument.STATUS_FAILED
                 && d.getErrorMsg() != null && !d.getErrorMsg().isBlank()));
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldNotRegressReadyDocumentOnDlt() throws Exception {
+        KnowledgeMqEvent event = new KnowledgeMqEvent();
+        event.setDocumentId(9L);
+        event.setHospitalId(1L);
+        KnowledgeDocument doc = document(KnowledgeDocument.STATUS_READY);
+        doc.setChunkCount(3);
+        when(documentRepository.findById(9L)).thenReturn(Optional.of(doc));
+
+        consumer.onDlt(record(MqTopics.KNOWLEDGE_TASK_DLT, event), ack);
+
+        verify(documentRepository, never()).save(any());
+        assertEquals(KnowledgeDocument.STATUS_READY, doc.getStatus());
+        assertNull(doc.getErrorMsg());
         verify(ack).acknowledge();
     }
 
