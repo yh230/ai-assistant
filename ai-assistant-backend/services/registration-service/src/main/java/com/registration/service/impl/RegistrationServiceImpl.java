@@ -139,10 +139,12 @@ public class RegistrationServiceImpl implements RegistrationService {
         } else {
             String idempotencyKey = buildIdempotencyKey(dto, schedule);
             RBucket<String> bucket = redissonClient.getBucket(IDEMPOTENCY_KEY_PREFIX + idempotencyKey);
-            // 键已存在：重复提交，返回原单；原单查不到（已清理）则提示稍后再试
+            // 键已存在：仅当原单仍进行中（RESERVED/CALLED）才返回；终态单不得作为成功幂等结果复用
             if (!bucket.trySet("1", IDEMPOTENCY_TTL_MINUTES, TimeUnit.MINUTES)) {
-                Registration existing = findByIdempotencyKey(idempotencyKey);
+                Registration existing = findActiveByIdempotencyKey(idempotencyKey);
                 if (existing == null) {
+                    // 终态单（已取消/已过期/已退号）残留唯一键或原单尚未落库：回收窗口键并拒绝
+                    releaseIdempotencyKey(idempotencyKey);
                     throw new BusinessException("请勿重复提交");
                 }
                 return enrichSafe(List.of(existing)).get(0);
@@ -151,16 +153,16 @@ public class RegistrationServiceImpl implements RegistrationService {
                 reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                         () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, idempotencyKey)));
             } catch (DuplicateKeyException e) {
-                // 并发穿透：唯一索引 uk_registration_idem 兜底，返回已落库记录（键保留在窗口内）
-                Registration existing = findByIdempotencyKey(idempotencyKey);
+                // 并发穿透：唯一索引 uk_registration_idem 兜底，仅回查进行中记录（键保留在窗口内）
+                Registration existing = findActiveByIdempotencyKey(idempotencyKey);
                 if (existing == null) {
-                    bucket.delete();
-                    throw e;
+                    releaseIdempotencyKey(idempotencyKey);
+                    throw new BusinessException("请勿重复提交");
                 }
                 return enrichSafe(List.of(existing)).get(0);
             } catch (RuntimeException e) {
                 // 校验/锁失败/DB 异常：释放幂等键，患者可立即重试
-                bucket.delete();
+                releaseIdempotencyKey(idempotencyKey);
                 throw e;
             }
         }
@@ -214,17 +216,20 @@ public class RegistrationServiceImpl implements RegistrationService {
     }
 
     /**
-     * 按幂等键查已落库预约（唯一索引保证至多一条；键为空返回 null）
+     * 按幂等键查进行中的预约（仅 RESERVED/CALLED；唯一索引保证至多一条；键为空返回 null）
+     * <p>终态记录（CANCELLED/EXPIRED/REFUNDED）即使残留唯一键也不得作为重复提交的成功结果返回。</p>
      *
      * @param idempotencyKey 幂等键
-     * @return 已存在的挂号记录（无则 null）
+     * @return 进行中的挂号记录（无则 null）
      */
-    private Registration findByIdempotencyKey(String idempotencyKey) {
+    private Registration findActiveByIdempotencyKey(String idempotencyKey) {
         if (!StringUtils.hasText(idempotencyKey)) {
             return null;
         }
         return registrationMapper.selectOne(new LambdaQueryWrapper<Registration>()
-                .eq(Registration::getIdempotencyKey, idempotencyKey));
+                .eq(Registration::getIdempotencyKey, idempotencyKey)
+                .in(Registration::getStatus,
+                        RegistrationStatus.RESERVED.getCode(), RegistrationStatus.CALLED.getCode()));
     }
 
     /**
@@ -488,14 +493,19 @@ public class RegistrationServiceImpl implements RegistrationService {
                                     .set(Registration::getStatus, RegistrationStatus.REFUNDED.getCode())
                                     .set(Registration::getRefundAmount, reg.getPayAmount())
                                     .set(Registration::getRefundTime, now)
-                                    .set(Registration::getRemark, remark));
+                                    .set(Registration::getRemark, remark)
+                                    // 退号后清空幂等键，避免终态单永久占用唯一键导致无法重新预约
+                                    .set(Registration::getIdempotencyKey, null));
                             // 条件跃迁成功后：释放号源 + 占用数回退
                             releaseSource(reg.getNumberSourceId(), id);
                             incrRegisteredCount(reg.getScheduleId(), -1);
+                            // 回收 Redis 窗口键，退号后允许立即重新预约同一排班
+                            releaseIdempotencyKey(reg.getIdempotencyKey());
                             reg.setStatus(RegistrationStatus.REFUNDED.getCode());
                             reg.setRefundAmount(reg.getPayAmount());
                             reg.setRefundTime(now);
                             reg.setRemark(remark);
+                            reg.setIdempotencyKey(null);
                             reg.setUpdateTime(now);
                             return reg;
                         })));

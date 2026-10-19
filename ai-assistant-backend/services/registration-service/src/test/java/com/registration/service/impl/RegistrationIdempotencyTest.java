@@ -8,6 +8,7 @@ import com.api.dto.OrgBriefDTO;
 import com.api.dto.UserBriefDTO;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.common.exception.BusinessException;
@@ -53,6 +54,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doReturn;
@@ -62,7 +64,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 匿名预约幂等单测（Redis 键占位 + 锁内重复校验 + 唯一键兜底 + 取消/过期键回收）
+ * 匿名预约幂等单测（Redis 键占位 + 锁内重复校验 + 唯一键兜底 + 取消/过期/退号键回收）
  *
  * @author yh
  * @date 2026-10-19
@@ -127,18 +129,19 @@ class RegistrationIdempotencyTest {
     }
 
     /**
-     * Redis 键已被占用但原单不可查（已取消/过期清理）：提示「请勿重复提交」
+     * Redis 键已被占用但查不到进行中原单（未落库/已清理）：提示「请勿重复提交」并回收窗口键
      */
     @Test
     void duplicateAnonymousSubmitWithoutExistingThrows() {
         stubSchedule();
-        stubBucket(false);
+        RBucket<String> bucket = stubBucket(false);
         when(registrationMapper.selectOne(any())).thenReturn(null);
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> registrationService.createAppointment(anonymousDto()));
         assertEquals("请勿重复提交", ex.getMessage());
         verify(registrationMapper, never()).insert(any(Registration.class));
+        verify(bucket).delete();
     }
 
     /**
@@ -163,6 +166,8 @@ class RegistrationIdempotencyTest {
         String expected = DigestUtils.sha256DigestAsHex(raw.getBytes(StandardCharsets.UTF_8));
         assertEquals(expected, captor.getValue().getIdempotencyKey());
         assertEquals(64, captor.getValue().getIdempotencyKey().length());
+        // 幂等窗口必须为 5 分钟（不接受任意 TTL）
+        verify(bucket).trySet(anyString(), eq(5L), eq(TimeUnit.MINUTES));
         verify(bucket, never()).delete();
     }
 
@@ -229,6 +234,69 @@ class RegistrationIdempotencyTest {
     }
 
     /**
+     * 终态单（已取消/已过期/已退号）残留唯一键时不得作为成功重复返回：拒绝并回收窗口键
+     */
+    @Test
+    void terminalRegistrationNotReturnedAsDuplicate() {
+        stubSchedule();
+        RBucket<String> bucket = stubBucket(false);
+        // active-only 查询会过滤终态单，此处模拟查不到进行中记录
+        when(registrationMapper.selectOne(any())).thenReturn(null);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> registrationService.createAppointment(anonymousDto()));
+
+        assertEquals("请勿重复提交", ex.getMessage());
+        verify(registrationMapper, never()).insert(any(Registration.class));
+        verify(bucket).delete();
+        // 回查必须带状态过滤（RESERVED/CALLED），终态单不会被返回
+        assertTrue(selectOneSqlSegment().toLowerCase().contains("status"));
+    }
+
+    /**
+     * 唯一键冲突兜底同样只回查进行中记录：终态单冲突不得返回旧单
+     */
+    @Test
+    void duplicateKeyExceptionWithTerminalRowThrows() throws InterruptedException {
+        stubSchedule();
+        RBucket<String> bucket = stubBucket(true);
+        stubLockAcquired();
+        stubTx();
+        NumberSource source = new NumberSource();
+        source.setId(5L);
+        source.setSeqNo(1);
+        when(numberSourceMapper.selectList(any())).thenReturn(List.of(source));
+        when(registrationMapper.selectCount(any())).thenReturn(0L);
+        when(registrationMapper.insert(any(Registration.class)))
+                .thenThrow(new DuplicateKeyException("uk_registration_idem"));
+        when(registrationMapper.selectOne(any())).thenReturn(null);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> registrationService.createAppointment(anonymousDto()));
+
+        assertEquals("请勿重复提交", ex.getMessage());
+        verify(bucket).delete();
+    }
+
+    /**
+     * 非锁类运行时异常（如 DB 故障）：同样释放幂等键，避免窗口期误拦截
+     */
+    @Test
+    void unexpectedRuntimeExceptionReleasesIdempotencyKey() throws InterruptedException {
+        stubSchedule();
+        RBucket<String> bucket = stubBucket(true);
+        stubLockAcquired();
+        when(txTemplate.execute(any())).thenThrow(new IllegalStateException("模拟事务执行失败"));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> registrationService.createAppointment(anonymousDto()));
+
+        assertEquals("模拟事务执行失败", ex.getMessage());
+        verify(bucket).delete();
+        verify(registrationMapper, never()).insert(any(Registration.class));
+    }
+
+    /**
      * 患者账号预约路径不接触幂等键（仅匿名路径去重）
      */
     @Test
@@ -268,6 +336,27 @@ class RegistrationIdempotencyTest {
         when(numberSourceMapper.update(isNull(), any())).thenReturn(1);
 
         registrationService.patientCancel(7L, ID_CARD, "行程有变");
+
+        assertTrue(updateSqlSet().toLowerCase().contains("idempotency"));
+        verify(bucket).delete();
+    }
+
+    /**
+     * 退号：条件更新同时清空幂等键并回收 Redis 键，退号后可重新预约同一排班
+     */
+    @Test
+    void refundClearsIdempotencyKey() throws InterruptedException {
+        Registration reg = existingRegistration(7L);
+        reg.setStatus(RegistrationStatus.CALLED.getCode());
+        reg.setNumberSourceId(5L);
+        when(registrationMapper.selectById(7L)).thenReturn(reg);
+        RBucket<String> bucket = stubIdemBucket();
+        stubLockAcquired();
+        stubTx();
+        when(registrationMapper.update(isNull(), any())).thenReturn(1);
+        when(numberSourceMapper.update(isNull(), any())).thenReturn(1);
+
+        registrationService.refund(7L, "误挂号");
 
         assertTrue(updateSqlSet().toLowerCase().contains("idempotency"));
         verify(bucket).delete();
@@ -388,5 +477,13 @@ class RegistrationIdempotencyTest {
         ArgumentCaptor<Wrapper<Registration>> captor = ArgumentCaptor.forClass(Wrapper.class);
         verify(registrationMapper, atLeastOnce()).update(isNull(), captor.capture());
         return ((LambdaUpdateWrapper<Registration>) captor.getValue()).getSqlSet();
+    }
+
+    /** 捕获按幂等键回查的查询包装器并返回其 WHERE 片段（校验 active-only 状态过滤） */
+    @SuppressWarnings("unchecked")
+    private String selectOneSqlSegment() {
+        ArgumentCaptor<Wrapper<Registration>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(registrationMapper).selectOne(captor.capture());
+        return ((LambdaQueryWrapper<Registration>) captor.getValue()).getSqlSegment();
     }
 }
