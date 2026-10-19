@@ -163,14 +163,28 @@ SELECT table_schema, table_name, column_name, column_type
 
 -- -------------------------------------------------------------
 -- 事后自检：应返回 8 行新增索引
+-- 以 (table_schema, table_name, index_name) 精确配对匹配，而非仅按 index_name 过滤：
+-- 索引名只在表内唯一，idx_doctor_date 同时存在于 registration / number_source，
+-- 仅按名字过滤会把这两条无关索引也计入，得到 10 行。
 -- （uk_schedule 已被删除，不在预期结果内；idx_doctor_date 为新增的普通索引）
+-- information_schema.statistics 每个索引列一行，故用 DISTINCT 去重。
 -- -------------------------------------------------------------
-SELECT table_schema, table_name, index_name, non_unique
-  FROM information_schema.statistics
- WHERE (table_schema = 'registration_db' AND index_name IN ('uk_registration_idem', 'idx_expire_status', 'idx_patient_day', 'uk_doctor_active_slot', 'idx_doctor_date', 'uk_schedule_seq'))
-    OR (table_schema = 'chat_db'         AND index_name IN ('idx_hospital_status', 'idx_session_created'))
- GROUP BY table_schema, table_name, index_name, non_unique
- ORDER BY table_schema, table_name, index_name;
+SELECT DISTINCT s.table_schema, s.table_name, s.index_name, s.non_unique
+  FROM information_schema.statistics s
+  JOIN (
+              SELECT 'registration_db' AS table_schema, 'doctor_schedule' AS table_name, 'uk_doctor_active_slot' AS index_name
+    UNION ALL SELECT 'registration_db', 'doctor_schedule', 'idx_doctor_date'
+    UNION ALL SELECT 'registration_db', 'registration', 'uk_registration_idem'
+    UNION ALL SELECT 'registration_db', 'registration', 'idx_expire_status'
+    UNION ALL SELECT 'registration_db', 'registration', 'idx_patient_day'
+    UNION ALL SELECT 'registration_db', 'number_source', 'uk_schedule_seq'
+    UNION ALL SELECT 'chat_db', 'knowledge_document', 'idx_hospital_status'
+    UNION ALL SELECT 'chat_db', 'chat_message', 'idx_session_created'
+       ) e
+    ON s.table_schema = e.table_schema
+   AND s.table_name   = e.table_name
+   AND s.index_name   = e.index_name
+ ORDER BY s.table_schema, s.table_name, s.index_name;
 
 -- -------------------------------------------------------------
 -- 事后自检：uk_schedule 应已不存在（期望返回 0 行）
