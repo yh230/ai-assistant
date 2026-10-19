@@ -175,6 +175,8 @@ function stopGeneration() {
     currentController.abort()
   }
   currentController = null
+  // 使被停止请求的迟到 onDone/onError 失效，避免它们再改 loading / 刷新会话
+  requestSeq++
   for (let i = messages.value.length - 1; i >= 0; i--) {
     if (messages.value[i].streaming) {
       messages.value[i].streaming = false
@@ -198,6 +200,8 @@ async function loadSessions() {
 // 新建对话
 function newChat() {
   stopGeneration()
+  // 使仍在途的 loadSession 失效，避免旧历史覆盖这次的新会话
+  historySeq++
   messages.value = []
   currentSessionId.value = null
   inputText.value = ''
@@ -209,6 +213,8 @@ function newChat() {
 function switchRole(roleId) {
   if (roleId === selectedRoleId.value) return
   stopGeneration()
+  // 使仍在途的 loadSession 失效，避免旧历史覆盖切换后的空会话
+  historySeq++
   selectedRoleId.value = roleId
   messages.value = []
   currentSessionId.value = null
@@ -220,6 +226,7 @@ function switchRole(roleId) {
 async function loadSession(sessionId) {
   stopGeneration()
   const seq = ++historySeq
+  const previousSessionId = currentSessionId.value
   currentSessionId.value = sessionId
   try {
     const data = await getChatHistory(sessionId)
@@ -232,6 +239,8 @@ async function loadSession(sessionId) {
     nextTick(scrollToBottom)
   } catch (e) {
     if (seq === historySeq) {
+      // 仅最新请求提示错误；回退 currentSessionId，保持它与当前展示的消息一致
+      currentSessionId.value = previousSessionId
       toast.error('加载会话历史失败：' + e.message)
     }
   }
@@ -308,7 +317,8 @@ function sendMessage() {
   const assistantIndex = messages.value.length - 1
   const bubble = () => {
     const item = messages.value[assistantIndex]
-    return item && item.requestId === requestId ? item : null
+    // 请求号不符或气泡已非流式（停止/完成/出错后）都不再写入
+    return item && item.requestId === requestId && item.streaming ? item : null
   }
 
   nextTick(scrollToBottom)
