@@ -8,7 +8,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
 
 import java.util.List;
@@ -48,6 +51,7 @@ public class AssistantRoleService {
 
     private final RoleRepository roleRepository;
     private final AiProperties aiProperties;
+    private final PlatformTransactionManager txManager;
 
     // ==================== 查询 ====================
 
@@ -145,12 +149,14 @@ public class AssistantRoleService {
 
     /**
      * 解析患者角色（缺失则按模板惰性建库）
+     * <p>
+     * 建库走独立事务（{@code REQUIRES_NEW}），使唯一键冲突在方法内以异常形式抛出，
+     * 从而能在本方法中捕获并重查，避免并发双建时首个请求直接失败。
      *
      * @param hospitalId 医院 ID（为空时不建库，返回 null）
      * @param sessionType 会话类型 CHAT/TRIAGE/RAG
      * @return 患者角色；医院为空时返回 null
      */
-    @Transactional
     public Role resolvePatientRole(Long hospitalId, String sessionType) {
         if (hospitalId == null) {
             return null;
@@ -174,22 +180,37 @@ public class AssistantRoleService {
                 .hospitalId(hospitalId)
                 .build();
         try {
-            return roleRepository.save(role);
+            return insertRoleInNewTransaction(role);
         } catch (DataIntegrityViolationException e) {
-            // 并发双建：唯一键冲突后重查
+            // 并发双建：独立事务内的冲突已回滚，此处用新语句重查胜出者
+            log.warn("患者角色并发创建冲突，重查: scope={}, hospitalId={}, sessionType={}",
+                    SCOPE_PATIENT, hospitalId, type);
             return roleRepository.findByScopeAndHospitalIdAndSessionType(SCOPE_PATIENT, hospitalId, type)
                     .orElseThrow(() -> e);
         }
     }
 
     /**
+     * 在独立事务中插入角色，使提交/失败都在调用点之前完成
+     *
+     * @param role 待插入角色
+     * @return 持久化后的角色
+     */
+    private Role insertRoleInNewTransaction(Role role) {
+        TransactionTemplate template = new TransactionTemplate(txManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template.execute(status -> roleRepository.save(role));
+    }
+
+    /**
      * 解析患者系统提示词（角色禁用或医院为空时回退模板）
+     * <p>
+     * 非事务方法：若包裹读事务，REPEATABLE READ 会固定读视图，冲突后的重查将看不到胜出行。
      *
      * @param hospitalId 医院 ID
      * @param sessionType 会话类型
      * @return 系统提示词
      */
-    @Transactional
     public String resolvePatientSystemPrompt(Long hospitalId, String sessionType) {
         Role role = resolvePatientRole(hospitalId, sessionType);
         if (role != null && Boolean.TRUE.equals(role.getEnabled())

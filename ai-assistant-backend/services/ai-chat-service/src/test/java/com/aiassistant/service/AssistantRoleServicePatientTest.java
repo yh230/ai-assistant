@@ -9,6 +9,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.util.Optional;
 
@@ -26,6 +29,7 @@ import static org.mockito.Mockito.*;
 class AssistantRoleServicePatientTest {
 
     @Mock private RoleRepository roleRepository;
+    @Mock private PlatformTransactionManager txManager;
     private AiProperties aiProperties;
     private AssistantRoleService service;
 
@@ -33,7 +37,9 @@ class AssistantRoleServicePatientTest {
     void setUp() {
         aiProperties = new AiProperties();
         aiProperties.getPrompt().setTriage("导诊模板");
-        service = new AssistantRoleService(roleRepository, aiProperties);
+        // TransactionTemplate 会调用 getTransaction → 回调 → commit，此处仅需状态对象
+        lenient().when(txManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        service = new AssistantRoleService(roleRepository, aiProperties, txManager);
     }
 
     @Test
@@ -54,6 +60,26 @@ class AssistantRoleServicePatientTest {
         assertEquals("导诊模板", saved.getSystemPrompt());
         assertTrue(saved.getEnabled());
         assertEquals("pat_1_TRIAGE", role.getId());
+    }
+
+    @Test
+    void returnsWinnerRoleWhenConcurrentInsertConflicts() {
+        Role winner = Role.builder().id("pat_1_TRIAGE").scope("PATIENT").hospitalId(1L)
+                .sessionType("TRIAGE").systemPrompt("并发胜出导诊").enabled(true).build();
+        when(roleRepository.findByScopeAndHospitalIdAndSessionType("PATIENT", 1L, "TRIAGE"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winner));
+        when(roleRepository.save(any(Role.class)))
+                .thenThrow(new DataIntegrityViolationException("uk_ai_role_scope"));
+
+        Role role = service.resolvePatientRole(1L, "TRIAGE");
+
+        assertSame(winner, role);
+        assertEquals("并发胜出导诊", role.getSystemPrompt());
+        verify(roleRepository, times(2))
+                .findByScopeAndHospitalIdAndSessionType("PATIENT", 1L, "TRIAGE");
+        verify(roleRepository).save(any(Role.class));
+        verify(txManager).rollback(any(TransactionStatus.class));
     }
 
     @Test
