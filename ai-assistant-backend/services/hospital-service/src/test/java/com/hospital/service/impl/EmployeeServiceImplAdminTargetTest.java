@@ -64,7 +64,7 @@ class EmployeeServiceImplAdminTargetTest {
         when(userClient.batch(List.of(6L))).thenReturn(Result.success(List.of(user(6L, 2L, DOCTOR_ROLE_ID))));
 
         BusinessException ex = assertThrows(BusinessException.class, () -> employeeService.get(6L));
-        assertEquals("无权操作该员工", ex.getMessage());
+        assertEquals("无权查看该员工", ex.getMessage());
     }
 
     @Test

@@ -80,6 +80,7 @@ class DoctorScheduleServiceScopeTest {
         s.setHospitalId(hospitalId);
         s.setDepartmentId(20L);
         s.setDoctorUserId(200L);
+        s.setStatus(1);
         return s;
     }
 
