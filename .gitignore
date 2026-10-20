@@ -2,9 +2,7 @@
 ai-assistant-backend/target/
 ai-assistant-backend/*/target/
 ai-assistant-backend/services/*/target/
-ai-assistant-backend/.mvn/
-ai-assistant-backend/mvnw
-ai-assistant-backend/mvnw.cmd
+ai-assistant-backend/logs/
 # 运行时向量目录（ai-chat-service 运行产物）
 ai-assistant-backend/services/ai-chat-service/data/
 *.class
@@ -31,8 +29,8 @@ Thumbs.db
 .workbuddy/
 docs/superpowers/
 
-# 本地架构文档（不入库，仓库对外文档以 README 为准）
-ARCHITECTURE.md
+# 本地架构文档（不入库；对外架构说明见 docs/design/architecture.md）
+/ARCHITECTURE.md
 
 # 本机密钥配置（真实值，不入库）
 application-local.yml

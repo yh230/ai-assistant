@@ -2,9 +2,9 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-brand">
-        <div class="brand-logo">伴</div>
-        <h1 class="brand-title">聊天小伙伴</h1>
-        <p class="brand-sub">后台管理系统</p>
+        <div class="brand-logo">医</div>
+        <h1 class="brand-title">AI 医院助手</h1>
+        <p class="brand-sub">员工工作台</p>
       </div>
 
       <el-tabs v-model="activeTab" class="login-tabs">
@@ -421,5 +421,17 @@ onBeforeUnmount(() => {
   text-align: center;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+@media (max-width: 480px) {
+  .login-page {
+    padding: 16px;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 28px 20px;
+  }
 }
 </style>

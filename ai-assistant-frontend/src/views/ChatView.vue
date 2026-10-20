@@ -52,8 +52,8 @@
       <!-- 消息列表 -->
       <div ref="messageListRef" class="message-list">
         <div v-if="messages.length === 0" class="welcome">
-          <div class="welcome-icon">伴</div>
-          <h2>你好！我是你的{{ currentRole ? currentRole.name : '聊天小伙伴' }}</h2>
+          <div class="welcome-icon">医</div>
+          <h2>你好！我是你的{{ currentRole ? currentRole.name : 'AI 医院助手' }}</h2>
           <p>可以陪我聊天解闷，也可以直接问我天气，比如「北京今天天气怎么样」。</p>
           <div class="welcome-suggestions">
             <div class="suggestion" @click="sendQuickMessage('你好呀，介绍下你自己')">
@@ -78,7 +78,7 @@
           :class="msg.role"
         >
           <div class="message-avatar">
-            {{ msg.role === 'user' ? '我' : '伴' }}
+            {{ msg.role === 'user' ? '我' : '医' }}
           </div>
           <div class="message-bubble">
             <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
@@ -89,7 +89,7 @@
 
         <!-- 打字动画：等待第一个 token 时显示 -->
         <div v-if="showTypingDots" class="message-item assistant">
-          <div class="message-avatar">伴</div>
+          <div class="message-avatar">医</div>
           <div class="message-bubble typing">
             <span class="dot"></span>
             <span class="dot"></span>
@@ -127,7 +127,7 @@
           />
         </div>
         <p class="input-hint">
-          聊天小伙伴由 Spring AI + Vue 3 驱动 · 流式响应 · 对话内容保存在 MySQL
+          AI 医院助手由 Spring AI + Vue 3 驱动 · 流式响应 · 对话内容保存在 MySQL
         </p>
       </div>
     </div>

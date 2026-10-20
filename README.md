@@ -11,35 +11,92 @@
 ![Vue](https://img.shields.io/badge/Vue-3-42B883.svg)
 ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1.svg)
 ![E2E](https://img.shields.io/badge/E2E-pytest-0A9EDC.svg)
+[![CI](https://github.com/yh230/ai-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/yh230/ai-assistant/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 目录
+## 这是什么
 
-- [项目简介](#项目简介)
-- [功能特性](#功能特性)
-- [系统架构](#系统架构)
-- [技术栈](#技术栈)
-- [项目结构](#项目结构)
-- [环境要求](#环境要求)
-- [快速开始](#快速开始)
-- [端口一览](#端口一览)
-- [默认账号](#默认账号)
-- [生产部署安全前置](#生产部署安全前置)
-- [自动化测试](#自动化测试)
-- [构建](#构建)
-- [常见问题](#常见问题)
-- [贡献](#贡献)
-- [许可](#许可)
-
-## 项目简介
-
-一个**学习 / 展示用途**的完整案例：把「Spring Cloud 微服务实践」与「大模型应用落地（Tool Calling / RAG / SSE 流式）」放在同一套可运行的医院业务系统中。员工端与管理端面向医院员工，患者端面向患者账号。
+一个**学习 / 展示用途**的完整案例：把「Spring Cloud 微服务实践」与「大模型应用落地（Tool Calling / RAG / SSE 流式）」放进同一套可运行的医院业务系统。员工端与管理端面向医院员工，患者端面向患者账号。
 
 > AI 输出仅辅助参考，**不提供诊断与处方**；产品层强制附带免责文案，并内置输入/输出双向风控。
 
-- 员工端：`http://localhost:5173` （聊天 / 人设 / 天气 / 医院业务 / 系统管理）
-- 患者端：`http://localhost:5173/patient/login` （注册登录 → AI 导诊 / 知识库问答 / 闲聊）
+## 核心能力
 
-## 功能特性
+| 能力 | 入口 | 技术看点 |
+|------|------|----------|
+| AI 导诊 | 患者端 | 真实科室 Tool Calling、急症红线、免责兜底 |
+| 智能挂号 | 患者端 | 写工具 + 二次确认状态机 + 租户校验 |
+| RAG 知识库 | 患者端 / 管理端 | 结构切片、混合检索、引用与 groundedness |
+| 员工聊天 | 员工端 | 人设库、模型故障转移、token 预算与摘要 |
+| 医院业务 | 管理端 | 多医院数据隔离、排班号源、预约状态机 |
+| 工程底座 | 全链路 | 双身份 JWT、网关限流、Kafka、可观测性 |
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/staff-login.png" width="49%" alt="员工端登录" />
+  <img src="docs/images/patient-login.png" width="49%" alt="患者端登录" />
+</p>
+<p align="center">
+  <img src="docs/images/patient-login-mobile.png" width="300" alt="患者端 H5 登录" />
+</p>
+
+> 登录页支持账号密码、手机号验证码与扫码三种方式；核心业务页面截图欢迎通过 PR 补充。
+
+## 快速体验
+
+Windows：
+
+```bat
+mysql -uroot -p < sql/init.sql
+scripts\start-nacos.bat
+scripts\start-services.bat
+```
+
+macOS / Linux：
+
+```bash
+mysql -uroot -p < sql/init.sql
+scripts/start-nacos.sh
+scripts/start-services.sh
+```
+
+前端：`cd ai-assistant-frontend && npm ci && npm run dev`，访问 `http://localhost:5173`（员工端）或 `http://localhost:5173/patient/login`（患者端）。
+
+> 完整环境要求、Nacos 配置与密钥设置见下方 [快速开始](#快速开始)。
+
+## 架构一览
+
+```mermaid
+flowchart LR
+  U[员工端 / 患者端] --> G[Gateway :8080]
+  G --> A[auth-service :9200]
+  G --> S[system-service :9201]
+  G --> H[hospital-service :9202]
+  G --> R[registration-service :9203]
+  G --> C[ai-chat-service :9204]
+  A --> M[(MySQL 四库)]
+  S --> M
+  H --> M
+  R --> M
+  C --> M
+  A --> D[(Redis)]
+  C --> K[Kafka]
+  C --> E[(Elasticsearch 可选)]
+```
+
+> 详细服务边界、数据归属与调用链见 [架构说明](docs/design/architecture.md)。
+
+## 文档
+
+- [架构说明](docs/design/architecture.md)
+- [阅读路线](docs/design/reading-guide.md)
+- [AI 评测](docs/design/evaluation.md)
+- [E2E 套件](ai-assistant-e2e/README.md)
+- [安全策略](SECURITY.md)
+- [贡献指南](CONTRIBUTING.md)
+
+## 功能明细
 
 **AI 能力**
 
@@ -113,10 +170,15 @@ aidaima/
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | JDK | 17 | 自行安装并配置 `JAVA_HOME` |
+| Maven | 3.9+（可选） | 仓库自带 Maven Wrapper，优先使用 `./mvnw` / `mvnw.cmd` |
 | MySQL | 8 | 需先建好四个库（见快速开始第 1 步） |
 | Redis | ≥ 6.2 | 默认 `localhost:6379`（刷新令牌消费用 GETDEL） |
 | Node.js | 18+ | 前端构建与开发 |
-| Nacos | 3.x | 服务端口 8848，控制台 8849（安装路径自定，见快速开始第 2 步） |
+| Nacos | 3.x | 服务端口 8848，控制台 8849；需设置 `NACOS_HOME`（见快速开始第 2 步） |
+| Kafka | 3.x | 站内信、审计落库、知识库异步向量化；未启动时相关异步链路不可用 |
+| Elasticsearch | 8.x（可选） | 仅当 `AI_RAG_STORE=elasticsearch` 时启用混合检索；默认 `simple` 本地向量 |
+| Python | 3.10+（可选） | 仅运行 `ai-assistant-e2e/` 测试套件时需要 |
+| Zipkin | 可选 | 链路追踪 UI；不启动不影响业务 |
 
 ## 快速开始
 
@@ -134,7 +196,21 @@ mysql -uroot -p < sql/init.sql
 
 ### 2. 启动 Nacos
 
-运行 `scripts/start-nacos.bat`，控制台 `http://localhost:8849`（首次登录按提示初始化 admin 口令）。
+先设置 `NACOS_HOME` 指向 Nacos 3.x 安装目录，再运行启动脚本：
+
+```bat
+setx NACOS_HOME "D:\tools\nacos"
+scripts\start-nacos.bat
+```
+
+macOS / Linux：
+
+```bash
+export NACOS_HOME=/opt/nacos
+scripts/start-nacos.sh
+```
+
+控制台 `http://localhost:8849`（首次登录按提示初始化 admin 口令）。
 
 ### 3. 创建共享配置
 
@@ -148,11 +224,19 @@ setx DEEPSEEK_API_KEY sk-你的大模型Key
 setx AMAP_KEY 你的高德Key
 ```
 
+macOS / Linux：
+
+```bash
+export DB_PASSWORD='你的MySQL密码'
+export DEEPSEEK_API_KEY='sk-你的大模型Key'
+export AMAP_KEY='你的高德Key'
+```
+
 设置后重开终端生效；开发机也可直接改各服务 yml 占位符默认值，但不要提交真实密钥。
 
 ### 5. 启动后端
 
-运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关），各窗口日志出现 `Started` 后进入下一步。
+Windows 运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关）；macOS / Linux 运行 `scripts/start-services.sh`（后台启动，日志在 `ai-assistant-backend/logs/`）。各服务日志出现 `Started` 后进入下一步。
 
 > **ai-chat-service 首次启动**：知识库向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会从 GitHub 下载并加载，可能明显变慢（缓存于 `%TEMP%\spring-ai-onnx-generative\`；网络受限时确保代理可用，或改用离线预置：把模型 `.onnx` 放到任意路径，在 Nacos `ai.rag.embedding-model-path` 填完整路径，tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」）。未配置 `DEEPSEEK_API_KEY` 时对话自动降级本地回复引擎，不影响启动。
 >
@@ -162,7 +246,7 @@ setx AMAP_KEY 你的高德Key
 
 ```bash
 cd ai-assistant-frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -205,12 +289,12 @@ scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模
 
 ## 构建
 
-```bat
+```bash
 cd ai-assistant-backend
-mvn -DskipTests clean package
+./mvnw -DskipTests clean package        # Windows: mvnw.cmd -DskipTests clean package
 ```
 
-需 JDK 17 与 Maven 3.9+，并确保 `JAVA_HOME` 指向 JDK 17；依赖可配置阿里云镜像加速（Maven `conf/settings.xml`）。
+需 JDK 17，并确保 `JAVA_HOME` 指向 JDK 17。仓库自带 Maven Wrapper，无需单独安装 Maven；如需使用本地 Maven，请选择 3.9+，并可通过 `conf/settings.xml` 配置镜像加速。
 
 ## 常见问题
 
@@ -221,6 +305,7 @@ mvn -DskipTests clean package
 | GitHub 相关下载失败（如嵌入模型） | 确认本机可访问外网（如需代理请自行配置），或改用离线预置模型（见快速开始第 5 步） |
 | 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
 | 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |
+| 前端启动报 `Failed to resolve import "qrcode"` | `node_modules` 不完整，执行 `npm ci` 重新安装（不要复用旧的 `node_modules`） |
 
 ## 贡献
 
@@ -232,7 +317,7 @@ mvn -DskipTests clean package
 
 ## 许可
 
-本项目当前未附许可证文件，默认仅供学习与交流使用；如需开源分发，请先补充 `LICENSE`（例如 MIT）。
+本项目采用 [MIT License](LICENSE) 开源，可自由使用、修改与分发（须保留版权声明）。
 
 ---
 
