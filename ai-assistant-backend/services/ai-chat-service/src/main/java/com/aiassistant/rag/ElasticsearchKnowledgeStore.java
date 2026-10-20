@@ -59,7 +59,7 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
     private final EmbeddingModel embeddingModel;
 
     /** ES 索引配置（索引名与分词器） */
-    private final AiProperties.Rag.Elasticsearch config;
+    private final AiProperties.Elasticsearch config;
 
     /** 向量维度（与索引 mapping 的 dense_vector dims 一致） */
     private final int dimensions;
