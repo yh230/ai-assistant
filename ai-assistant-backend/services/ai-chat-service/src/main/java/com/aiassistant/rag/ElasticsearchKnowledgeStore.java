@@ -236,8 +236,8 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
                             .filter(f -> f.term(t -> t.field("hospitalId").value(hospitalId.longValue())))
                             .filter(f -> f.term(t -> t.field("documentId").value(documentId.longValue())))
                             .filter(f -> f.range(r -> r
-                                    .field("chunkIndex")
-                                    .gte(JsonData.of(newChunkCount)))))));
+                                    .untyped(u -> u.field("chunkIndex")
+                                            .gte(JsonData.of(newChunkCount))))))));
         } catch (IOException e) {
             throw new IllegalStateException("清理越界知识切片失败: hospitalId=" + hospitalId
                     + ", documentId=" + documentId + ", newChunkCount=" + newChunkCount, e);
@@ -318,7 +318,7 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             var response = client.search(s -> s
                     .index(config.getIndexName())
                     .size(size)
-                    .source(src -> src.excludes("embedding"))
+                    .source(src -> src.filter(f -> f.excludes("embedding")))
                     .query(q -> q.bool(b -> b
                             .filter(f -> f.term(t -> t.field("hospitalId").value(hospitalId.longValue())))
                             .must(m -> m.multiMatch(mm -> mm
@@ -348,7 +348,7 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             var response = client.search(s -> s
                     .index(config.getIndexName())
                     .size(size)
-                    .source(src -> src.excludes("embedding"))
+                    .source(src -> src.filter(f -> f.excludes("embedding")))
                     .knn(k -> k
                             .field("embedding")
                             .queryVector(queryVector)
