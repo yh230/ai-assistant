@@ -458,7 +458,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
             long startNanosPerModel = System.nanoTime();
             AtomicBoolean firstToken = new AtomicBoolean(true);
-            return Flux.defer(() -> {
+            return Flux.<org.springframework.ai.chat.model.ChatResponse>defer(() -> {
                         meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
                         return chatClientFactory.getChatClientWithTools(candidate, tools).prompt()
                                 .system(ctx.systemPrompt())

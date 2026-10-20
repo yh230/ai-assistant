@@ -39,13 +39,15 @@ import org.redisson.api.RedissonClient;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.DigestUtils;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.Collection;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -211,7 +213,21 @@ public class RegistrationServiceImpl implements RegistrationService {
     private String buildIdempotencyKey(AppointmentCreateDTO dto, DoctorSchedule schedule) {
         String raw = dto.getPatientPhone() + "|" + dto.getPatientIdCard() + "|"
                 + schedule.getId() + "|" + dto.getScheduleDate() + "|" + dto.getPeriod();
-        return DigestUtils.sha256DigestAsHex(raw.getBytes(StandardCharsets.UTF_8));
+        return sha256Hex(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 计算 SHA-256 十六进制摘要
+     *
+     * @param bytes 原始字节
+     * @return 64 位十六进制字符串
+     */
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("当前 JVM 不支持 SHA-256", e);
+        }
     }
 
     /**

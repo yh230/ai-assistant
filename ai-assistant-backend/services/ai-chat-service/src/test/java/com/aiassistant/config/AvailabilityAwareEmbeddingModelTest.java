@@ -8,7 +8,6 @@ import org.springframework.ai.embedding.EmbeddingOptions;
 import org.springframework.ai.embedding.EmbeddingOptionsBuilder;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
-import org.springframework.ai.model.ModelRequest;
 
 import java.util.List;
 
@@ -40,7 +39,6 @@ class AvailabilityAwareEmbeddingModelTest {
 
         assertTrue(model.isAvailable());
         assertSame(response, model.call(request));
-        assertSame(response, model.call((ModelRequest) request));
 
         Document document = new Document("正文");
         float[] vector = {1.0f, 2.0f};

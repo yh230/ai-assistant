@@ -39,7 +39,9 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.DigestUtils;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -164,7 +166,7 @@ class RegistrationIdempotencyTest {
         ArgumentCaptor<Registration> captor = ArgumentCaptor.forClass(Registration.class);
         verify(registrationMapper).insert(captor.capture());
         String raw = PHONE + "|" + ID_CARD + "|" + schedule.getId() + "|" + DATE + "|" + PERIOD;
-        String expected = DigestUtils.sha256DigestAsHex(raw.getBytes(StandardCharsets.UTF_8));
+        String expected = sha256Hex(raw.getBytes(StandardCharsets.UTF_8));
         assertEquals(expected, captor.getValue().getIdempotencyKey());
         assertEquals(64, captor.getValue().getIdempotencyKey().length());
         // 幂等窗口必须为 5 分钟（不接受任意 TTL）
@@ -504,5 +506,14 @@ class RegistrationIdempotencyTest {
         ArgumentCaptor<Wrapper<Registration>> captor = ArgumentCaptor.forClass(Wrapper.class);
         verify(registrationMapper).selectOne(captor.capture());
         return ((LambdaQueryWrapper<Registration>) captor.getValue()).getSqlSegment();
+    }
+
+    /** 计算 SHA-256 十六进制摘要 */
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

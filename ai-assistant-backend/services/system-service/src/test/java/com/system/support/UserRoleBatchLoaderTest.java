@@ -1,9 +1,13 @@
 package com.system.support;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.system.entity.SysRole;
 import com.system.entity.SysUserRole;
 import com.system.mapper.SysRoleMapper;
 import com.system.mapper.SysUserRoleMapper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -35,6 +39,12 @@ class UserRoleBatchLoaderTest {
     @Mock private SysUserRoleMapper userRoleMapper;
     @Mock private SysRoleMapper roleMapper;
     @InjectMocks private UserRoleBatchLoader loader;
+
+    @BeforeAll
+    static void initTableInfo() {
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+        TableInfoHelper.initTableInfo(assistant, SysUserRole.class);
+    }
 
     @Test
     void loadsRolesInTwoQueries() {
