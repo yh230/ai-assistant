@@ -1,7 +1,7 @@
 {
   "name": "ai-assistant-frontend",
   "version": "1.0.0",
-  "description": "AI Assistant Frontend - Chat & Weather",
+  "description": "AI Hospital Assistant Frontend",
   "type": "module",
   "scripts": {
     "dev": "vite",

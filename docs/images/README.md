@@ -16,5 +16,6 @@ README 的「界面预览」使用本目录图片。提交前请确认：
 
 - `staff-login.png`：员工端登录
 - `patient-login.png`：患者端登录
+- `patient-login-mobile.png`：患者端 H5 登录（390px 视口）
 
 仍欢迎补充核心页面截图：AI 导诊、挂号二次确认、知识库管理、员工聊天。

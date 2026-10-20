@@ -116,7 +116,7 @@
             v-model="form.systemPrompt"
             type="textarea"
             :rows="10"
-            placeholder="定义角色的人设、语气、能力边界，例如：你是用户的贴心聊天小伙伴……"
+            placeholder="定义角色的人设、语气、能力边界，例如：你是医院场景的贴心导诊助手……"
           />
         </el-form-item>
 

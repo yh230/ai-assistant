@@ -37,6 +37,9 @@
   <img src="docs/images/staff-login.png" width="49%" alt="员工端登录" />
   <img src="docs/images/patient-login.png" width="49%" alt="患者端登录" />
 </p>
+<p align="center">
+  <img src="docs/images/patient-login-mobile.png" width="300" alt="患者端 H5 登录" />
+</p>
 
 > 登录页支持账号密码、手机号验证码与扫码三种方式；核心业务页面截图欢迎通过 PR 补充。
 
@@ -302,6 +305,7 @@ cd ai-assistant-backend
 | GitHub 相关下载失败（如嵌入模型） | 确认本机可访问外网（如需代理请自行配置），或改用离线预置模型（见快速开始第 5 步） |
 | 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
 | 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |
+| 前端启动报 `Failed to resolve import "qrcode"` | `node_modules` 不完整，执行 `npm ci` 重新安装（不要复用旧的 `node_modules`） |
 
 ## 贡献
 

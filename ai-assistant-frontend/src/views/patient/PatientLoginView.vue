@@ -481,6 +481,18 @@ onBeforeUnmount(() => {
   color: var(--danger);
 }
 
+@media (max-width: 480px) {
+  .login-page {
+    padding: 16px;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 28px 20px;
+  }
+}
+
 .login-tip {
   margin: 18px 0 0;
   text-align: center;

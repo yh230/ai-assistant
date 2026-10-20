@@ -4,9 +4,9 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          <span class="logo-icon">伴</span>
+          <span class="logo-icon">医</span>
         </div>
-        <span class="app-title">聊天小伙伴</span>
+        <span class="app-title">AI 医院助手</span>
       </div>
 
       <el-menu class="sidebar-nav" :default-active="route.path" router>
