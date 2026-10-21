@@ -21,7 +21,7 @@ fi
 
 mkdir -p logs
 modules=(services/auth-service services/system-service services/hospital-service \
-         services/registration-service services/ai-chat-service gateway)
+         services/registration-service services/ai-chat-service services/mcp-server gateway)
 
 for module in "${modules[@]}"; do
     name="${module##*/}"

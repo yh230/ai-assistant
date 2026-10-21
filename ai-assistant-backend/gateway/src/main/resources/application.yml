@@ -86,6 +86,10 @@ spring:
                 redis-rate-limiter.replenishRate: ${security.ratelimit.appointment-query.replenish-rate:20}
                 redis-rate-limiter.burstCapacity: ${security.ratelimit.appointment-query.burst-capacity:40}
                 key-resolver: "#{@ipKeyResolver}"
+        - id: mcp-service
+          uri: lb://mcp-server
+          predicates:
+            - Path=/mcp,/mcp/**
         - id: auth-service
           uri: lb://auth-service
           predicates:
@@ -138,6 +142,8 @@ gateway:
     - /api/login/sms
     - /api/qr/create
     - /api/qr/poll
+    - /mcp
+    - /mcp/**
 
 security:
   jwt:
