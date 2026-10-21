@@ -244,7 +244,7 @@ class ScheduleToolsTest {
      */
     private static ToolContext contextFor(McpPrincipal principal) {
         McpSyncServerExchange exchange = mock(McpSyncServerExchange.class);
-        when(exchange.transportContext())
+        lenient().when(exchange.transportContext())
                 .thenReturn(McpTransportContext.create(Map.of(McpPrincipalContext.TRANSPORT_KEY, principal)));
         return new ToolContext(Map.of(McpToolUtils.TOOL_CONTEXT_MCP_EXCHANGE_KEY, exchange));
     }
