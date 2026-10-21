@@ -28,9 +28,9 @@
       <!-- 会话侧边栏（≤768px 为抽屉） -->
       <div class="session-panel" :class="{ open: sidebarOpen }">
         <div class="session-header">
-          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu">新对话</el-button>
+          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu" data-testid="chat-new">新对话</el-button>
           <div v-if="showTypeMenu" class="type-menu">
-            <div v-for="t in SESSION_TYPES" :key="t.value" class="type-item" @click="createSession(t.value)">
+            <div v-for="t in SESSION_TYPES" :key="t.value" class="type-item" :data-testid="'chat-type-' + t.value" @click="createSession(t.value)">
               <span class="type-name">{{ t.label }}</span>
               <span class="type-desc">{{ t.desc }}</span>
             </div>
@@ -77,7 +77,7 @@
             <div v-if="msg.role === 'system'" class="message-item system">
               <div class="system-msg">{{ msg.content }}</div>
             </div>
-            <div v-else class="message-item" :class="msg.role">
+            <div v-else class="message-item" :class="msg.role" :data-testid="'chat-message-' + msg.role">
               <div class="message-avatar">{{ msg.role === 'user' ? '我' : '医' }}</div>
               <div class="message-bubble">
                 <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
@@ -88,7 +88,7 @@
                     <span class="reference-snippet">{{ ref.snippet }}</span>
                   </div>
                 </div>
-                <span v-if="msg.streaming" class="streaming-cursor"></span>
+                <span v-if="msg.streaming" class="streaming-cursor" data-testid="chat-streaming-cursor"></span>
               </div>
             </div>
           </template>
@@ -114,9 +114,10 @@
               class="input-textarea"
               :autosize="{ minRows: 1, maxRows: 6 }"
               placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
+              data-testid="chat-input"
               @keydown="handleKeydown"
             />
-            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" :icon="VideoPause" @click="stopGeneration">停止</el-button>
+            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" :icon="VideoPause" @click="stopGeneration" data-testid="chat-stop">停止</el-button>
             <el-button
               v-else
               type="primary"
@@ -124,6 +125,7 @@
               :disabled="!inputText.trim()"
               :icon="Position"
               @click="sendMessage"
+              data-testid="chat-send"
             />
           </div>
           <p class="input-hint">AI 内容仅供参考，不能替代执业医师诊断 · 挂号等写操作会先与您确认</p>
