@@ -18,16 +18,16 @@
           {{ selectedFile ? selectedFile.name : '未选择文件' }}
         </span>
         <el-button @click="chooseFile">选择文件</el-button>
-        <el-button type="primary" :disabled="!selectedFile || uploading" @click="doUpload">
+        <el-button type="primary" :disabled="!selectedFile || uploading" @click="doUpload" data-testid="knowledge-upload">
           {{ uploading ? '上传中…' : '上传' }}
         </el-button>
       </div>
-      <input ref="fileInputRef" type="file" accept=".md,.txt" class="hidden-input" @change="onFileChange" />
+      <input ref="fileInputRef" type="file" accept=".md,.txt" class="hidden-input" data-testid="knowledge-file-input" @change="onFileChange" />
     </div>
 
     <!-- 表格 -->
     <div class="table-card">
-      <el-table v-if="list.length > 0" :data="list" stripe>
+      <el-table v-if="list.length > 0" :data="list" stripe data-testid="knowledge-table">
         <el-table-column label="ID" width="64">
           <template #default="{ row }"><code class="id-cell" :title="String(row.id)">{{ row.id }}</code></template>
         </el-table-column>
@@ -54,12 +54,12 @@
         </el-table-column>
         <el-table-column label="操作" width="100">
           <template #default="{ row }">
-            <el-button link type="danger" @click="removeDoc(row)">删除</el-button>
+            <el-button link type="danger" @click="removeDoc(row)" data-testid="knowledge-delete">删除</el-button>
           </template>
         </el-table-column>
         <template #empty>{{ loading ? '加载中…' : '暂无知识库文档' }}</template>
       </el-table>
-      <div v-else class="empty-tip">{{ loading ? '加载中…' : '暂无知识库文档' }}</div>
+      <div v-else class="empty-tip" data-testid="knowledge-empty">{{ loading ? '加载中…' : '暂无知识库文档' }}</div>
     </div>
 
     <!-- 分页 -->
