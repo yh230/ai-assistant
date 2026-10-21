@@ -70,11 +70,16 @@ scripts/start-services.sh
 ```mermaid
 flowchart LR
   U[员工端 / 患者端] --> G[Gateway :8080]
+  X[第三方 MCP 客户端] --> G
   G --> A[auth-service :9200]
   G --> S[system-service :9201]
   G --> H[hospital-service :9202]
   G --> R[registration-service :9203]
   G --> C[ai-chat-service :9204]
+  G --> P[mcp-server :9205]
+  P --> R
+  P --> H
+  P --> D2[(Redis)]
   A --> M[(MySQL 四库)]
   S --> M
   H --> M
@@ -95,6 +100,7 @@ flowchart LR
 - [E2E 套件](ai-assistant-e2e/README.md)
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
+- [MCP 排班查询设计](docs/design/mcp-schedule-design.md)
 
 ## 功能明细
 
@@ -107,6 +113,7 @@ flowchart LR
 - 引用来源与急症红线：RAG 回答附参考来源；急症症状自动引导急诊
 - 安全底座：输入风控（敏感词直接拦截、不调模型）、输出风控、SSE 加固、限流（网关令牌桶）
 - 双身份体系：员工（STAFF）与患者（PATIENT）JWT 身份隔离，患者账号绑定医院、数据按医院边界隔离
+- 对外 MCP：第三方 AI 客户端凭 API Key 查询绑定医院的未来 14 天排班与真实余量（只读、按院隔离、Key 级限流）
 
 **业务模块**
 
@@ -154,12 +161,12 @@ flowchart LR
 
 ```text
 aidaima/
-├── ai-assistant-backend/     # 后端：父工程 + 9 模块
+├── ai-assistant-backend/     # 后端：父工程 + 10 模块
 │   ├── gateway/              # 网关：统一入口、鉴权、路由、限流
 │   ├── common/               # 公共：Result/PageResult、异常、数据权限
 │   ├── common-security/      # 安全公共组件：JWT、内部调用校验、Security 配置
 │   ├── api/                  # 服务间 Feign 接口与 DTO
-│   └── services/             # auth / system / hospital / registration / ai-chat
+│   └── services/             # auth / system / hospital / registration / ai-chat / mcp
 ├── ai-assistant-frontend/    # 前端：Vue 3 + Vite + Element Plus（员工端 + 患者端）
 ├── ai-assistant-e2e/         # API 级 E2E 自动化测试（Python + pytest + httpx）
 ├── scripts/                  # 一键脚本：Nacos / 服务 / E2E（含共享配置样例）
@@ -263,6 +270,7 @@ npm run dev
 | hospital-service | 9202 |
 | registration-service | 9203 |
 | ai-chat-service | 9204 |
+| mcp-server | 9205 |
 | Nacos | 8848（控制台 8849） |
 
 ## 默认账号
@@ -275,6 +283,46 @@ npm run dev
 - **服务端口仅内网**：9200-9204 为 auth/system/hospital/registration/ai-chat 直连端口，生产只暴露网关（8080），并将 9200-9204 限制在内网或容器网络，禁止公网访问（`/inner/**` 仅凭内部令牌保护）。
 - **强制覆盖默认密钥**：生产 Nacos 必须覆盖 JWT 密钥、内部调用令牌（`security.internal.token`）、数据库密码、CORS 白名单（`security.cors.allowed-origins`，禁止 `*`）与短信配置；保留默认值时 `prod` profile 启动即失败。
 - **权限变更后清快照**：权限/角色播种或调整后，需清理 Redis `auth:user:*` 权限快照（或要求相关账号重新登录），否则旧快照最长存活一个缓存周期。
+
+## MCP 排班查询（对外）
+
+对外提供只读 MCP Server，第三方 AI 客户端凭 API Key 查询绑定医院的医生排班与号源余量。
+
+### 配置
+
+1. 在 Nacos 新建配置 `mcp-shared.yaml`（group `DEFAULT_GROUP`），内容参考 `scripts/nacos-mcp-shared.example.yaml`。
+2. 生成 Key 与哈希：
+
+   ```bash
+   printf '%s' 'mcp_replace_with_random_32_bytes' | sha256sum
+   ```
+
+3. 把 64 位哈希填入 `key-sha256`，把允许访问的医院 ID 填入 `hospital-ids`。
+4. 启动 `mcp-server`（端口 9205）；网关入口为 `http://localhost:8080/mcp`。
+
+### 连接
+
+- 传输：Streamable HTTP
+- 地址：`http://localhost:8080/mcp`
+- 请求头：`X-API-Key: <原始 Key>`
+
+可用 MCP Inspector 验证：
+
+```bash
+npx @modelcontextprotocol/inspector
+# Transport 选择 Streamable HTTP
+# URL 填 http://localhost:8080/mcp
+# 增加 Header X-API-Key
+```
+
+### 工具
+
+| 工具 | 用途 |
+|------|------|
+| `list_hospitals` | 返回当前 Key 可访问的医院 |
+| `query_doctor_schedules` | 按医院、日期窗口、科室、医生姓名、时段查询排班与余量 |
+
+限制：日期窗口最多 14 天，单次最多返回 100 条，结果缓存 45 秒；Key 只能访问绑定医院。
 
 ## 自动化测试
 
