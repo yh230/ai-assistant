@@ -14,7 +14,7 @@ class KnowledgePage(BasePage):
         self.testid("knowledge-upload").click()
 
     def row(self, name: str) -> Locator:
-        return self.page.locator("tr", has_text=name)
+        return self.testid("knowledge-table").locator("tr", has_text=name)
 
     def delete(self, name: str) -> None:
         self.row(name).get_by_test_id("knowledge-delete").click()

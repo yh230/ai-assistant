@@ -24,6 +24,7 @@ def main() -> int:
 
     api = ApiClient(settings.api_base)
     admin = None
+    staff1 = None
     hospitals: dict[str, int] = {}
     try:
         check("前端", lambda: http_ok(settings.base_url))
@@ -36,15 +37,53 @@ def main() -> int:
 
         check("admin 登录", login_admin)
 
+        def login_staff1():
+            nonlocal staff1
+            if not settings.staff1_user or not settings.staff1_password:
+                raise RuntimeError(
+                    "未配置 UI_E2E_STAFF1_USER / UI_E2E_STAFF1_PASSWORD（知识库用例必需）"
+                )
+            staff1 = api.login_staff(settings.staff1_user, settings.staff1_password)
+            return staff1.user.get("userId", "OK")
+
+        check("staff1 登录", login_staff1)
+
         def demo_hospitals():
+            if not settings.hospital1 or not settings.hospital2:
+                raise RuntimeError(
+                    "未配置 UI_E2E_HOSPITAL1_NAME / UI_E2E_HOSPITAL2_NAME"
+                )
             hospitals.update({h["name"]: h["id"] for h in api.public_hospitals()})
-            return hospitals[settings.hospital1], hospitals[settings.hospital2]
+            missing = [
+                name for name in (settings.hospital1, settings.hospital2)
+                if name not in hospitals
+            ]
+            if missing:
+                raise RuntimeError(f"公开医院列表缺少：{'、'.join(missing)}")
+            return (
+                f"{settings.hospital1}={hospitals[settings.hospital1]}, "
+                f"{settings.hospital2}={hospitals[settings.hospital2]}"
+            )
 
         check("两家演示医院", demo_hospitals)
 
-        hid = hospitals.get(settings.hospital1)
-        if admin is not None and hid is not None:
-            check("医院 1 科室", lambda: f"{len(api.departments(admin.token, hid))} 个")
+        def hospital1_departments():
+            if admin is None:
+                raise RuntimeError("admin 登录失败，无法查询医院 1 科室")
+            hid = hospitals.get(settings.hospital1)
+            if hid is None:
+                raise RuntimeError("医院 1 未解析，无法查询科室")
+            return f"{len(api.departments(admin.token, hid))} 个"
+
+        check("医院 1 科室", hospital1_departments)
+
+        def staff1_knowledge():
+            if staff1 is None:
+                raise RuntimeError("staff1 登录失败，无法查询知识库")
+            docs = api.list_docs(staff1.token)
+            return f"{docs.get('total', 0)} 条"
+
+        check("staff1 知识库列表", staff1_knowledge)
 
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
 

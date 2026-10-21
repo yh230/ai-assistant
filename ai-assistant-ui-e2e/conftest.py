@@ -4,13 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import Browser
 
 from api_client import ApiClient, Session, gen_phone
 from config import settings
 
-Path("reports").mkdir(exist_ok=True)
-Path("artifacts").mkdir(exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+(BASE_DIR / "reports").mkdir(exist_ok=True)
+(BASE_DIR / "artifacts").mkdir(exist_ok=True)
 
 
 def _staff_state(session: Session) -> dict:
@@ -40,8 +40,8 @@ def admin_session(api):
 
 
 @pytest.fixture
-def admin_page(browser: Browser, admin_session):
-    context = browser.new_context(
+def admin_page(new_context, admin_session):
+    context = new_context(
         storage_state=_staff_state(admin_session),
         viewport={"width": 1440, "height": 900},
     )
@@ -51,8 +51,8 @@ def admin_page(browser: Browser, admin_session):
 
 
 @pytest.fixture
-def anon_page(browser: Browser):
-    context = browser.new_context(viewport={"width": 1440, "height": 900})
+def anon_page(new_context):
+    context = new_context(viewport={"width": 1440, "height": 900})
     page = context.new_page()
     yield page
     context.close()
@@ -87,8 +87,8 @@ def staff1_session(api):
 
 
 @pytest.fixture
-def staff1_page(browser: Browser, staff1_session):
-    context = browser.new_context(
+def staff1_page(new_context, staff1_session):
+    context = new_context(
         storage_state=_staff_state(staff1_session),
         viewport={"width": 1440, "height": 900},
     )
@@ -99,6 +99,8 @@ def staff1_page(browser: Browser, staff1_session):
 
 @pytest.fixture
 def patient(api):
+    if not settings.hospital1:
+        pytest.skip("未配置 UI_E2E_HOSPITAL1_NAME，无法按医院名称选择")
     phone = gen_phone()
     password = "UiE2e123"
     hospital_id = api.hospital_id(settings.hospital1)
@@ -108,8 +110,8 @@ def patient(api):
 
 
 @pytest.fixture
-def patient_page(browser: Browser, patient):
-    context = browser.new_context(
+def patient_page(new_context, patient):
+    context = new_context(
         storage_state=_patient_state(patient.session),
         viewport={"width": 1440, "height": 900},
     )
@@ -125,8 +127,8 @@ def ai_ready():
 
 
 @pytest.fixture
-def mobile_anon_page(browser: Browser):
-    context = browser.new_context(
+def mobile_anon_page(new_context):
+    context = new_context(
         viewport={"width": 390, "height": 844},
         is_mobile=True,
         has_touch=True,
@@ -137,8 +139,8 @@ def mobile_anon_page(browser: Browser):
 
 
 @pytest.fixture
-def mobile_patient_page(browser: Browser, patient):
-    context = browser.new_context(
+def mobile_patient_page(new_context, patient):
+    context = new_context(
         storage_state=_patient_state(patient.session),
         viewport={"width": 390, "height": 844},
         is_mobile=True,

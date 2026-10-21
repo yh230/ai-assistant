@@ -5,14 +5,11 @@ import pytest
 from config import settings
 from pages.patient_chat_page import PatientChatPage
 
-if not settings.hospital1:
-    pytest.skip("未配置 UI_E2E_HOSPITAL1_NAME，跳过挂号记录用例", allow_module_level=True)
-
 
 @pytest.mark.ai
 @pytest.mark.timeout(600)
 def test_booking_requires_confirm_and_creates_record(
-    patient_page, patient, api, staff1_session, ai_ready
+    ai_ready, patient_page, patient, api, staff1_session
 ):
     page = PatientChatPage(patient_page)
     page.open()

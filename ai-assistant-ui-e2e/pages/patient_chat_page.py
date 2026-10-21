@@ -20,11 +20,11 @@ class PatientChatPage(BasePage):
         self.testid("chat-send").click()
 
     def wait_done(self, timeout_ms: int) -> None:
-        expect(self.testid("chat-message-assistant").last).not_to_have_text("", timeout=timeout_ms)
+        expect(self.testid("chat-message-content").last).not_to_have_text("", timeout=timeout_ms)
         expect(self.testid("chat-send")).to_be_visible(timeout=timeout_ms)
 
     def last_assistant(self) -> Locator:
-        return self.testid("chat-message-assistant").last
+        return self.testid("chat-message-content").last
 
     def wait_confirm_dialog(self) -> None:
         expect(self.testid("confirm-dialog")).to_be_visible(timeout=settings.llm_timeout_ms)

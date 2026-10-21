@@ -7,9 +7,8 @@ DISCLAIMER = "AI内容仅供参考，不能替代执业医师诊断"
 
 
 @pytest.mark.ai
+@pytest.mark.timeout(600)
 def test_triage_stream_and_disclaimer(ai_ready, patient_page, api, admin_session):
-    if not settings.hospital1:
-        pytest.skip("未配置 UI_E2E_HOSPITAL1_NAME，无法校验本院科室")
     page = PatientChatPage(patient_page)
     page.open()
     page.new_session("TRIAGE")

@@ -7,7 +7,8 @@ AI 医院助手 UI 自动化测试（Playwright + pytest），覆盖登录、菜
 - 前端已启动：`http://localhost:5173`
 - 后端网关已启动：`http://localhost:8080`
 - 两家演示医院、T+1 可约排班已存在（患者端选院与挂号用例依赖）
-- 复用 `ai-assistant-e2e/.env` 的两院账号，填入本目录 `.env`
+- 必需账号：`admin` 与 `staff1`（`staff1` 须绑定医院 1 且拥有 `ai:knowledge:manage`）；`staff2` 当前未使用
+- 复用 `ai-assistant-e2e/.env` 的账号，填入本目录 `.env`
 
 ## 安装
 
@@ -30,13 +31,13 @@ macOS/Linux 使用 `.venv/bin/python`。
 | `UI_E2E_BASE_URL` | 前端地址，默认 `http://localhost:5173` |
 | `UI_E2E_API_BASE` | 网关地址，默认 `http://localhost:8080` |
 | `UI_E2E_ADMIN_USER` / `UI_E2E_ADMIN_PASSWORD` | 平台管理员账号 |
-| `UI_E2E_STAFF1_USER` / `UI_E2E_STAFF1_PASSWORD` | 医院 1 员工账号 |
-| `UI_E2E_STAFF2_USER` / `UI_E2E_STAFF2_PASSWORD` | 医院 2 员工账号 |
+| `UI_E2E_STAFF1_USER` / `UI_E2E_STAFF1_PASSWORD` | 医院 1 员工账号（必需，知识库用例依赖） |
+| `UI_E2E_STAFF2_USER` / `UI_E2E_STAFF2_PASSWORD` | 医院 2 员工账号（当前未使用） |
 | `UI_E2E_HOSPITAL1_NAME` / `UI_E2E_HOSPITAL2_NAME` | 两家演示医院名称（须与公开医院列表一致） |
-| `UI_E2E_AI` | `1` 时运行 AI 用例，默认 `0` 跳过 |
+| `UI_E2E_AI` | `1` 时运行 AI 用例，默认 `0` 跳过；在 `.env` 中设置 |
 | `UI_E2E_FAST_TIMEOUT_MS` / `UI_E2E_LLM_TIMEOUT_MS` | 普通交互与模型响应的等待上限 |
 
-未配置员工账号时，相关用例会 `skip` 而不是失败。
+`admin` 与 `staff1` 为必需账号，preflight 会校验两者登录；未配置时相关用例会 `skip` 或 preflight 失败。
 
 ## 前置检查
 
@@ -57,8 +58,8 @@ macOS/Linux 使用 `.venv/bin/python`。
 # 只跑移动端
 .venv/Scripts/python.exe -m pytest -m mobile
 
-# AI 用例（需要后端模型可用）
-UI_E2E_AI=1 .venv/Scripts/python.exe -m pytest -m ai
+# AI 用例（需要后端模型可用；先在 .env 中设置 UI_E2E_AI=1）
+.venv/Scripts/python.exe -m pytest -m ai
 
 # 仅收集用例，检查导入与 fixture 是否正常
 .venv/Scripts/python.exe -m pytest --collect-only -q
@@ -90,7 +91,7 @@ ai-assistant-ui-e2e/
 
 - 只跑 Chromium；扫码/短信登录未纳入 MVP。
 - 预约测试数据会残留在 dev 库，用例只断言本次创建的记录。
-- 当前没有 nightly 环境，AI 用例需手工设置 `UI_E2E_AI=1`。
+- 当前没有 nightly 环境，AI 用例需在 `.env` 中设置 `UI_E2E_AI=1`。
 - 暂不依赖 Docker Compose，需手动启动六进程。
 - 不直连数据库，造数/清理走网关 API。
-- AI 用例只做结构化断言（消息节点、确认卡片），不比对具体文案。
+- 除固定免责声明外，只做结构化断言（消息内容节点、确认卡片），不比对具体文案。

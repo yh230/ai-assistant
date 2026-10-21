@@ -80,7 +80,7 @@
             <div v-else class="message-item" :class="msg.role" :data-testid="'chat-message-' + msg.role">
               <div class="message-avatar">{{ msg.role === 'user' ? '我' : '医' }}</div>
               <div class="message-bubble">
-                <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
+                <div class="markdown-body" data-testid="chat-message-content" v-html="renderMarkdownSafe(msg.content)"></div>
                 <div v-if="msg.references && msg.references.length" class="reference-block">
                   <div class="reference-title">参考来源</div>
                   <div v-for="(ref, ri) in msg.references" :key="ri" class="reference-item">
