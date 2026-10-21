@@ -5,8 +5,12 @@ import pytest
 from config import settings
 from pages.patient_chat_page import PatientChatPage
 
+if not settings.hospital1:
+    pytest.skip("未配置 UI_E2E_HOSPITAL1_NAME，跳过挂号记录用例", allow_module_level=True)
+
 
 @pytest.mark.ai
+@pytest.mark.timeout(600)
 def test_booking_requires_confirm_and_creates_record(
     patient_page, patient, api, staff1_session, ai_ready
 ):
@@ -17,6 +21,10 @@ def test_booking_requires_confirm_and_creates_record(
     page.wait_done(settings.llm_timeout_ms)
 
     page.send("帮我挂明天上午的号")
+    page.wait_confirm_dialog()
+    before = api.registration_records(staff1_session.token, patient.phone)
+    assert before.get("total", 0) == 0, f"确认前已存在预约记录：{before}"
+
     summary = page.confirm_booking()
     assert any(k in summary for k in ("上午", "下午")), f"确认摘要未见时段：{summary}"
 

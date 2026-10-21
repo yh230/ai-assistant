@@ -26,8 +26,12 @@ class PatientChatPage(BasePage):
     def last_assistant(self) -> Locator:
         return self.testid("chat-message-assistant").last
 
-    def confirm_booking(self) -> str:
+    def wait_confirm_dialog(self) -> None:
         expect(self.testid("confirm-dialog")).to_be_visible(timeout=settings.llm_timeout_ms)
+
+    def confirm_booking(self) -> str:
+        self.wait_confirm_dialog()
         summary = self.testid("confirm-summary").inner_text()
         self.testid("confirm-ok").click()
+        expect(self.testid("confirm-dialog")).to_be_hidden(timeout=settings.fast_timeout_ms)
         return summary
