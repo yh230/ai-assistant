@@ -118,9 +118,6 @@ ai-assistant-ui-e2e/
 │   ├── test_04_knowledge.py
 │   ├── test_05_permissions.py
 │   └── test_06_mobile.py
-├── data/
-│   ├── prompts.yaml
-│   └── sample_doc.md
 ├── reports/                 # JUnit，gitignore
 └── artifacts/               # trace/截图/视频，gitignore
 ```
