@@ -288,16 +288,28 @@ npm run dev
 
 对外提供只读 MCP Server，第三方 AI 客户端凭 API Key 查询绑定医院的医生排班与号源余量。
 
+MCP 是协议（JSON-RPC 2.0），不是某种语言的 SDK。本服务端使用 Java（Spring AI 1.0.9 + MCP Java SDK），Python、TypeScript、Go 等任意 MCP 客户端都可以接入；`ai-assistant-e2e` 中的 MCP 用例甚至直接用 httpx 发 JSON-RPC，不依赖 Python MCP SDK。
+
 ### 配置
 
 1. 在 Nacos 新建配置 `mcp-shared.yaml`（group `DEFAULT_GROUP`），内容参考 `scripts/nacos-mcp-shared.example.yaml`。
-2. 生成 Key 与哈希：
+2. 生成 Key 与哈希（推荐 Python，跨平台）：
 
    ```bash
-   printf '%s' 'mcp_replace_with_random_32_bytes' | sha256sum
+   python -c "import secrets,hashlib; k='mcp_'+secrets.token_hex(32); print('KEY =',k); print('HASH=',hashlib.sha256(k.encode()).hexdigest())"
+   ```
+
+   也可用 Git Bash：
+
+   ```bash
+   KEY="mcp_$(openssl rand -hex 32)"
+   printf '%s' "$KEY" | sha256sum
    ```
 
 3. 把 64 位哈希填入 `key-sha256`，把允许访问的医院 ID 填入 `hospital-ids`。
+   - `key-sha256` 必须是 64 位十六进制，否则该 Key 会被忽略并输出启动警告；
+   - `hospital-ids` 不能为空或包含 null；
+   - 明文 Key 只交给调用方，不写入仓库或 Nacos。
 4. 启动 `mcp-server`（端口 9205）；网关入口为 `http://localhost:8080/mcp/sse`（SSE 建流）与 `http://localhost:8080/mcp/message`（消息投递）。
 
 ### 连接
@@ -305,6 +317,9 @@ npm run dev
 - 传输：SSE（`/mcp/sse` 建立事件流，`/mcp/message` 发送 JSON-RPC 消息）
 - 地址：`http://localhost:8080/mcp/sse`
 - 请求头：`X-API-Key: <原始 Key>`；SSE 与消息端点每次请求都需携带
+- 限流：网关按 IP 默认 120 次/分钟（突发 240），mcp-server 再按 Key 默认 60 次/分钟
+- 生产环境：在网关/Ingress 终止 TLS，对外使用 HTTPS；9205 只开内网，不要直接暴露
+- Key 无效/缺失返回 401，频率超限返回 429；Key 轮换后重启 mcp-server（或确认 Nacos 刷新已生效）
 
 可用 MCP Inspector 验证：
 
@@ -322,6 +337,8 @@ npx @modelcontextprotocol/inspector
 | `list_hospitals` | 返回当前 Key 可访问的医院 |
 | `query_doctor_schedules` | 按医院、日期窗口、科室、医生姓名、时段查询排班与余量 |
 
+工具入参使用 snake_case（如 `hospital_id`、`date_from`），返回字段为 `items`、`truncated`、`dateFrom`、`dateTo`。
+
 限制：日期窗口最多 14 天，单次最多返回 100 条，结果缓存 45 秒；Key 只能访问绑定医院。工具业务错误通过 MCP `isError=true` 返回，错误文本在 `content[0].text`。
 
 ## 自动化测试
@@ -331,6 +348,13 @@ npx @modelcontextprotocol/inspector
 ```bat
 scripts\run-e2e.bat                            :: 全量（前置自检 + 执行 + JUnit 报告）
 scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模型）
+```
+
+MCP SSE 端到端（需完整栈、Nacos Key 与 `MCP_E2E_API_KEY`）：
+
+```bash
+cd ai-assistant-e2e
+pytest -m mcp -v
 ```
 
 结果支持推送到**企业微信 / 飞书 / 邮箱**（`.env` 配置通道，跑完自动推送）。详见 [ai-assistant-e2e/README.md](ai-assistant-e2e/README.md)。
