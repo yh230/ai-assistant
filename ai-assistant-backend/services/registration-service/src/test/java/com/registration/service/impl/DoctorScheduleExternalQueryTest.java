@@ -31,6 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -232,6 +233,43 @@ class DoctorScheduleExternalQueryTest {
         verify(scheduleMapper).selectList(captor.capture());
         String sql = ((LambdaQueryWrapper<DoctorSchedule>) captor.getValue()).getSqlSegment();
         assertTrue(sql != null && sql.trim().endsWith("LIMIT 501"), "扫描上限应为 501: " + sql);
+    }
+
+    @Test
+    void appliesHospitalStatusAndDatePredicates() {
+        when(scheduleMapper.selectList(any())).thenReturn(List.of());
+
+        service.queryForExternal(7L, "2099-01-01", "2099-01-03", null, null, null);
+
+        ArgumentCaptor<Wrapper<DoctorSchedule>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(scheduleMapper).selectList(captor.capture());
+        LambdaQueryWrapper<DoctorSchedule> wrapper = (LambdaQueryWrapper<DoctorSchedule>) captor.getValue();
+        String sql = wrapper.getSqlSegment();
+        assertTrue(sql != null && sql.contains("hospital_id"), "排班查询应带 hospital_id 过滤: " + sql);
+        assertTrue(sql.contains("status"), "排班查询应带 status 过滤: " + sql);
+        assertTrue(sql.contains("schedule_date"), "排班查询应带 schedule_date 范围过滤: " + sql);
+        Collection<Object> params = wrapper.getParamNameValuePairs().values();
+        assertTrue(params.contains(7L), "排班查询应绑定医院 ID: " + params);
+        assertTrue(params.contains(1), "排班查询 status 应绑定 1: " + params);
+        assertTrue(params.contains(LocalDate.of(2099, 1, 1)), "排班查询应绑定开始日期: " + params);
+        assertTrue(params.contains(LocalDate.of(2099, 1, 3)), "排班查询应绑定结束日期: " + params);
+    }
+
+    @Test
+    void appliesDepartmentAndPeriodPredicates() {
+        when(scheduleMapper.selectList(any())).thenReturn(List.of());
+
+        service.queryForExternal(1L, "2099-01-01", "2099-01-01", 10L, 2, null);
+
+        ArgumentCaptor<Wrapper<DoctorSchedule>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(scheduleMapper).selectList(captor.capture());
+        LambdaQueryWrapper<DoctorSchedule> wrapper = (LambdaQueryWrapper<DoctorSchedule>) captor.getValue();
+        String sql = wrapper.getSqlSegment();
+        assertTrue(sql != null && sql.contains("department_id"), "排班查询应带 department_id 过滤: " + sql);
+        assertTrue(sql.contains("period"), "排班查询应带 period 过滤: " + sql);
+        Collection<Object> params = wrapper.getParamNameValuePairs().values();
+        assertTrue(params.contains(10L), "排班查询应绑定科室 ID: " + params);
+        assertTrue(params.contains(2), "排班查询应绑定时段 2: " + params);
     }
 
     private static DoctorSchedule schedule(Long id, Long doctorUserId) {

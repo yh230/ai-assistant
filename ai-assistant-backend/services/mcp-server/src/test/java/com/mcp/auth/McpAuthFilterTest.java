@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -61,16 +61,30 @@ class McpAuthFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicBoolean called = new AtomicBoolean(false);
 
-        filter.doFilter(new MockHttpServletRequest("POST", "/mcp"), response,
+        filter.doFilter(new MockHttpServletRequest("GET", "/mcp/sse"), response,
                 (request, res) -> called.set(true));
 
         assertEquals(401, response.getStatus());
+        assertEquals("ApiKey", response.getHeader("WWW-Authenticate"));
         assertFalse(called.get());
     }
 
     @Test
+    void rejectsBlankKey() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
+        request.addHeader("X-API-Key", "   ");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, (req, res) -> {
+        });
+
+        assertEquals(401, response.getStatus());
+        assertEquals("ApiKey", response.getHeader("WWW-Authenticate"));
+    }
+
+    @Test
     void rejectsUnknownKey() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
         request.addHeader("X-API-Key", "wrong");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -83,7 +97,7 @@ class McpAuthFilterTest {
     @Test
     void rejectsDisabledKey() throws Exception {
         properties.getAuth().getKeys().get(0).setEnabled(false);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
         request.addHeader("X-API-Key", RAW_KEY);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -96,7 +110,7 @@ class McpAuthFilterTest {
     @Test
     void rejectsWhenNoKeysConfigured() throws Exception {
         properties.getAuth().setKeys(List.of());
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
         request.addHeader("X-API-Key", RAW_KEY);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -107,29 +121,32 @@ class McpAuthFilterTest {
     }
 
     @Test
-    void authenticatesAndClearsContext() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+    void authenticatesAndAttachesPrincipal() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
         request.addHeader("X-API-Key", RAW_KEY);
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicReference<McpPrincipal> captured = new AtomicReference<>();
 
-        filter.doFilter(request, response, (req, res) -> captured.set(McpPrincipalContext.get()));
+        filter.doFilter(request, response, (req, res) -> captured.set(
+                (McpPrincipal) req.getAttribute(McpPrincipalContext.REQUEST_ATTRIBUTE)));
 
+        assertNotNull(captured.get());
         assertEquals("demo", captured.get().consumer());
         assertTrue(captured.get().canAccess(1L));
         assertThrows(UnsupportedOperationException.class, () -> captured.get().hospitalIds().add(2L));
-        assertNull(McpPrincipalContext.get());
+        assertEquals(captured.get(), request.getAttribute(McpPrincipalContext.REQUEST_ATTRIBUTE));
     }
 
     @Test
     void appliesDefaultLimitWhenRateLimitUnset() throws Exception {
         properties.getAuth().getKeys().get(0).setRateLimitPerMinute(null);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
         request.addHeader("X-API-Key", RAW_KEY);
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicReference<McpPrincipal> captured = new AtomicReference<>();
 
-        filter.doFilter(request, response, (req, res) -> captured.set(McpPrincipalContext.get()));
+        filter.doFilter(request, response, (req, res) -> captured.set(
+                (McpPrincipal) req.getAttribute(McpPrincipalContext.REQUEST_ATTRIBUTE)));
 
         verify(rateLimiter).tryAcquire("demo", 60);
         assertEquals(60, captured.get().rateLimitPerMinute());
@@ -138,7 +155,7 @@ class McpAuthFilterTest {
     @Test
     void returnsTooManyRequestsWhenRateLimited() throws Exception {
         when(rateLimiter.tryAcquire("demo", 60)).thenReturn(false);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp/message");
         request.addHeader("X-API-Key", RAW_KEY);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -146,6 +163,7 @@ class McpAuthFilterTest {
         });
 
         assertEquals(429, response.getStatus());
+        assertEquals("60", response.getHeader("Retry-After"));
     }
 
     @Test

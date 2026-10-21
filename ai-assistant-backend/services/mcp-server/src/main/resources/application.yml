@@ -27,7 +27,6 @@ spring:
   ai:
     mcp:
       server:
-        protocol: STREAMABLE
         name: ai-hospital-schedule
         version: 1.0.0
         type: SYNC
@@ -35,8 +34,8 @@ spring:
           resource: false
           prompt: false
           completion: false
-        streamable-http:
-          mcp-endpoint: /mcp
+        sse-endpoint: /mcp/sse
+        sse-message-endpoint: /mcp/message
 
 security:
   internal:

@@ -9,6 +9,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -21,6 +22,7 @@ import java.util.Map;
  * @author yh
  * @date 2026-10-21
  */
+@Slf4j
 @RequiredArgsConstructor
 public class McpAuthFilter extends OncePerRequestFilter {
 
@@ -36,26 +38,58 @@ public class McpAuthFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        McpProperties.Key matched = findKey(request.getHeader(API_KEY_HEADER));
+        if (!hasUsableKey(properties)) {
+            metrics.authFailure("empty_config");
+            log.error("MCP 认证失败: reason=empty_config, remote={}", request.getRemoteAddr());
+            writeUnauthorized(response, "invalid_api_key");
+            return;
+        }
+        String raw = request.getHeader(API_KEY_HEADER);
+        if (raw == null || raw.isBlank()) {
+            metrics.authFailure("missing_key");
+            log.warn("MCP 认证失败: reason=missing_key, remote={}", request.getRemoteAddr());
+            writeUnauthorized(response, "invalid_api_key");
+            return;
+        }
+        McpProperties.Key matched = findKey(raw);
         if (matched == null) {
             metrics.authFailure("invalid_key");
-            writeJson(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid_api_key");
+            log.warn("MCP 认证失败: reason=invalid_key, remote={}", request.getRemoteAddr());
+            writeUnauthorized(response, "invalid_api_key");
             return;
         }
         Integer configuredLimit = matched.getRateLimitPerMinute();
         int effectiveLimit = (configuredLimit == null || configuredLimit < 1) ? 60 : configuredLimit;
         if (!rateLimiter.tryAcquire(matched.getConsumer(), effectiveLimit)) {
             metrics.rateLimited(matched.getConsumer());
+            log.warn("MCP 限流命中: consumer={}, remote={}", matched.getConsumer(), request.getRemoteAddr());
+            response.setHeader("Retry-After", "60");
             writeJson(response, HttpServletResponse.SC_TOO_MANY_REQUESTS, "rate_limit_exceeded");
             return;
         }
-        McpPrincipalContext.set(new McpPrincipal(
+        McpPrincipalContext.attach(request, new McpPrincipal(
                 matched.getConsumer(), List.copyOf(matched.getHospitalIds()), effectiveLimit));
-        try {
-            filterChain.doFilter(request, response);
-        } finally {
-            McpPrincipalContext.clear();
+        filterChain.doFilter(request, response);
+    }
+
+    /**
+     * 判断配置中是否存在可用 Key
+     *
+     * @param properties MCP 配置
+     * @return 是否存在启用的可用 Key
+     */
+    public static boolean hasUsableKey(McpProperties properties) {
+        if (properties == null || properties.getAuth() == null || properties.getAuth().getKeys() == null) {
+            return false;
         }
+        for (McpProperties.Key key : properties.getAuth().getKeys()) {
+            if (key == null || !key.isEnabled() || key.getConsumer() == null || key.getConsumer().isBlank()
+                    || key.getHospitalIds() == null || key.getHospitalIds().isEmpty()) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -78,6 +112,18 @@ public class McpAuthFilter extends OncePerRequestFilter {
             }
         }
         return null;
+    }
+
+    /**
+     * 输出未认证响应
+     *
+     * @param response 响应
+     * @param error 错误码
+     * @throws IOException 写出失败
+     */
+    private void writeUnauthorized(HttpServletResponse response, String error) throws IOException {
+        response.setHeader("WWW-Authenticate", "ApiKey");
+        writeJson(response, HttpServletResponse.SC_UNAUTHORIZED, error);
     }
 
     /**

@@ -38,7 +38,7 @@ public class McpRateLimiter {
             RAtomicLong counter = redissonClient.getAtomicLong(key);
             long current = counter.incrementAndGet();
             if (current == 1) {
-                counter.expire(Duration.ofSeconds(70));
+                counter.expire(Duration.ofSeconds(60));
             }
             return current <= limitPerMinute;
         } catch (Exception e) {

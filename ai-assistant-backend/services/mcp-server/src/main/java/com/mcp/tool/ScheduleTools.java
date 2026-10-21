@@ -13,6 +13,7 @@ import com.mcp.cache.ScheduleCache;
 import com.mcp.support.McpMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -24,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 /**
  * MCP 排班查询工具
@@ -41,6 +43,9 @@ public class ScheduleTools {
     private static final int MAX_WINDOW_DAYS = 14;
     private static final String TOOL_QUERY = "query_doctor_schedules";
     private static final String TOOL_HOSPITALS = "list_hospitals";
+    private static final String UNAUTHENTICATED = "未认证的调用方";
+    private static final String DOWNSTREAM_ERROR = "排班查询服务暂时不可用，请稍后重试";
+    private static final String HOSPITAL_ERROR = "医院信息查询服务暂时不可用，请稍后重试";
 
     private final RegistrationClient registrationClient;
     private final OrgClient orgClient;
@@ -51,32 +56,52 @@ public class ScheduleTools {
     /**
      * 查询当前 Key 可访问的医院
      *
+     * @param toolContext Spring AI 工具上下文
      * @return 医院列表或错误对象
      */
     @Tool(name = TOOL_HOSPITALS, description = "查询当前 API Key 可访问的医院列表。无参数。")
-    public Object listHospitals() {
+    public Object listHospitals(ToolContext toolContext) {
         long start = System.nanoTime();
+        McpPrincipal principal = McpPrincipalContext.from(toolContext);
+        if (principal == null) {
+            log.warn("MCP 工具调用拒绝: tool={}, reason=unauthenticated", TOOL_HOSPITALS);
+            recordMetrics(TOOL_HOSPITALS, "error", start);
+            return error(UNAUTHENTICATED);
+        }
         String outcome = "success";
         try {
-            McpPrincipal principal = McpPrincipalContext.get();
-            if (principal == null) {
-                outcome = "error";
-                return error("未认证的调用方");
-            }
             Result<List<OrgBriefDTO>> result = orgClient.hospitals(principal.hospitalIds());
             if (result == null || result.getCode() != 200 || result.getData() == null) {
                 outcome = "error";
-                return error("医院信息查询服务暂时不可用，请稍后重试");
+                log.warn("MCP 查询医院失败: consumer={}, code={}, msg={}", principal.consumer(),
+                        result == null ? null : result.getCode(), result == null ? null : result.getMsg());
+                return error(HOSPITAL_ERROR);
             }
-            return result.getData().stream()
-                    .map(hospital -> new HospitalItem(hospital.getId(), hospital.getName()))
+            Map<Long, String> returned = new LinkedHashMap<>();
+            for (OrgBriefDTO hospital : result.getData()) {
+                if (hospital != null && hospital.getId() != null) {
+                    returned.put(hospital.getId(), hospital.getName());
+                }
+            }
+            List<HospitalItem> items = principal.hospitalIds().stream()
+                    .filter(returned::containsKey)
+                    .map(id -> new HospitalItem(id, returned.get(id)))
                     .toList();
+            List<Long> missing = principal.hospitalIds().stream()
+                    .filter(id -> !returned.containsKey(id))
+                    .toList();
+            if (!missing.isEmpty()) {
+                log.warn("MCP 医院列表缺失: consumer={}, missingHospitalIds={}", principal.consumer(), missing);
+            }
+            log.info("MCP 医院列表查询成功: consumer={}, count={}", principal.consumer(), items.size());
+            return items;
         } catch (Exception e) {
             outcome = "error";
-            log.warn("MCP 查询医院失败: {}", e.getMessage());
-            return error("医院信息查询服务暂时不可用，请稍后重试");
+            log.warn("MCP 查询医院失败: consumer={}, cause={}", principal.consumer(), e.getMessage());
+            return error(HOSPITAL_ERROR);
         } finally {
             recordMetrics(TOOL_HOSPITALS, outcome, start);
+            logAccess(TOOL_HOSPITALS, principal, principal.hospitalIds(), start, outcome);
         }
     }
 
@@ -89,25 +114,28 @@ public class ScheduleTools {
      * @param department_id 科室 ID（可空）
      * @param doctor_name 医生姓名关键字（可空）
      * @param period 时段（1=上午，2=下午，可空）
+     * @param toolContext Spring AI 工具上下文
      * @return 查询结果或错误对象
      */
-    @Tool(name = TOOL_QUERY, description = "查询某医院未来 14 天内医生排班与号源余量。参数：hospital_id=医院ID（单院 Key 可空），date_from=开始日期 yyyy-MM-dd，date_to=结束日期 yyyy-MM-dd（窗口最多14天），department_id=科室ID（可空），doctor_name=医生姓名（可空，包含匹配），period=1上午/2下午（可空）。")
+    @Tool(name = TOOL_QUERY, description = "查询指定医院医生排班与号源余量，查询窗口最多 14 天。参数：hospital_id=医院ID（单院 Key 可空），date_from=开始日期 yyyy-MM-dd，date_to=结束日期 yyyy-MM-dd（窗口最多14天），department_id=科室ID（可空），doctor_name=医生姓名（可空，包含匹配），period=1上午/2下午（可空）。")
     public Object queryDoctorSchedules(
             @ToolParam(description = "医院ID；Key 只绑定一家医院时可空", required = false) Long hospital_id,
             @ToolParam(description = "开始日期 yyyy-MM-dd，默认今天", required = false) String date_from,
             @ToolParam(description = "结束日期 yyyy-MM-dd，默认开始日期后 6 天，窗口最多 14 天", required = false) String date_to,
             @ToolParam(description = "科室ID，可空", required = false) Long department_id,
             @ToolParam(description = "医生姓名，包含匹配，可空", required = false) String doctor_name,
-            @ToolParam(description = "时段 1=上午 2=下午，可空", required = false) Integer period) {
+            @ToolParam(description = "时段 1=上午 2=下午，可空", required = false) Integer period,
+            ToolContext toolContext) {
         long start = System.nanoTime();
+        McpPrincipal principal = McpPrincipalContext.from(toolContext);
+        if (principal == null) {
+            log.warn("MCP 工具调用拒绝: tool={}, reason=unauthenticated", TOOL_QUERY);
+            recordMetrics(TOOL_QUERY, "error", start);
+            return error(UNAUTHENTICATED);
+        }
+        Long targetHospital = hospital_id;
         String outcome = "success";
         try {
-            McpPrincipal principal = McpPrincipalContext.get();
-            if (principal == null) {
-                outcome = "error";
-                return error("未认证的调用方");
-            }
-            Long targetHospital = hospital_id;
             if (targetHospital == null) {
                 if (principal.hospitalIds().size() != 1) {
                     outcome = "error";
@@ -159,13 +187,17 @@ public class ScheduleTools {
                         targetHospital, from.toString(), to.toString(), department_id, period, keyword);
                 if (result == null || result.getCode() != 200) {
                     outcome = "error";
-                    String downstreamMsg = result == null ? null : result.getMsg();
-                    return error(downstreamMsg == null || downstreamMsg.isBlank()
-                            ? "排班查询服务暂时不可用，请稍后重试" : downstreamMsg);
+                    log.warn("MCP 排班查询下游失败: consumer={}, hospitalId={}, code={}, msg={}",
+                            principal.consumer(), targetHospital,
+                            result == null ? null : result.getCode(),
+                            result == null ? null : result.getMsg());
+                    return error(DOWNSTREAM_ERROR);
                 }
                 if (result.getData() == null) {
                     outcome = "error";
-                    return error("排班查询服务暂时不可用，请稍后重试");
+                    log.warn("MCP 排班查询下游无数据: consumer={}, hospitalId={}",
+                            principal.consumer(), targetHospital);
+                    return error(DOWNSTREAM_ERROR);
                 }
                 data = result.getData();
                 scheduleCache.put(cacheKey, data);
@@ -177,16 +209,17 @@ public class ScheduleTools {
             payload.put("truncated", data.isTruncated());
             payload.put("dateFrom", from.toString());
             payload.put("dateTo", to.toString());
-            log.info("MCP 排班查询 consumer={} hospitalId={} from={} to={} rows={} truncated={}",
+            log.info("MCP 排班查询成功: consumer={} hospitalId={} from={} to={} rows={} truncated={}",
                     principal.consumer(), targetHospital, from, to,
                     items.size(), data.isTruncated());
             return payload;
         } catch (Exception e) {
             outcome = "error";
-            log.warn("MCP 排班查询失败: {}", e.getMessage());
-            return error("排班查询服务暂时不可用，请稍后重试");
+            log.warn("MCP 排班查询失败: consumer={}, cause={}", principal.consumer(), e.getMessage());
+            return error(DOWNSTREAM_ERROR);
         } finally {
             recordMetrics(TOOL_QUERY, outcome, start);
+            logAccess(TOOL_QUERY, principal, targetHospital, start, outcome);
         }
     }
 
@@ -203,6 +236,21 @@ public class ScheduleTools {
         } catch (Exception e) {
             log.debug("MCP 指标记录失败 tool={}: {}", tool, e.getMessage());
         }
+    }
+
+    /**
+     * 记录工具访问日志，不含 Key 与患者信息
+     *
+     * @param tool 工具名
+     * @param principal 调用方
+     * @param scope 医院范围或医院 ID
+     * @param start 起始纳秒时间戳
+     * @param outcome 结果
+     */
+    private void logAccess(String tool, McpPrincipal principal, Object scope, long start, String outcome) {
+        log.info("MCP 工具访问 tool={} consumer={} scope={} outcome={} durationMs={}",
+                tool, principal.consumer(), scope, outcome,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
     }
 
     /**
