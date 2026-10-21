@@ -18,6 +18,7 @@
                 type="text"
                 placeholder="请输入手机号"
                 autocomplete="username"
+                data-testid="patient-phone"
               />
             </div>
 
@@ -28,12 +29,13 @@
                 type="password"
                 placeholder="请输入密码"
                 autocomplete="current-password"
+                data-testid="patient-password"
               />
             </div>
 
-            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" data-testid="patient-error">{{ errorMsg }}</div>
 
-            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">
+            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading" data-testid="patient-login-submit">
               {{ loading ? '登录中…' : '登 录' }}
             </el-button>
           </form>
@@ -104,7 +106,7 @@
           <form class="login-form" @submit.prevent="handleRegister">
             <div class="field">
               <label>姓名</label>
-              <el-input v-model="registerForm.name" type="text" placeholder="请输入姓名" />
+              <el-input v-model="registerForm.name" type="text" placeholder="请输入姓名" data-testid="patient-register-name" />
             </div>
 
             <div class="field">
@@ -114,6 +116,7 @@
                 type="text"
                 placeholder="请输入手机号"
                 autocomplete="username"
+                data-testid="patient-register-phone"
               />
             </div>
 
@@ -124,6 +127,7 @@
                 type="password"
                 placeholder="6-32 位密码"
                 autocomplete="new-password"
+                data-testid="patient-register-password"
               />
             </div>
 
@@ -134,6 +138,7 @@
                 class="hospital-select"
                 :disabled="hospitalsLoading"
                 :placeholder="hospitalsLoading ? '医院加载中…' : '请选择医院'"
+                data-testid="patient-register-hospital"
               >
                 <el-option
                   v-for="h in hospitals"
@@ -146,7 +151,7 @@
 
             <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
 
-            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">
+            <el-button class="login-btn" type="primary" native-type="submit" :loading="loading" data-testid="patient-register-submit">
               {{ loading ? '注册中…' : '注 册' }}
             </el-button>
           </form>

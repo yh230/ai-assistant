@@ -1,0 +1,61 @@
+server:
+  port: 9205
+
+spring:
+  application:
+    name: mcp-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 2000
+            read-timeout: 5000
+  config:
+    import:
+      - optional:nacos:common-shared.yaml?group=DEFAULT_GROUP
+      - optional:nacos:mcp-shared.yaml?group=DEFAULT_GROUP
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 5000ms
+  ai:
+    mcp:
+      server:
+        name: ai-hospital-schedule
+        version: 1.0.0
+        type: SYNC
+        capabilities:
+          resource: false
+          prompt: false
+          completion: false
+        sse-endpoint: /mcp/sse
+        sse-message-endpoint: /mcp/message
+
+security:
+  internal:
+    token: ${INTERNAL_TOKEN:aidaima-internal-token-please-override}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+logging:
+  level:
+    com.mcp: info
+    com.common: info
+  pattern:
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"

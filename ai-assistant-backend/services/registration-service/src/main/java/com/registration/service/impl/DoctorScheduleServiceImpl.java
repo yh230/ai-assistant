@@ -2,7 +2,9 @@ package com.registration.service.impl;
 
 import com.api.client.OrgClient;
 import com.api.client.UserClient;
+import com.api.dto.DoctorScheduleInfoDTO;
 import com.api.dto.OrgBriefDTO;
+import com.api.dto.ScheduleQueryResultDTO;
 import com.api.dto.UserBriefDTO;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
@@ -12,6 +14,7 @@ import com.common.security.DataScopeResolver;
 import com.registration.dto.ScheduleQueryDTO;
 import com.registration.dto.ScheduleSaveDTO;
 import com.registration.entity.DoctorSchedule;
+import com.registration.entity.NumberSource;
 import com.registration.entity.Registration;
 import com.registration.enums.Period;
 import com.registration.enums.RegistrationStatus;
@@ -31,9 +34,13 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
@@ -50,6 +57,13 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class DoctorScheduleServiceImpl implements DoctorScheduleService {
+
+    /** 对外查询最大日期窗口（含首尾） */
+    private static final int MAX_WINDOW_DAYS = 14;
+    /** 数据库扫描上限 */
+    private static final int MAX_SCAN_ROWS = 500;
+    /** 单次返回上限 */
+    private static final int MAX_RETURN_ROWS = 100;
 
     private final DoctorScheduleMapper scheduleMapper;
     private final NumberSourceMapper numberSourceMapper;
@@ -213,6 +227,147 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         if (departmentId != null) qw.eq(DoctorSchedule::getDepartmentId, departmentId);
         qw.orderByAsc(DoctorSchedule::getScheduleDate).orderByAsc(DoctorSchedule::getId);
         return enrich(scheduleMapper.selectList(qw));
+    }
+
+    /**
+     * 对外只读查询：按医院与日期窗口返回排班及空闲号源数
+     *
+     * @param hospitalId 医院 ID
+     * @param dateFrom 开始日期（yyyy-MM-dd）
+     * @param dateTo 结束日期（yyyy-MM-dd）
+     * @param departmentId 科室 ID（可空）
+     * @param period 时段（可空）
+     * @param doctorName 医生姓名关键字（可空）
+     * @return 排班查询结果
+     */
+    @Override
+    public ScheduleQueryResultDTO queryForExternal(Long hospitalId, String dateFrom, String dateTo,
+                                                   Long departmentId, Integer period, String doctorName) {
+        if (hospitalId == null) {
+            throw new BusinessException("医院ID不能为空");
+        }
+        LocalDate from = parseDate(dateFrom, "开始日期");
+        LocalDate to = parseDate(dateTo, "结束日期");
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        if (to.isBefore(today)) {
+            throw new BusinessException("查询区间已过期");
+        }
+        if (from.isBefore(today)) {
+            from = today;
+        }
+        if (from.isAfter(to)) {
+            throw new BusinessException("开始日期不能晚于结束日期");
+        }
+        if (to.isAfter(from.plusDays(MAX_WINDOW_DAYS - 1))) {
+            throw new BusinessException("查询窗口最多 " + MAX_WINDOW_DAYS + " 天");
+        }
+        if (period != null && period != 1 && period != 2) {
+            throw new BusinessException("时段仅支持 1=上午、2=下午");
+        }
+
+        LambdaQueryWrapper<DoctorSchedule> qw = new LambdaQueryWrapper<>();
+        qw.eq(DoctorSchedule::getHospitalId, hospitalId)
+                .eq(DoctorSchedule::getStatus, 1)
+                .ge(DoctorSchedule::getScheduleDate, from)
+                .le(DoctorSchedule::getScheduleDate, to);
+        if (departmentId != null) {
+            qw.eq(DoctorSchedule::getDepartmentId, departmentId);
+        }
+        if (period != null) {
+            qw.eq(DoctorSchedule::getPeriod, period);
+        }
+        qw.orderByAsc(DoctorSchedule::getScheduleDate)
+                .orderByAsc(DoctorSchedule::getPeriod)
+                .orderByAsc(DoctorSchedule::getId)
+                .last("LIMIT " + (MAX_SCAN_ROWS + 1));
+
+        List<DoctorSchedule> schedules = scheduleMapper.selectList(qw);
+        boolean truncated = schedules.size() > MAX_SCAN_ROWS;
+        if (truncated) {
+            schedules = schedules.subList(0, MAX_SCAN_ROWS);
+        }
+        if (schedules.isEmpty()) {
+            return ScheduleQueryResultDTO.empty();
+        }
+
+        Map<Long, Long> freeCounts = loadFreeCounts(
+                schedules.stream().map(DoctorSchedule::getId).toList());
+        List<ScheduleVO> views = enrich(schedules);
+        for (ScheduleVO view : views) {
+            view.setRemaining(freeCounts.getOrDefault(view.getId(), 0L).intValue());
+        }
+
+        String keyword = doctorName == null ? null : doctorName.trim().toLowerCase(Locale.ROOT);
+        if (keyword != null && !keyword.isEmpty()) {
+            views = views.stream()
+                    .filter(v -> v.getDoctorName() != null
+                            && v.getDoctorName().trim().toLowerCase(Locale.ROOT).contains(keyword))
+                    .toList();
+        }
+        if (views.size() > MAX_RETURN_ROWS) {
+            views = views.subList(0, MAX_RETURN_ROWS);
+            truncated = true;
+        }
+
+        ScheduleQueryResultDTO result = new ScheduleQueryResultDTO();
+        result.setItems(views.stream().map(DoctorScheduleServiceImpl::toExternalItem).toList());
+        result.setTruncated(truncated);
+        return result;
+    }
+
+    /**
+     * 解析日期并转换为业务异常
+     *
+     * @param value 日期文本
+     * @param field 字段名称
+     * @return 日期
+     */
+    private static LocalDate parseDate(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(field + "不能为空");
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            throw new BusinessException(field + "格式应为 yyyy-MM-dd");
+        }
+    }
+
+    /**
+     * 批量统计各排班的空闲号源数
+     *
+     * @param scheduleIds 排班 ID 列表
+     * @return 排班 ID 到空闲号源数的映射
+     */
+    private Map<Long, Long> loadFreeCounts(List<Long> scheduleIds) {
+        List<NumberSource> sources = numberSourceMapper.selectList(
+                new LambdaQueryWrapper<NumberSource>()
+                        .in(NumberSource::getScheduleId, scheduleIds)
+                        .eq(NumberSource::getStatus, 1));
+        return sources.stream()
+                .collect(Collectors.groupingBy(NumberSource::getScheduleId, Collectors.counting()));
+    }
+
+    /**
+     * 排班视图转对外 DTO
+     *
+     * @param vo 排班视图
+     * @return 对外排班信息
+     */
+    private static DoctorScheduleInfoDTO toExternalItem(ScheduleVO vo) {
+        DoctorScheduleInfoDTO dto = new DoctorScheduleInfoDTO();
+        dto.setHospitalId(vo.getHospitalId());
+        dto.setHospitalName(vo.getHospitalName());
+        dto.setDepartmentId(vo.getDepartmentId());
+        dto.setDepartmentName(vo.getDepartmentName());
+        dto.setDoctorUserId(vo.getDoctorUserId());
+        dto.setDoctorName(vo.getDoctorName());
+        dto.setScheduleDate(vo.getScheduleDate() == null ? null : vo.getScheduleDate().toString());
+        dto.setPeriod(vo.getPeriod());
+        dto.setPeriodText(vo.getPeriodText());
+        dto.setTotalLimit(vo.getTotalLimit());
+        dto.setRemainingCount(vo.getRemaining());
+        return dto;
     }
 
     private UserBriefDTO loadDoctor(Long doctorUserId) {

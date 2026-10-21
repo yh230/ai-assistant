@@ -1,5 +1,5 @@
 <template>
-  <div class="patient-chat">
+  <div class="patient-chat" data-testid="patient-chat">
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="topbar-brand">
@@ -28,15 +28,15 @@
       <!-- 会话侧边栏（≤768px 为抽屉） -->
       <div class="session-panel" :class="{ open: sidebarOpen }">
         <div class="session-header">
-          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu">新对话</el-button>
+          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu" data-testid="chat-new">新对话</el-button>
           <div v-if="showTypeMenu" class="type-menu">
-            <div v-for="t in SESSION_TYPES" :key="t.value" class="type-item" @click="createSession(t.value)">
+            <div v-for="t in SESSION_TYPES" :key="t.value" class="type-item" :data-testid="'chat-type-' + t.value" @click="createSession(t.value)">
               <span class="type-name">{{ t.label }}</span>
               <span class="type-desc">{{ t.desc }}</span>
             </div>
           </div>
         </div>
-        <div class="session-list">
+        <div class="session-list" data-testid="chat-session-list">
           <div
             v-for="s in sessions"
             :key="s.sessionId"
@@ -77,10 +77,10 @@
             <div v-if="msg.role === 'system'" class="message-item system">
               <div class="system-msg">{{ msg.content }}</div>
             </div>
-            <div v-else class="message-item" :class="msg.role">
+            <div v-else class="message-item" :class="msg.role" :data-testid="'chat-message-' + msg.role">
               <div class="message-avatar">{{ msg.role === 'user' ? '我' : '医' }}</div>
               <div class="message-bubble">
-                <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
+                <div class="markdown-body" data-testid="chat-message-content" v-html="renderMarkdownSafe(msg.content)"></div>
                 <div v-if="msg.references && msg.references.length" class="reference-block">
                   <div class="reference-title">参考来源</div>
                   <div v-for="(ref, ri) in msg.references" :key="ri" class="reference-item">
@@ -88,7 +88,7 @@
                     <span class="reference-snippet">{{ ref.snippet }}</span>
                   </div>
                 </div>
-                <span v-if="msg.streaming" class="streaming-cursor"></span>
+                <span v-if="msg.streaming" class="streaming-cursor" data-testid="chat-streaming-cursor"></span>
               </div>
             </div>
           </template>
@@ -114,9 +114,10 @@
               class="input-textarea"
               :autosize="{ minRows: 1, maxRows: 6 }"
               placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
+              data-testid="chat-input"
               @keydown="handleKeydown"
             />
-            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" :icon="VideoPause" @click="stopGeneration">停止</el-button>
+            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" :icon="VideoPause" @click="stopGeneration" data-testid="chat-stop">停止</el-button>
             <el-button
               v-else
               type="primary"
@@ -124,6 +125,7 @@
               :disabled="!inputText.trim()"
               :icon="Position"
               @click="sendMessage"
+              data-testid="chat-send"
             />
           </div>
           <p class="input-hint">AI 内容仅供参考，不能替代执业医师诊断 · 挂号等写操作会先与您确认</p>
@@ -140,13 +142,14 @@
       :close-on-click-modal="false"
       :close-on-press-escape="false"
       :show-close="false"
+      data-testid="confirm-dialog"
     >
       <p class="confirm-tool">即将执行：{{ confirmToolLabel }}</p>
-      <p class="confirm-summary">{{ pendingConfirm && pendingConfirm.summary }}</p>
+      <p class="confirm-summary" data-testid="confirm-summary">{{ pendingConfirm && pendingConfirm.summary }}</p>
       <p class="confirm-tip">确认后 AI 将为您执行该操作，请核对信息无误</p>
       <template #footer>
-        <el-button :disabled="confirmLoading" @click="cancelConfirm">取消</el-button>
-        <el-button type="primary" :disabled="confirmLoading" @click="submitConfirm">确认</el-button>
+        <el-button :disabled="confirmLoading" @click="cancelConfirm" data-testid="confirm-cancel">取消</el-button>
+        <el-button type="primary" :disabled="confirmLoading" @click="submitConfirm" data-testid="confirm-ok">确认</el-button>
       </template>
     </el-dialog>
 

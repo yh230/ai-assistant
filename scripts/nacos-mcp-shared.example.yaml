@@ -1,0 +1,13 @@
+# Nacos 配置（dataId: mcp-shared.yaml, group: DEFAULT_GROUP）
+# 生成 Key：printf '%s' 'mcp_xxx' | sha256sum
+# 将输出的 64 位十六进制填入 key-sha256；真实 Key 不写入仓库
+mcp:
+  auth:
+    keys:
+      - consumer: demo-client
+        key-sha256: "REPLACE_WITH_64_CHAR_SHA256_HEX"
+        hospital-ids: [1]
+        rate-limit-per-minute: 60
+        enabled: true
+  cache:
+    ttl-seconds: 45

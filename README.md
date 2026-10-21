@@ -70,11 +70,16 @@ scripts/start-services.sh
 ```mermaid
 flowchart LR
   U[员工端 / 患者端] --> G[Gateway :8080]
+  X[第三方 MCP 客户端] --> G
   G --> A[auth-service :9200]
   G --> S[system-service :9201]
   G --> H[hospital-service :9202]
   G --> R[registration-service :9203]
   G --> C[ai-chat-service :9204]
+  G --> P[mcp-server :9205]
+  P --> R
+  P --> H
+  P --> D2[(Redis)]
   A --> M[(MySQL 四库)]
   S --> M
   H --> M
@@ -95,6 +100,7 @@ flowchart LR
 - [E2E 套件](ai-assistant-e2e/README.md)
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
+- [MCP 排班查询设计](docs/design/mcp-schedule-design.md)
 
 ## 功能明细
 
@@ -107,6 +113,7 @@ flowchart LR
 - 引用来源与急症红线：RAG 回答附参考来源；急症症状自动引导急诊
 - 安全底座：输入风控（敏感词直接拦截、不调模型）、输出风控、SSE 加固、限流（网关令牌桶）
 - 双身份体系：员工（STAFF）与患者（PATIENT）JWT 身份隔离，患者账号绑定医院、数据按医院边界隔离
+- 对外 MCP：第三方 AI 客户端凭 API Key 查询绑定医院的未来 14 天排班与真实余量（只读、按院隔离、Key 级限流）
 
 **业务模块**
 
@@ -154,12 +161,12 @@ flowchart LR
 
 ```text
 aidaima/
-├── ai-assistant-backend/     # 后端：父工程 + 9 模块
+├── ai-assistant-backend/     # 后端：父工程 + 10 模块
 │   ├── gateway/              # 网关：统一入口、鉴权、路由、限流
 │   ├── common/               # 公共：Result/PageResult、异常、数据权限
 │   ├── common-security/      # 安全公共组件：JWT、内部调用校验、Security 配置
 │   ├── api/                  # 服务间 Feign 接口与 DTO
-│   └── services/             # auth / system / hospital / registration / ai-chat
+│   └── services/             # auth / system / hospital / registration / ai-chat / mcp
 ├── ai-assistant-frontend/    # 前端：Vue 3 + Vite + Element Plus（员工端 + 患者端）
 ├── ai-assistant-e2e/         # API 级 E2E 自动化测试（Python + pytest + httpx）
 ├── scripts/                  # 一键脚本：Nacos / 服务 / E2E（含共享配置样例）
@@ -236,7 +243,7 @@ export AMAP_KEY='你的高德Key'
 
 ### 5. 启动后端
 
-Windows 运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关）；macOS / Linux 运行 `scripts/start-services.sh`（后台启动，日志在 `ai-assistant-backend/logs/`）。各服务日志出现 `Started` 后进入下一步。
+Windows 运行 `scripts/start-services.bat`（七个窗口：六业务服务 + 网关）；macOS / Linux 运行 `scripts/start-services.sh`（后台启动，日志在 `ai-assistant-backend/logs/`）。各服务日志出现 `Started` 后进入下一步。
 
 > **ai-chat-service 首次启动**：知识库向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会从 GitHub 下载并加载，可能明显变慢（缓存于 `%TEMP%\spring-ai-onnx-generative\`；网络受限时确保代理可用，或改用离线预置：把模型 `.onnx` 放到任意路径，在 Nacos `ai.rag.embedding-model-path` 填完整路径，tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」）。未配置 `DEEPSEEK_API_KEY` 时对话自动降级本地回复引擎，不影响启动。
 >
@@ -263,6 +270,7 @@ npm run dev
 | hospital-service | 9202 |
 | registration-service | 9203 |
 | ai-chat-service | 9204 |
+| mcp-server | 9205 |
 | Nacos | 8848（控制台 8849） |
 
 ## 默认账号
@@ -272,9 +280,66 @@ npm run dev
 
 ## 生产部署安全前置
 
-- **服务端口仅内网**：9200-9204 为 auth/system/hospital/registration/ai-chat 直连端口，生产只暴露网关（8080），并将 9200-9204 限制在内网或容器网络，禁止公网访问（`/inner/**` 仅凭内部令牌保护）。
+- **服务端口仅内网**：9200-9205 为 auth/system/hospital/registration/ai-chat/mcp-server 直连端口，生产只暴露网关（8080），并将 9200-9205 限制在内网或容器网络，禁止公网访问（`/inner/**` 仅凭内部令牌保护）。
 - **强制覆盖默认密钥**：生产 Nacos 必须覆盖 JWT 密钥、内部调用令牌（`security.internal.token`）、数据库密码、CORS 白名单（`security.cors.allowed-origins`，禁止 `*`）与短信配置；保留默认值时 `prod` profile 启动即失败。
 - **权限变更后清快照**：权限/角色播种或调整后，需清理 Redis `auth:user:*` 权限快照（或要求相关账号重新登录），否则旧快照最长存活一个缓存周期。
+
+## MCP 排班查询（对外）
+
+对外提供只读 MCP Server，第三方 AI 客户端凭 API Key 查询绑定医院的医生排班与号源余量。
+
+MCP 是协议（JSON-RPC 2.0），不是某种语言的 SDK。本服务端使用 Java（Spring AI 1.0.9 + MCP Java SDK），Python、TypeScript、Go 等任意 MCP 客户端都可以接入；`ai-assistant-e2e` 中的 MCP 用例甚至直接用 httpx 发 JSON-RPC，不依赖 Python MCP SDK。
+
+### 配置
+
+1. 在 Nacos 新建配置 `mcp-shared.yaml`（group `DEFAULT_GROUP`），内容参考 `scripts/nacos-mcp-shared.example.yaml`。
+2. 生成 Key 与哈希（推荐 Python，跨平台）：
+
+   ```bash
+   python -c "import secrets,hashlib; k='mcp_'+secrets.token_hex(32); print('KEY =',k); print('HASH=',hashlib.sha256(k.encode()).hexdigest())"
+   ```
+
+   也可用 Git Bash：
+
+   ```bash
+   KEY="mcp_$(openssl rand -hex 32)"
+   printf '%s' "$KEY" | sha256sum
+   ```
+
+3. 把 64 位哈希填入 `key-sha256`，把允许访问的医院 ID 填入 `hospital-ids`。
+   - `key-sha256` 必须是 64 位十六进制，否则该 Key 会被忽略并输出启动警告；
+   - `hospital-ids` 不能为空或包含 null；
+   - 明文 Key 只交给调用方，不写入仓库或 Nacos。
+4. 启动 `mcp-server`（端口 9205）；网关入口为 `http://localhost:8080/mcp/sse`（SSE 建流）与 `http://localhost:8080/mcp/message`（消息投递）。
+
+### 连接
+
+- 传输：SSE（`/mcp/sse` 建立事件流，`/mcp/message` 发送 JSON-RPC 消息）
+- 地址：`http://localhost:8080/mcp/sse`
+- 请求头：`X-API-Key: <原始 Key>`；SSE 与消息端点每次请求都需携带
+- 限流：网关按 IP 默认 120 次/分钟（突发 240），mcp-server 再按 Key 默认 60 次/分钟
+- 生产环境：在网关/Ingress 终止 TLS，对外使用 HTTPS；9205 只开内网，不要直接暴露
+- Key 无效/缺失返回 401，频率超限返回 429；Key 轮换后重启 mcp-server（或确认 Nacos 刷新已生效）
+
+可用 MCP Inspector 验证：
+
+```bash
+npx @modelcontextprotocol/inspector
+# Transport 选择 SSE
+# URL 填 http://localhost:8080/mcp/sse
+# 增加 Header X-API-Key
+```
+
+### 工具
+
+| 工具 | 用途 |
+|------|------|
+| `list_hospitals` | 返回当前 Key 可访问的医院 |
+| `query_doctor_schedules` | 按医院、日期窗口、科室、医生姓名、时段查询排班与余量 |
+
+工具入参使用 snake_case（如 `hospital_id`、`date_from`），返回字段为 `items`、`truncated`、`dateFrom`、`dateTo`。
+
+限制：日期窗口最多 14 天，单次最多返回 100 条，结果缓存 45 秒；Key 只能访问绑定医院。工具业务错误通过 MCP `isError=true` 返回，错误文本在 `content[0].text`。
 
 ## 自动化测试
 
@@ -283,6 +348,13 @@ npm run dev
 ```bat
 scripts\run-e2e.bat                            :: 全量（前置自检 + 执行 + JUnit 报告）
 scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模型）
+```
+
+MCP SSE 端到端（需完整栈、Nacos Key 与 `MCP_E2E_API_KEY`）：
+
+```bash
+cd ai-assistant-e2e
+pytest -m mcp -v
 ```
 
 结果支持推送到**企业微信 / 飞书 / 邮箱**（`.env` 配置通道，跑完自动推送）。详见 [ai-assistant-e2e/README.md](ai-assistant-e2e/README.md)。
@@ -301,7 +373,7 @@ cd ai-assistant-backend
 | 问题 | 处理 |
 |------|------|
 | 服务注册失败（启动日志报 Nacos 连接错误） | 先 `scripts/start-nacos.bat`，确认控制台 8849 可访问、共享配置已创建 |
-| 端口占用 | `netstat -ano | findstr <端口>` 查 PID 后结束进程（8080 / 9200-9204 / 8848 / 8849 / 5173） |
+| 端口占用 | `netstat -ano | findstr <端口>` 查 PID 后结束进程（8080 / 9200-9205 / 8848 / 8849 / 5173） |
 | GitHub 相关下载失败（如嵌入模型） | 确认本机可访问外网（如需代理请自行配置），或改用离线预置模型（见快速开始第 5 步） |
 | 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
 | 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |

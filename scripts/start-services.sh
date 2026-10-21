@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键启动后端：五业务服务 + 网关（后台运行，日志写入 ai-assistant-backend/logs/）
+# 一键启动后端：六业务服务 + 网关（后台运行，日志写入 ai-assistant-backend/logs/）
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +21,7 @@ fi
 
 mkdir -p logs
 modules=(services/auth-service services/system-service services/hospital-service \
-         services/registration-service services/ai-chat-service gateway)
+         services/registration-service services/ai-chat-service services/mcp-server gateway)
 
 for module in "${modules[@]}"; do
     name="${module##*/}"

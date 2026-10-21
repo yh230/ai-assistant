@@ -42,3 +42,10 @@ ai-assistant-e2e/reports/
 ai-assistant-e2e/.pytest_cache/
 __pycache__/
 *.pyc
+
+# UI E2E
+ai-assistant-ui-e2e/.venv/
+ai-assistant-ui-e2e/.env
+ai-assistant-ui-e2e/reports/
+ai-assistant-ui-e2e/artifacts/
+ai-assistant-ui-e2e/.pytest_cache/
