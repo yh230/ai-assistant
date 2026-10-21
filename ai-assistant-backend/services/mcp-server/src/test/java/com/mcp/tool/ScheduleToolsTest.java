@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -135,6 +136,40 @@ class ScheduleToolsTest {
         Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null);
 
         assertEquals("该医院不存在", ((Map<?, ?>) result).get("error"));
+    }
+
+    @Test
+    void successWithoutDataMapsToFallbackError() {
+        when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
+                .thenReturn(Result.success(null));
+
+        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null);
+
+        assertEquals("排班查询服务暂时不可用，请稍后重试", ((Map<?, ?>) result).get("error"));
+    }
+
+    @Test
+    void failureWithoutMessageMapsToFallbackError() {
+        when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
+                .thenReturn(Result.fail(null));
+
+        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null);
+
+        assertEquals("排班查询服务暂时不可用，请稍后重试", ((Map<?, ?>) result).get("error"));
+    }
+
+    @Test
+    void nullItemsExposedAsEmptyList() {
+        ScheduleQueryResultDTO data = dataWithOneItem();
+        data.setItems(null);
+        when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
+                .thenReturn(Result.success(data));
+
+        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null);
+
+        Object items = ((Map<?, ?>) result).get("items");
+        assertNotNull(items);
+        assertEquals(0, ((List<?>) items).size());
     }
 
     @Test

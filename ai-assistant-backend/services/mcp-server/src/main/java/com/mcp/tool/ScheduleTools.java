@@ -2,6 +2,7 @@ package com.mcp.tool;
 
 import com.api.client.OrgClient;
 import com.api.client.RegistrationClient;
+import com.api.dto.DoctorScheduleInfoDTO;
 import com.api.dto.OrgBriefDTO;
 import com.api.dto.ScheduleQueryResultDTO;
 import com.common.result.Result;
@@ -75,28 +76,28 @@ public class ScheduleTools {
             log.warn("MCP 查询医院失败: {}", e.getMessage());
             return error("医院信息查询服务暂时不可用，请稍后重试");
         } finally {
-            metrics.toolCall(TOOL_HOSPITALS, outcome, System.nanoTime() - start);
+            recordMetrics(TOOL_HOSPITALS, outcome, start);
         }
     }
 
     /**
      * 查询指定医院未来一段时间的医生排班与余量
      *
-     * @param hospitalId 医院 ID，单院 Key 可空
-     * @param dateFrom 开始日期（yyyy-MM-dd），默认今天
-     * @param dateTo 结束日期（yyyy-MM-dd），默认开始日期后 6 天
-     * @param departmentId 科室 ID（可空）
-     * @param doctorName 医生姓名关键字（可空）
+     * @param hospital_id 医院 ID，单院 Key 可空
+     * @param date_from 开始日期（yyyy-MM-dd），默认今天
+     * @param date_to 结束日期（yyyy-MM-dd），默认开始日期后 6 天
+     * @param department_id 科室 ID（可空）
+     * @param doctor_name 医生姓名关键字（可空）
      * @param period 时段（1=上午，2=下午，可空）
      * @return 查询结果或错误对象
      */
     @Tool(name = TOOL_QUERY, description = "查询某医院未来 14 天内医生排班与号源余量。参数：hospital_id=医院ID（单院 Key 可空），date_from=开始日期 yyyy-MM-dd，date_to=结束日期 yyyy-MM-dd（窗口最多14天），department_id=科室ID（可空），doctor_name=医生姓名（可空，包含匹配），period=1上午/2下午（可空）。")
     public Object queryDoctorSchedules(
-            @ToolParam(description = "医院ID；Key 只绑定一家医院时可空", required = false) Long hospitalId,
-            @ToolParam(description = "开始日期 yyyy-MM-dd，默认今天", required = false) String dateFrom,
-            @ToolParam(description = "结束日期 yyyy-MM-dd，默认开始日期后 6 天，窗口最多 14 天", required = false) String dateTo,
-            @ToolParam(description = "科室ID，可空", required = false) Long departmentId,
-            @ToolParam(description = "医生姓名，包含匹配，可空", required = false) String doctorName,
+            @ToolParam(description = "医院ID；Key 只绑定一家医院时可空", required = false) Long hospital_id,
+            @ToolParam(description = "开始日期 yyyy-MM-dd，默认今天", required = false) String date_from,
+            @ToolParam(description = "结束日期 yyyy-MM-dd，默认开始日期后 6 天，窗口最多 14 天", required = false) String date_to,
+            @ToolParam(description = "科室ID，可空", required = false) Long department_id,
+            @ToolParam(description = "医生姓名，包含匹配，可空", required = false) String doctor_name,
             @ToolParam(description = "时段 1=上午 2=下午，可空", required = false) Integer period) {
         long start = System.nanoTime();
         String outcome = "success";
@@ -106,7 +107,7 @@ public class ScheduleTools {
                 outcome = "error";
                 return error("未认证的调用方");
             }
-            Long targetHospital = hospitalId;
+            Long targetHospital = hospital_id;
             if (targetHospital == null) {
                 if (principal.hospitalIds().size() != 1) {
                     outcome = "error";
@@ -127,13 +128,13 @@ public class ScheduleTools {
             LocalDate to;
             try {
                 LocalDate today = LocalDate.now(ZONE);
-                from = (dateFrom == null || dateFrom.isBlank()) ? today : LocalDate.parse(dateFrom.trim());
+                from = (date_from == null || date_from.isBlank()) ? today : LocalDate.parse(date_from.trim());
                 if (from.isBefore(today)) {
                     from = today;
                 }
-                to = (dateTo == null || dateTo.isBlank())
+                to = (date_to == null || date_to.isBlank())
                         ? from.plusDays(DEFAULT_WINDOW_DAYS - 1)
-                        : LocalDate.parse(dateTo.trim());
+                        : LocalDate.parse(date_to.trim());
             } catch (DateTimeParseException e) {
                 outcome = "error";
                 return error("日期格式应为 yyyy-MM-dd");
@@ -146,8 +147,8 @@ public class ScheduleTools {
                 outcome = "error";
                 return error("查询窗口最多 " + MAX_WINDOW_DAYS + " 天");
             }
-            String keyword = doctorName == null || doctorName.isBlank() ? null : doctorName.trim();
-            String cacheKey = cacheKey(targetHospital, from, to, departmentId, period, keyword);
+            String keyword = doctor_name == null || doctor_name.isBlank() ? null : doctor_name.trim();
+            String cacheKey = cacheKey(targetHospital, from, to, department_id, period, keyword);
 
             Optional<ScheduleQueryResultDTO> cached = scheduleCache.get(cacheKey);
             ScheduleQueryResultDTO data;
@@ -155,30 +156,52 @@ public class ScheduleTools {
                 data = cached.get();
             } else {
                 Result<ScheduleQueryResultDTO> result = registrationClient.querySchedules(
-                        targetHospital, from.toString(), to.toString(), departmentId, period, keyword);
-                if (result == null || result.getCode() != 200 || result.getData() == null) {
+                        targetHospital, from.toString(), to.toString(), department_id, period, keyword);
+                if (result == null || result.getCode() != 200) {
                     outcome = "error";
-                    return error(result == null ? "排班查询服务暂时不可用，请稍后重试" : result.getMsg());
+                    String downstreamMsg = result == null ? null : result.getMsg();
+                    return error(downstreamMsg == null || downstreamMsg.isBlank()
+                            ? "排班查询服务暂时不可用，请稍后重试" : downstreamMsg);
+                }
+                if (result.getData() == null) {
+                    outcome = "error";
+                    return error("排班查询服务暂时不可用，请稍后重试");
                 }
                 data = result.getData();
                 scheduleCache.put(cacheKey, data);
             }
 
+            List<DoctorScheduleInfoDTO> items = data.getItems() == null ? List.of() : data.getItems();
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("items", data.getItems());
+            payload.put("items", items);
             payload.put("truncated", data.isTruncated());
             payload.put("dateFrom", from.toString());
             payload.put("dateTo", to.toString());
             log.info("MCP 排班查询 consumer={} hospitalId={} from={} to={} rows={} truncated={}",
                     principal.consumer(), targetHospital, from, to,
-                    data.getItems() == null ? 0 : data.getItems().size(), data.isTruncated());
+                    items.size(), data.isTruncated());
             return payload;
         } catch (Exception e) {
             outcome = "error";
             log.warn("MCP 排班查询失败: {}", e.getMessage());
             return error("排班查询服务暂时不可用，请稍后重试");
         } finally {
-            metrics.toolCall(TOOL_QUERY, outcome, System.nanoTime() - start);
+            recordMetrics(TOOL_QUERY, outcome, start);
+        }
+    }
+
+    /**
+     * 记录工具调用指标，指标故障不影响工具结果
+     *
+     * @param tool 工具名
+     * @param outcome 结果
+     * @param start 起始纳秒时间戳
+     */
+    private void recordMetrics(String tool, String outcome, long start) {
+        try {
+            metrics.toolCall(tool, outcome, System.nanoTime() - start);
+        } catch (Exception e) {
+            log.debug("MCP 指标记录失败 tool={}: {}", tool, e.getMessage());
         }
     }
 
