@@ -15,6 +15,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * MCP API Key 认证过滤器
@@ -28,6 +30,12 @@ public class McpAuthFilter extends OncePerRequestFilter {
 
     /** 认证请求头 */
     public static final String API_KEY_HEADER = "X-API-Key";
+
+    /** 请求过多状态码（Servlet 6.0 无 SC_TOO_MANY_REQUESTS 常量） */
+    private static final int SC_TOO_MANY_REQUESTS = 429;
+
+    /** Key 哈希格式（SHA-256 十六进制） */
+    private static final Pattern KEY_HASH_PATTERN = Pattern.compile("[0-9a-fA-F]{64}");
 
     private final McpProperties properties;
     private final McpKeyHasher keyHasher;
@@ -64,7 +72,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
             metrics.rateLimited(matched.getConsumer());
             log.warn("MCP 限流命中: consumer={}, remote={}", matched.getConsumer(), request.getRemoteAddr());
             response.setHeader("Retry-After", "60");
-            writeJson(response, HttpServletResponse.SC_TOO_MANY_REQUESTS, "rate_limit_exceeded");
+            writeJson(response, SC_TOO_MANY_REQUESTS, "rate_limit_exceeded");
             return;
         }
         McpPrincipalContext.attach(request, new McpPrincipal(
@@ -83,13 +91,29 @@ public class McpAuthFilter extends OncePerRequestFilter {
             return false;
         }
         for (McpProperties.Key key : properties.getAuth().getKeys()) {
-            if (key == null || !key.isEnabled() || key.getConsumer() == null || key.getConsumer().isBlank()
-                    || key.getHospitalIds() == null || key.getHospitalIds().isEmpty()) {
-                continue;
+            if (isUsableKey(key)) {
+                return true;
             }
-            return true;
         }
         return false;
+    }
+
+    /**
+     * 判断单个 Key 配置是否可用
+     *
+     * @param key Key 配置
+     * @return 是否可用
+     */
+    public static boolean isUsableKey(McpProperties.Key key) {
+        return key != null
+                && key.isEnabled()
+                && key.getConsumer() != null
+                && !key.getConsumer().isBlank()
+                && key.getKeySha256() != null
+                && KEY_HASH_PATTERN.matcher(key.getKeySha256().trim()).matches()
+                && key.getHospitalIds() != null
+                && !key.getHospitalIds().isEmpty()
+                && key.getHospitalIds().stream().allMatch(Objects::nonNull);
     }
 
     /**
@@ -103,8 +127,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
             return null;
         }
         for (McpProperties.Key key : properties.getAuth().getKeys()) {
-            if (key == null || !key.isEnabled() || key.getConsumer() == null || key.getConsumer().isBlank()
-                    || key.getHospitalIds() == null || key.getHospitalIds().isEmpty()) {
+            if (!isUsableKey(key)) {
                 continue;
             }
             if (keyHasher.matches(raw, key.getKeySha256())) {

@@ -171,4 +171,26 @@ class McpAuthFilterTest {
         assertTrue(hasher.matches(RAW_KEY, hasher.sha256(RAW_KEY).toUpperCase()));
         assertFalse(hasher.matches("wrong", hasher.sha256(RAW_KEY)));
     }
+
+    @Test
+    void rejectsKeyWithInvalidHashFormat() {
+        properties.getAuth().getKeys().get(0).setKeySha256("not-a-sha256");
+
+        assertFalse(McpAuthFilter.hasUsableKey(properties));
+        assertFalse(McpAuthFilter.isUsableKey(properties.getAuth().getKeys().get(0)));
+    }
+
+    @Test
+    void rejectsKeyWithNullHospitalId() {
+        properties.getAuth().getKeys().get(0).setHospitalIds(java.util.Arrays.asList(1L, null));
+
+        assertFalse(McpAuthFilter.hasUsableKey(properties));
+    }
+
+    @Test
+    void rejectsKeyWithBlankConsumer() {
+        properties.getAuth().getKeys().get(0).setConsumer("  ");
+
+        assertFalse(McpAuthFilter.hasUsableKey(properties));
+    }
 }

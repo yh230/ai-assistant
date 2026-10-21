@@ -322,7 +322,7 @@ npx @modelcontextprotocol/inspector
 | `list_hospitals` | 返回当前 Key 可访问的医院 |
 | `query_doctor_schedules` | 按医院、日期窗口、科室、医生姓名、时段查询排班与余量 |
 
-限制：日期窗口最多 14 天，单次最多返回 100 条，结果缓存 45 秒；Key 只能访问绑定医院。
+限制：日期窗口最多 14 天，单次最多返回 100 条，结果缓存 45 秒；Key 只能访问绑定医院。工具业务错误通过 MCP `isError=true` 返回，错误文本在 `content[0].text`。
 
 ## 自动化测试
 

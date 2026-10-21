@@ -90,6 +90,12 @@ spring:
           uri: lb://mcp-server
           predicates:
             - Path=/mcp,/mcp/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${security.ratelimit.mcp.replenish-rate:120}
+                redis-rate-limiter.burstCapacity: ${security.ratelimit.mcp.burst-capacity:240}
+                key-resolver: "#{@ipKeyResolver}"
         - id: auth-service
           uri: lb://auth-service
           predicates:

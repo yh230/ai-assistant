@@ -31,6 +31,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -108,34 +109,38 @@ class ScheduleToolsTest {
     void requiresHospitalForMultiHospitalKey() {
         context = contextFor(new McpPrincipal("demo", List.of(1L, 2L), 60));
 
-        Object result = tools.queryDoctorSchedules(null, "2099-01-01", "2099-01-02", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(null, "2099-01-01", "2099-01-02", null, null, null, context));
 
-        assertTrue(((Map<?, ?>) result).get("error").toString().contains("hospital_id"));
+        assertTrue(error.getMessage().contains("hospital_id"));
         verifyNoInteractions(registrationClient);
     }
 
     @Test
     void rejectsUnauthorizedHospital() {
-        Object result = tools.queryDoctorSchedules(2L, "2099-01-01", "2099-01-02", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(2L, "2099-01-01", "2099-01-02", null, null, null, context));
 
-        assertTrue(((Map<?, ?>) result).get("error").toString().contains("无权查询该医院"));
+        assertTrue(error.getMessage().contains("无权查询该医院"));
         verifyNoInteractions(registrationClient);
     }
 
     @Test
     void rejectsWindowLongerThanFourteenDays() {
-        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-20", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-20", null, null, null, context));
 
-        assertTrue(((Map<?, ?>) result).get("error").toString().contains("14"));
+        assertTrue(error.getMessage().contains("14"));
         verifyNoInteractions(registrationClient);
     }
 
     @Test
     void rejectsUnauthenticatedCaller() {
-        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null,
-                new ToolContext(Map.of()));
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null,
+                        new ToolContext(Map.of())));
 
-        assertEquals("未认证的调用方", ((Map<?, ?>) result).get("error"));
+        assertEquals("未认证的调用方", error.getMessage());
         verifyNoInteractions(registrationClient);
     }
 
@@ -144,9 +149,10 @@ class ScheduleToolsTest {
         when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Result.fail("该医院不存在"));
 
-        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context));
 
-        assertEquals("排班查询服务暂时不可用，请稍后重试", ((Map<?, ?>) result).get("error"));
+        assertEquals("排班查询服务暂时不可用，请稍后重试", error.getMessage());
     }
 
     @Test
@@ -154,11 +160,11 @@ class ScheduleToolsTest {
         when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Result.fail("内部细节: 数据库连接失败"));
 
-        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context));
 
-        String message = ((Map<?, ?>) result).get("error").toString();
-        assertEquals("排班查询服务暂时不可用，请稍后重试", message);
-        assertFalse(message.contains("数据库连接失败"));
+        assertEquals("排班查询服务暂时不可用，请稍后重试", error.getMessage());
+        assertFalse(error.getMessage().contains("数据库连接失败"));
     }
 
     @Test
@@ -166,9 +172,10 @@ class ScheduleToolsTest {
         when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Result.success(null));
 
-        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context));
 
-        assertEquals("排班查询服务暂时不可用，请稍后重试", ((Map<?, ?>) result).get("error"));
+        assertEquals("排班查询服务暂时不可用，请稍后重试", error.getMessage());
     }
 
     @Test
@@ -176,9 +183,10 @@ class ScheduleToolsTest {
         when(registrationClient.querySchedules(any(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Result.fail(null));
 
-        Object result = tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context);
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.queryDoctorSchedules(1L, "2099-01-01", "2099-01-02", null, null, null, context));
 
-        assertEquals("排班查询服务暂时不可用，请稍后重试", ((Map<?, ?>) result).get("error"));
+        assertEquals("排班查询服务暂时不可用，请稍后重试", error.getMessage());
     }
 
     @Test
@@ -221,9 +229,10 @@ class ScheduleToolsTest {
 
     @Test
     void rejectsUnauthenticatedHospitalList() {
-        Object result = tools.listHospitals(new ToolContext(Map.of()));
+        McpToolException error = assertThrows(McpToolException.class,
+                () -> tools.listHospitals(new ToolContext(Map.of())));
 
-        assertEquals("未认证的调用方", ((Map<?, ?>) result).get("error"));
+        assertEquals("未认证的调用方", error.getMessage());
         verifyNoInteractions(orgClient);
     }
 

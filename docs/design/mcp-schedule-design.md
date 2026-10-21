@@ -197,7 +197,7 @@ Server 信息：
 }
 ```
 
-错误以 `{"error": "..."}` 返回，不抛未处理异常：
+工具业务错误通过 MCP `CallToolResult.isError=true` 返回，错误文本在 `content[0].text`，不暴露内部细节：
 
 | 场景 | 文案 |
 |------|------|
@@ -205,7 +205,6 @@ Server 信息：
 | 多院 Key 未传 hospital_id | `请指定 hospital_id` |
 | 医院越权 | `无权查询该医院` |
 | 日期格式错误 | `日期格式应为 yyyy-MM-dd` |
-| 查询区间已过期 | `查询区间已过期` |
 | 窗口超限 | `查询窗口最多 14 天` |
 | 下游不可用 | `排班查询服务暂时不可用，请稍后重试` |
 
@@ -255,8 +254,8 @@ mcp:
 
 ### 7.4 限流
 
-- Redisson 原子计数，键 `mcp:rate:{consumer}:{epochMinute}`，TTL 60 秒。
-- 默认 60 次/分钟/Key，可按 Key 覆盖。
+- 网关对 `/mcp/**` 先做 IP 级令牌桶（默认 120 次/分钟、突发 240），覆盖无效 Key 探测。
+- mcp-server 再做 Key 级限流：Redisson 原子计数，键 `mcp:rate:{consumer}:{epochMinute}`，TTL 60 秒；默认 60 次/分钟/Key，可按 Key 覆盖。
 - 超限返回 HTTP 429，`{"error":"rate_limit_exceeded"}`。
 - Redis 异常时限流放行并告警，避免缓存/限流故障拖垮只读查询。
 

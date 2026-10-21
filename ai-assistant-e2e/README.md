@@ -110,6 +110,32 @@ AI 发起的预约挂号由挂号服务端做租户强校验：排班所属医�
 
 > 用例见 `tests/test_07_ai_roles.py`（无需 LLM，随默认套件执行）。患者域用例直接 GET 列表断言三类默认角色；提示词更新用例写回后会在 `finally` 中还原原提示词（仅在成功捕获原提示词时执行）。
 
+## MCP SSE 端到端
+
+`tests/test_09_mcp_schedule.py` 覆盖 MCP 真实 SSE 链路：建流、`initialize`、`tools/list`、`list_hospitals`、业务错误 `isError=true`、无效/缺失 Key 401，以及一条已排班数据查询。
+
+前置：
+
+1. 启动完整栈（含 `mcp-server`）并通过网关访问。
+2. 在 Nacos `mcp-shared.yaml` 配置测试 Key 的 SHA-256 与医院 ID。
+3. 在 `.env` 配置：
+
+```text
+MCP_E2E_API_KEY=mcp_xxx
+# 可选，默认复用 E2E_BASE_URL
+MCP_E2E_BASE_URL=http://localhost:8080
+# 可选，限定医院；为空时使用 Key 返回的第一家医院
+MCP_E2E_HOSPITAL_ID=1
+```
+
+运行：
+
+```bash
+pytest -m mcp -v
+```
+
+未配置 `MCP_E2E_API_KEY` 时用例自动跳过；查询已排班数据用例在库里没有可用排班时跳过。
+
 ## 不覆盖范围
 
 - 前端浏览器行为（localStorage、确认弹窗 UI、停止按钮）与 Playwright UI 测试

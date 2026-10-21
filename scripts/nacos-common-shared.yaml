@@ -24,6 +24,10 @@ security:
     qr-poll:
       replenish-rate: 10
       burst-capacity: 20
+    # MCP 网关 IP 限流（覆盖无效 Key 探测；业务级限流在 mcp-server 按 Key 执行）
+    mcp:
+      replenish-rate: 120
+      burst-capacity: 240
 
 # ===== 短信验证码 =====
 sms:

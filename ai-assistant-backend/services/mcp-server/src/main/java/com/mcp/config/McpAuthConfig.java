@@ -35,6 +35,15 @@ public class McpAuthConfig {
      */
     @PostConstruct
     void warnWhenNoUsableKey() {
+        if (properties.getAuth() != null && properties.getAuth().getKeys() != null) {
+            for (int i = 0; i < properties.getAuth().getKeys().size(); i++) {
+                McpProperties.Key key = properties.getAuth().getKeys().get(i);
+                if (!McpAuthFilter.isUsableKey(key)) {
+                    log.warn("MCP Key 配置无效，将被忽略: index={}, consumer={}",
+                            i, key == null ? null : key.getConsumer());
+                }
+            }
+        }
         if (!McpAuthFilter.hasUsableKey(properties)) {
             log.error("MCP 未配置可用的 API Key，所有请求将被拒绝；请在 Nacos mcp-shared.yaml 中配置 key-sha256 与 hospital-ids");
         }
