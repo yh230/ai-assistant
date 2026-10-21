@@ -1,10 +1,14 @@
 import re
 
+import pytest
 from playwright.sync_api import expect
 
 from api_client import gen_phone
 from config import settings
 from pages.patient_login_page import PatientLoginPage
+
+if not settings.hospital1:
+    pytest.skip("未配置 UI_E2E_HOSPITAL1_NAME，跳过患者注册用例", allow_module_level=True)
 
 
 def test_patient_register_then_login(anon_page):
