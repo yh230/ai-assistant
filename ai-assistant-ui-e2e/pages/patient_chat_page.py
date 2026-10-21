@@ -1,5 +1,6 @@
 from playwright.sync_api import Locator, expect
 
+from config import settings
 from pages.base_page import BasePage
 
 
@@ -21,3 +22,9 @@ class PatientChatPage(BasePage):
 
     def last_assistant(self) -> Locator:
         return self.testid("chat-message-assistant").last
+
+    def confirm_booking(self) -> str:
+        expect(self.testid("confirm-dialog")).to_be_visible(timeout=settings.llm_timeout_ms)
+        summary = self.testid("confirm-summary").inner_text()
+        self.testid("confirm-ok").click()
+        return summary

@@ -142,13 +142,14 @@
       :close-on-click-modal="false"
       :close-on-press-escape="false"
       :show-close="false"
+      data-testid="confirm-dialog"
     >
       <p class="confirm-tool">即将执行：{{ confirmToolLabel }}</p>
-      <p class="confirm-summary">{{ pendingConfirm && pendingConfirm.summary }}</p>
+      <p class="confirm-summary" data-testid="confirm-summary">{{ pendingConfirm && pendingConfirm.summary }}</p>
       <p class="confirm-tip">确认后 AI 将为您执行该操作，请核对信息无误</p>
       <template #footer>
-        <el-button :disabled="confirmLoading" @click="cancelConfirm">取消</el-button>
-        <el-button type="primary" :disabled="confirmLoading" @click="submitConfirm">确认</el-button>
+        <el-button :disabled="confirmLoading" @click="cancelConfirm" data-testid="confirm-cancel">取消</el-button>
+        <el-button type="primary" :disabled="confirmLoading" @click="submitConfirm" data-testid="confirm-ok">确认</el-button>
       </template>
     </el-dialog>
 
