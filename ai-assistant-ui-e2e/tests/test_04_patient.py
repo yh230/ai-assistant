@@ -1,0 +1,17 @@
+import re
+
+from playwright.sync_api import expect
+
+from api_client import gen_phone
+from config import settings
+from pages.patient_login_page import PatientLoginPage
+
+
+def test_patient_register_then_login(anon_page):
+    phone = gen_phone()
+    page = PatientLoginPage(anon_page)
+    page.open()
+    page.register("UIE2E患者", phone, "UiE2e123", settings.hospital1)
+    page.login(phone, "UiE2e123")
+    expect(anon_page).to_have_url(re.compile(r"/patient/chat"))
+    expect(anon_page.get_by_test_id("patient-chat")).to_be_visible()

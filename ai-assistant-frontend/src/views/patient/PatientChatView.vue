@@ -1,5 +1,5 @@
 <template>
-  <div class="patient-chat">
+  <div class="patient-chat" data-testid="patient-chat">
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="topbar-brand">
@@ -36,7 +36,7 @@
             </div>
           </div>
         </div>
-        <div class="session-list">
+        <div class="session-list" data-testid="chat-session-list">
           <div
             v-for="s in sessions"
             :key="s.sessionId"
