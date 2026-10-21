@@ -14,6 +14,17 @@ import java.util.List;
 public record McpPrincipal(String consumer, List<Long> hospitalIds, int rateLimitPerMinute) {
 
     /**
+     * 复制医院列表，避免调用方持有可变引用
+     *
+     * @param consumer 调用方标识
+     * @param hospitalIds 允许访问的医院 ID
+     * @param rateLimitPerMinute 每分钟请求上限
+     */
+    public McpPrincipal {
+        hospitalIds = List.copyOf(hospitalIds);
+    }
+
+    /**
      * 判断医院是否在授权范围内
      *
      * @param hospitalId 医院 ID

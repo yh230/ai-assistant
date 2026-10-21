@@ -16,11 +16,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -115,7 +117,22 @@ class McpAuthFilterTest {
 
         assertEquals("demo", captured.get().consumer());
         assertTrue(captured.get().canAccess(1L));
+        assertThrows(UnsupportedOperationException.class, () -> captured.get().hospitalIds().add(2L));
         assertNull(McpPrincipalContext.get());
+    }
+
+    @Test
+    void appliesDefaultLimitWhenRateLimitUnset() throws Exception {
+        properties.getAuth().getKeys().get(0).setRateLimitPerMinute(null);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        request.addHeader("X-API-Key", RAW_KEY);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<McpPrincipal> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, (req, res) -> captured.set(McpPrincipalContext.get()));
+
+        verify(rateLimiter).tryAcquire("demo", 60);
+        assertEquals(60, captured.get().rateLimitPerMinute());
     }
 
     @Test

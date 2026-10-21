@@ -9,7 +9,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -22,7 +21,6 @@ import java.util.Map;
  * @author yh
  * @date 2026-10-21
  */
-@Slf4j
 @RequiredArgsConstructor
 public class McpAuthFilter extends OncePerRequestFilter {
 
@@ -44,13 +42,15 @@ public class McpAuthFilter extends OncePerRequestFilter {
             writeJson(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid_api_key");
             return;
         }
-        if (!rateLimiter.tryAcquire(matched.getConsumer(), matched.getRateLimitPerMinute())) {
+        Integer configuredLimit = matched.getRateLimitPerMinute();
+        int effectiveLimit = (configuredLimit == null || configuredLimit < 1) ? 60 : configuredLimit;
+        if (!rateLimiter.tryAcquire(matched.getConsumer(), effectiveLimit)) {
             metrics.rateLimited(matched.getConsumer());
-            writeJson(response, 429, "rate_limit_exceeded");
+            writeJson(response, HttpServletResponse.SC_TOO_MANY_REQUESTS, "rate_limit_exceeded");
             return;
         }
         McpPrincipalContext.set(new McpPrincipal(
-                matched.getConsumer(), List.copyOf(matched.getHospitalIds()), matched.getRateLimitPerMinute()));
+                matched.getConsumer(), List.copyOf(matched.getHospitalIds()), effectiveLimit));
         try {
             filterChain.doFilter(request, response);
         } finally {
