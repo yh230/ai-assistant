@@ -34,6 +34,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
@@ -228,6 +229,17 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         return enrich(scheduleMapper.selectList(qw));
     }
 
+    /**
+     * 对外只读查询：按医院与日期窗口返回排班及空闲号源数
+     *
+     * @param hospitalId 医院 ID
+     * @param dateFrom 开始日期（yyyy-MM-dd）
+     * @param dateTo 结束日期（yyyy-MM-dd）
+     * @param departmentId 科室 ID（可空）
+     * @param period 时段（可空）
+     * @param doctorName 医生姓名关键字（可空）
+     * @return 排班查询结果
+     */
     @Override
     public ScheduleQueryResultDTO queryForExternal(Long hospitalId, String dateFrom, String dateTo,
                                                    Long departmentId, Integer period, String doctorName) {
@@ -237,6 +249,9 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         LocalDate from = parseDate(dateFrom, "开始日期");
         LocalDate to = parseDate(dateTo, "结束日期");
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        if (to.isBefore(today)) {
+            throw new BusinessException("查询区间已过期");
+        }
         if (from.isBefore(today)) {
             from = today;
         }
@@ -286,7 +301,7 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         if (keyword != null && !keyword.isEmpty()) {
             views = views.stream()
                     .filter(v -> v.getDoctorName() != null
-                            && v.getDoctorName().toLowerCase(Locale.ROOT).contains(keyword))
+                            && v.getDoctorName().trim().toLowerCase(Locale.ROOT).contains(keyword))
                     .toList();
         }
         if (views.size() > MAX_RETURN_ROWS) {
