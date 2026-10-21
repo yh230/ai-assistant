@@ -9,7 +9,7 @@
         <span class="app-title">AI 医院助手</span>
       </div>
 
-      <el-menu class="sidebar-nav" :default-active="route.path" router>
+      <el-menu class="sidebar-nav" :default-active="route.path" router data-testid="app-menu">
         <el-menu-item index="/chat">
           <el-icon><ChatDotRound /></el-icon>
           <span>智能聊天</span>

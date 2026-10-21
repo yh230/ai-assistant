@@ -21,6 +21,7 @@
                 type="text"
                 placeholder="请输入账号"
                 autocomplete="username"
+                data-testid="login-username"
               />
             </el-form-item>
 
@@ -30,16 +31,18 @@
                 type="password"
                 placeholder="请输入密码"
                 autocomplete="current-password"
+                data-testid="login-password"
               />
             </el-form-item>
 
-            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" data-testid="login-error">{{ errorMsg }}</div>
 
             <el-button
               class="login-btn"
               type="primary"
               native-type="submit"
               :loading="loading"
+              data-testid="login-submit"
             >
               {{ loading ? '登录中…' : '登 录' }}
             </el-button>
