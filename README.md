@@ -243,7 +243,7 @@ export AMAP_KEY='你的高德Key'
 
 ### 5. 启动后端
 
-Windows 运行 `scripts/start-services.bat`（六个窗口：五业务服务 + 网关）；macOS / Linux 运行 `scripts/start-services.sh`（后台启动，日志在 `ai-assistant-backend/logs/`）。各服务日志出现 `Started` 后进入下一步。
+Windows 运行 `scripts/start-services.bat`（七个窗口：六业务服务 + 网关）；macOS / Linux 运行 `scripts/start-services.sh`（后台启动，日志在 `ai-assistant-backend/logs/`）。各服务日志出现 `Started` 后进入下一步。
 
 > **ai-chat-service 首次启动**：知识库向量嵌入使用本地 ONNX 模型（`spring-ai-transformers`，all-MiniLM-L6-v2），首次启动会从 GitHub 下载并加载，可能明显变慢（缓存于 `%TEMP%\spring-ai-onnx-generative\`；网络受限时确保代理可用，或改用离线预置：把模型 `.onnx` 放到任意路径，在 Nacos `ai.rag.embedding-model-path` 填完整路径，tokenizer 需与模型同目录且命名为「模型名去 `.onnx` + `-tokenizer.json`」）。未配置 `DEEPSEEK_API_KEY` 时对话自动降级本地回复引擎，不影响启动。
 >
@@ -280,7 +280,7 @@ npm run dev
 
 ## 生产部署安全前置
 
-- **服务端口仅内网**：9200-9204 为 auth/system/hospital/registration/ai-chat 直连端口，生产只暴露网关（8080），并将 9200-9204 限制在内网或容器网络，禁止公网访问（`/inner/**` 仅凭内部令牌保护）。
+- **服务端口仅内网**：9200-9205 为 auth/system/hospital/registration/ai-chat/mcp-server 直连端口，生产只暴露网关（8080），并将 9200-9205 限制在内网或容器网络，禁止公网访问（`/inner/**` 仅凭内部令牌保护）。
 - **强制覆盖默认密钥**：生产 Nacos 必须覆盖 JWT 密钥、内部调用令牌（`security.internal.token`）、数据库密码、CORS 白名单（`security.cors.allowed-origins`，禁止 `*`）与短信配置；保留默认值时 `prod` profile 启动即失败。
 - **权限变更后清快照**：权限/角色播种或调整后，需清理 Redis `auth:user:*` 权限快照（或要求相关账号重新登录），否则旧快照最长存活一个缓存周期。
 
@@ -298,20 +298,20 @@ npm run dev
    ```
 
 3. 把 64 位哈希填入 `key-sha256`，把允许访问的医院 ID 填入 `hospital-ids`。
-4. 启动 `mcp-server`（端口 9205）；网关入口为 `http://localhost:8080/mcp`。
+4. 启动 `mcp-server`（端口 9205）；网关入口为 `http://localhost:8080/mcp/sse`（SSE 建流）与 `http://localhost:8080/mcp/message`（消息投递）。
 
 ### 连接
 
-- 传输：Streamable HTTP
-- 地址：`http://localhost:8080/mcp`
-- 请求头：`X-API-Key: <原始 Key>`
+- 传输：SSE（`/mcp/sse` 建立事件流，`/mcp/message` 发送 JSON-RPC 消息）
+- 地址：`http://localhost:8080/mcp/sse`
+- 请求头：`X-API-Key: <原始 Key>`；SSE 与消息端点每次请求都需携带
 
 可用 MCP Inspector 验证：
 
 ```bash
 npx @modelcontextprotocol/inspector
-# Transport 选择 Streamable HTTP
-# URL 填 http://localhost:8080/mcp
+# Transport 选择 SSE
+# URL 填 http://localhost:8080/mcp/sse
 # 增加 Header X-API-Key
 ```
 
@@ -349,7 +349,7 @@ cd ai-assistant-backend
 | 问题 | 处理 |
 |------|------|
 | 服务注册失败（启动日志报 Nacos 连接错误） | 先 `scripts/start-nacos.bat`，确认控制台 8849 可访问、共享配置已创建 |
-| 端口占用 | `netstat -ano | findstr <端口>` 查 PID 后结束进程（8080 / 9200-9204 / 8848 / 8849 / 5173） |
+| 端口占用 | `netstat -ano | findstr <端口>` 查 PID 后结束进程（8080 / 9200-9205 / 8848 / 8849 / 5173） |
 | GitHub 相关下载失败（如嵌入模型） | 确认本机可访问外网（如需代理请自行配置），或改用离线预置模型（见快速开始第 5 步） |
 | 修改权限/角色后不生效 | 检查 Redis 权限快照与 auth-service 日志，必要时清缓存重新登录 |
 | 知识库上传 >2MB 提示「系统繁忙」 | 将 `spring.servlet.multipart.max-file-size`（默认 1MB）调至 ≥3MB（Nacos 或服务 yml），使请求到达业务层并返回「超过 2MB」提示 |

@@ -142,11 +142,11 @@ Kafka 主题：
 - 事件链路未引入 outbox，生产失败只记录告警。
 - 演示数据播种未按环境隔离，部署到公网前必须改用 `prod`/`demo` 配置。
 
-后续演进方向见 [README](../../README.md)、[阅读路线](reading-guide.md) 与仓库 Issue。
-
 ## 8. 对外 MCP 链路
 
-第三方 AI 客户端通过 Streamable HTTP 访问网关 `/mcp`，网关免 JWT 放行；mcp-server 校验 `X-API-Key` 并按 Key 绑定医院范围，再通过内部令牌调用 registration-service 与 hospital-service。现有 `/inner/**` 与 `/api/**` 的保护不变。
+第三方 AI 客户端通过 SSE 访问网关 `/mcp/sse`（建立事件流）与 `/mcp/message`（发送 JSON-RPC 消息），网关免 JWT 放行；mcp-server 校验 `X-API-Key` 并按 Key 绑定医院范围，再通过内部令牌调用 registration-service 与 hospital-service。现有 `/inner/**` 与 `/api/**` 的保护不变。
+
+调用方身份不依赖 ThreadLocal：认证过滤器把 Principal 写入请求属性，SSE 传输的 `contextExtractor` 将其放入 `McpTransportContext`；SYNC 工具在非请求线程执行，通过 `ToolContext` 中的 `McpSyncServerExchange.transportContext()` 读取调用方。
 
 ```mermaid
 sequenceDiagram
@@ -154,12 +154,18 @@ sequenceDiagram
   participant G as Gateway
   participant M as mcp-server
   participant R as registration-service
-  C->>G: POST /mcp + X-API-Key
+  participant H as hospital-service
+  C->>G: GET /mcp/sse + X-API-Key
   G->>M: 转发（/mcp 免 JWT）
-  M->>M: 校验 Key、医院范围、限流
+  M->>M: 校验 Key、医院范围、限流，建立 SSE 会话
+  C->>G: POST /mcp/message?sessionId=... + X-API-Key
+  G->>M: 转发 JSON-RPC
   M->>R: GET /inner/schedules/query + X-Internal-Token
+  R->>H: 回填医院/科室名称
   R-->>M: 排班 + 空闲号源数
-  M-->>C: tools/call 结果
+  M-->>C: SSE 推送 tools/call 结果
 ```
 
 余量口径为 `number_source.status=1` 的数量；日期窗口最多 14 天，扫描上限 500 条、返回上限 100 条。
+
+后续演进方向见 [README](../../README.md)、[阅读路线](reading-guide.md) 与仓库 Issue。
