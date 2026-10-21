@@ -165,10 +165,10 @@ ai-assistant-ui-e2e/
 
 ## 7. 数据策略
 
-- 账号：`.env` 中配置 `UI_E2E_ADMIN_*`、`UI_E2E_STAFF1_*`、`UI_E2E_STAFF2_*`，沿用 API E2E 的双医院账号思路。
+- 账号：复用现有 API E2E 的两院账号；UI 项目使用自己的 `.env` 变量（`UI_E2E_ADMIN_*` / `UI_E2E_STAFF1_*` / `UI_E2E_STAFF2_*`），值从现有 `ai-assistant-e2e/.env` 复制，避免跨项目读取密钥。
 - 患者：手机号随机生成，姓名前缀 `UIE2E-`，避免与真实/其他测试数据冲突。
 - 知识库：文档名前缀 `ui-e2e-`，用例结束在 `finally` 中通过 API 删除。
-- 挂号：优先在用例结束通过 API 取消；若没有公开清理接口，使用专用测试库或接受残留并在 README 标注。
+- 挂号：接受预约测试数据残留在 dev 库，不做清理；用例使用唯一患者手机号/姓名，断言只针对本次创建的记录，不依赖全局总数。
 - AI 会话：每个用例新建独立会话，避免历史污染。
 - 不直连数据库；造数与清理都走网关 API。
 
@@ -223,28 +223,27 @@ timeout = 180
 
 ## 11. CI 与运行策略
 
-MVP 阶段：
+当前阶段：
 
-- 本地/测试环境手动运行；
-- 默认确定性套件；
-- AI 套件 nightly 或发布前运行；
-- 不做 PR 必过门禁，避免环境不稳定拖慢开发。
+- 本地/测试环境手动运行，假设完整栈已按 README 手工启动；
+- 默认确定性套件；AI 套件手工或发布前运行；
+- 当前没有 nightly 环境，`DEEPSEEK_API_KEY` 配置项留空，无 Key 时 AI 用例 skip；
+- 不做 PR 必过门禁，避免环境不稳定拖慢开发；
+- 串行执行，暂不启用 xdist，避免测试数据互相污染。
 
-后续（依赖 Docker Compose / lite profile）：
+后续（不在本次范围）：
 
-- GitHub Actions 增加 `ui-e2e-nightly`：启动完整栈 → seed → 跑确定性套件 → 上传 artifacts；
-- 使用 headless Chromium；
-- 串行执行，暂不启用 xdist，避免测试数据互相污染；
-- AI 用例只在有模型 Key 的受信环境运行，fork PR 不跑。
+- 补齐 Docker Compose / lite profile 后，再考虑 GitHub Actions `ui-e2e-nightly`：启动完整栈 → seed → 跑确定性套件 → 上传 artifacts；
+- CI 使用 headless Chromium；AI 用例只在有模型 Key 的受信环境运行，fork PR 不跑。
 
 ## 12. 风险与缓解
 
 | 风险 | 影响 | 缓解 |
 |------|------|------|
 | LLM/SSE 时序不稳定 | AI 用例 flaky | 结构断言 + `ai` 标记 + 最多 1 次重试 |
-| 测试数据污染 | 重复运行失败 | 随机患者、`ui-e2e-` 前缀、finally 清理、专用测试库 |
+| 测试数据污染 | 重复运行失败 | 随机患者、`ui-e2e-` 前缀、finally 清理；预约残留已接受，断言不依赖全局总数 |
 | 选择器随 UI 变化 | 维护成本高 | 关键元素加 `data-testid`，Page Object 收敛选择器 |
-| 环境启动重 | 新人/CI 成本高 | Docker Compose / lite profile；preflight 检查 |
+| 环境启动重 | 新人/CI 成本高 | README 提供六进程启动步骤；暂不引入 compose，必要时后续补 |
 | 动画/异步加载 | 等待不稳定 | Playwright `expect` 自动等待、禁用动画、reduced motion |
 | 扫码/短信依赖外部条件 | 用例难稳定 | 放 P1，不在 MVP 门禁内 |
 | 浏览器依赖 | 安装成本 | MVP 只装 Chromium，文档写明 `playwright install chromium` |
@@ -263,17 +262,17 @@ MVP 阶段：
 
 | 阶段 | 内容 |
 |------|------|
-| Phase 0 | 增加 `data-testid`；准备测试账号、seed/reset、preflight |
+| Phase 0 | 增加 `data-testid`；确认两院账号与前置数据；preflight |
 | Phase 1 | 搭建 Playwright 框架 + 3 条确定性用例（登录、知识库、窄屏） |
 | Phase 2 | 患者旅程 + AI 结构断言 + 挂号确认 |
-| Phase 3 | 报告、trace、nightly CI、README |
+| Phase 3 | 报告、trace、README；CI/nightly 暂缓 |
 
 在 spec 评审通过前，不创建项目目录、不修改前端代码。
 
-## 15. 待确认项
+## 15. 已确认决策（2026-10-20）
 
-1. 是否有专用测试库，还是接受预约测试数据残留在 dev 库？
-2. 测试账号是否复用现有 `ai-assistant-e2e` 的两院账号？
-3. nightly 环境是否已有可用的 LLM Key？
-4. Docker Compose / lite profile 是否排在 UI 项目之前？
-5. 是否接受 MVP 只跑 Chromium、扫码/短信放 P1？
+1. 预约测试数据允许残留在 dev 库，不做清理；用例只断言本次创建的记录。
+2. 测试账号复用现有 API E2E 的两院账号，UI 项目用自己的 env 变量承接。
+3. 当前没有 nightly 环境；LLM Key 配置项留空，AI 用例无 Key 时 skip。
+4. 暂不引入 Docker Compose / lite profile，UI 测试假设完整栈已手工启动。
+5. MVP 只跑 Chromium；扫码/短信登录放 P1。
