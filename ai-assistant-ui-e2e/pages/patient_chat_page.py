@@ -10,10 +10,13 @@ class PatientChatPage(BasePage):
 
     def new_session(self, session_type: str) -> None:
         self.testid("chat-new").click()
-        self.testid(f"chat-type-{session_type}").click()
+        with self.page.expect_response(
+            lambda r: "/chat/patient/session" in r.url and r.request.method == "POST"
+        ):
+            self.testid(f"chat-type-{session_type}").click()
 
     def send(self, text: str) -> None:
-        self.testid("chat-input").locator("textarea").fill(text)
+        self.testid("chat-input").fill(text)
         self.testid("chat-send").click()
 
     def wait_done(self, timeout_ms: int) -> None:
