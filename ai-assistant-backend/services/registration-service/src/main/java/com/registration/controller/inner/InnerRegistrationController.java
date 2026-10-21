@@ -3,9 +3,11 @@ package com.registration.controller.inner;
 import com.api.dto.BookRequest;
 import com.api.dto.CancelRequest;
 import com.api.dto.RegistrationBriefDTO;
+import com.api.dto.ScheduleQueryResultDTO;
 import com.api.dto.SourceInfoDTO;
 import com.common.result.Result;
 import com.registration.dto.AppointmentCreateDTO;
+import com.registration.service.DoctorScheduleService;
 import com.registration.service.NumberSourceService;
 import com.registration.service.RegistrationService;
 import com.registration.vo.NumberSourceVO;
@@ -35,6 +37,7 @@ public class InnerRegistrationController {
 
     private final NumberSourceService numberSourceService;
     private final RegistrationService registrationService;
+    private final DoctorScheduleService scheduleService;
 
     /**
      * 按科室与日期查询号源池（含余量，period 为空表示全部时段，hospitalId 必填按院约束）
@@ -141,5 +144,28 @@ public class InnerRegistrationController {
             dto.setExpireTime(vo.getExpireTime() == null ? null : vo.getExpireTime().toString());
             return dto;
         }).toList();
+    }
+
+    /**
+     * 对外 MCP 排班查询（按医院与日期窗口，只读）
+     *
+     * @param hospitalId 医院 ID
+     * @param dateFrom 开始日期（yyyy-MM-dd）
+     * @param dateTo 结束日期（yyyy-MM-dd）
+     * @param departmentId 科室 ID（可空）
+     * @param period 时段（可空）
+     * @param doctorName 医生姓名关键字（可空）
+     * @return 排班与余量查询结果
+     */
+    @GetMapping("/schedules/query")
+    public Result<ScheduleQueryResultDTO> querySchedules(
+            @RequestParam("hospitalId") Long hospitalId,
+            @RequestParam("dateFrom") String dateFrom,
+            @RequestParam("dateTo") String dateTo,
+            @RequestParam(value = "departmentId", required = false) Long departmentId,
+            @RequestParam(value = "period", required = false) Integer period,
+            @RequestParam(value = "doctorName", required = false) String doctorName) {
+        return Result.success(scheduleService.queryForExternal(
+                hospitalId, dateFrom, dateTo, departmentId, period, doctorName));
     }
 }

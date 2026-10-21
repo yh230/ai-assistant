@@ -29,4 +29,18 @@ public interface DoctorScheduleService {
 
     /** 公开：返回有出诊排班的医生列表（患者预约选号用，只读启用中排班） */
     List<ScheduleVO> listPublic(java.time.LocalDate date, Long departmentId);
+
+    /**
+     * 对外只读查询：按医院与日期窗口返回排班及空闲号源数
+     *
+     * @param hospitalId 医院 ID
+     * @param dateFrom 开始日期（yyyy-MM-dd）
+     * @param dateTo 结束日期（yyyy-MM-dd）
+     * @param departmentId 科室 ID（可空）
+     * @param period 时段（可空）
+     * @param doctorName 医生姓名关键字（可空）
+     * @return 排班查询结果
+     */
+    com.api.dto.ScheduleQueryResultDTO queryForExternal(Long hospitalId, String dateFrom, String dateTo,
+                                                        Long departmentId, Integer period, String doctorName);
 }
