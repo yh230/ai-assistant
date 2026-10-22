@@ -32,7 +32,9 @@ public class AppointmentExpireScheduler {
         List<Registration> overdue = registrationMapper.selectList(new LambdaQueryWrapper<Registration>()
                 .select(Registration::getId)
                 .eq(Registration::getStatus, RegistrationStatus.RESERVED.getCode())
-                .lt(Registration::getExpireTime, now));
+                .lt(Registration::getExpireTime, now)
+                // 单轮最多处理 200 条，避免积压时一次拉全量；剩余由后续周期继续处理
+                .last("LIMIT 200"));
         int released = 0;
         for (Registration reg : overdue) {
             if (registrationService.expireOverdueOne(reg.getId())) {

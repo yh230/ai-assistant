@@ -76,7 +76,7 @@
           <el-input v-model="form.username" :disabled="isEdit" placeholder="登录账号" />
         </el-form-item>
         <el-form-item v-if="!isEdit" label="密码">
-          <el-input v-model="form.password" placeholder="留空则使用默认密码" />
+          <el-input v-model="form.password" type="password" show-password placeholder="留空则使用默认密码" />
         </el-form-item>
         <el-form-item label="姓名" required>
           <el-input v-model="form.name" placeholder="如 张三" />
@@ -125,7 +125,7 @@
     <el-dialog v-model="showReset" :title="`重置密码 - ${resetTarget?.name}`" width="480px">
       <el-form label-position="top">
         <el-form-item label="新密码">
-          <el-input v-model="newPassword" placeholder="留空则重置为默认密码" />
+          <el-input v-model="newPassword" type="password" show-password placeholder="留空则重置为默认密码" />
         </el-form-item>
       </el-form>
       <template #footer>

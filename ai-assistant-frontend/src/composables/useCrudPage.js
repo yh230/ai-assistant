@@ -33,7 +33,11 @@ export function useCrudPage(options) {
   const editingId = ref(null)
   const form = ref(null)
 
+  // 请求序号：并发/乱序请求时仅最后一次发起的请求可写入结果与 loading，避免旧响应覆盖新页面
+  let loadSeq = 0
+
   async function loadData() {
+    const seq = ++loadSeq
     loading.value = true
     error.value = ''
     try {
@@ -42,14 +46,16 @@ export function useCrudPage(options) {
         pageSize: pageSize.value,
         keyword: keyword.value || undefined
       })
+      if (seq !== loadSeq) return
       list.value = res.list || []
       total.value = res.total || 0
     } catch (e) {
+      if (seq !== loadSeq) return
       // 加载失败时保留上一次的列表与总数，错误仅用于页面内联提示
       error.value = '加载失败：' + e.message
       toast.error(error.value)
     } finally {
-      loading.value = false
+      if (seq === loadSeq) loading.value = false
     }
   }
   function retry() {

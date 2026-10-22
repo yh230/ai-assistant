@@ -39,6 +39,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class NumberSourceServiceImpl implements NumberSourceService {
 
+    /** 号源池列表单次最多加载的排班数，避免筛选较宽时全量加载 */
+    private static final int MAX_POOL_SCHEDULES = 1000;
+
     private final NumberSourceMapper numberSourceMapper;
     private final DoctorScheduleMapper scheduleMapper;
     private final UserClient userClient;
@@ -68,6 +71,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         if (period != null) qw.eq(DoctorSchedule::getPeriod, period);
         qw.eq(DoctorSchedule::getStatus, 1);
         qw.orderByAsc(DoctorSchedule::getScheduleDate).orderByAsc(DoctorSchedule::getId);
+        // 安全上限：筛选较宽时按日期/ID 排序截断，避免一次加载过多排班
+        qw.last("LIMIT " + MAX_POOL_SCHEDULES);
         List<DoctorSchedule> schedules = scheduleMapper.selectList(qw);
         if (schedules.isEmpty()) return List.of();
 

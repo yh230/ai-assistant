@@ -49,15 +49,7 @@
       <el-empty v-else-if="!loading && !error" description="暂无医院数据" :image-size="96" />
     </div>
 
-    <div class="pager" v-if="total > 0">
-      <el-pagination
-        layout="prev, pager, next, total"
-        :total="total"
-        :current-page="pageNum"
-        :page-size="pageSize"
-        @current-change="changePage"
-      />
-    </div>
+    <Pager :page-num="pageNum" :page-size="pageSize" :total="total" @change="changePage" />
 
     <el-dialog v-model="showModal" :title="isEdit ? '编辑医院' : '新增医院'" width="520px">
       <el-form label-position="top">
@@ -91,6 +83,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { pageHospitals, createHospital, updateHospital, deleteHospital, changeHospitalStatus } from '../api/hospital'
 import { useCrudPage } from '../composables/useCrudPage'
 import { formatTime } from '../utils/format'
+import Pager from '../components/Pager.vue'
 
 const {
   list, total, pageNum, pageSize, keyword, totalPages,

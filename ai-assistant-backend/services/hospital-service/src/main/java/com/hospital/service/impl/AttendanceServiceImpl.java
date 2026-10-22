@@ -188,10 +188,18 @@ public class AttendanceServiceImpl implements AttendanceService {
         }
         String whereSql = scope.toWhereSql("hospital_id", "department_id", "user_id");
         List<Map<String, Object>> rows = attendanceMapper.groupStats(groupColumn, whereSql);
+        // 先收集全部维度 ID 批量回填名称，避免统计行逐条查询医院/科室
+        Map<Long, String> dimNames;
+        if ("hospital".equals(dimension)) {
+            dimNames = namesByIds(dimIds(rows), hospitalMapper::selectBatchIds, Hospital::getId, Hospital::getName);
+        } else if ("status".equals(dimension)) {
+            dimNames = Map.of();
+        } else {
+            dimNames = namesByIds(dimIds(rows), departmentMapper::selectBatchIds, Department::getId, Department::getName);
+        }
         return DimensionStatsSupport.assemble(dimension, rows, false, dimId -> {
             if ("hospital".equals(dimension)) {
-                Hospital h = hospitalMapper.selectById(dimId);
-                return h == null ? "未知医院" : h.getName();
+                return dimNames.getOrDefault(dimId, "未知医院");
             }
             if ("status".equals(dimension)) {
                 return statusText(dimId.intValue());
@@ -199,9 +207,21 @@ public class AttendanceServiceImpl implements AttendanceService {
             if (dimId == -1L) {
                 return "院级/未分配科室";
             }
-            Department d = departmentMapper.selectById(dimId);
-            return d == null ? "未知科室" : d.getName();
+            return dimNames.getOrDefault(dimId, "未知科室");
         });
+    }
+
+    /**
+     * 从统计原始行提取维度 ID 集合（dim 为空按 -1 处理，已去重）
+     *
+     * @param rows groupStats 原始行
+     * @return 维度 ID 集合
+     */
+    private List<Long> dimIds(List<Map<String, Object>> rows) {
+        return rows.stream()
+                .map(r -> r.get("dim") == null ? -1L : ((Number) r.get("dim")).longValue())
+                .distinct()
+                .toList();
     }
 
     /**

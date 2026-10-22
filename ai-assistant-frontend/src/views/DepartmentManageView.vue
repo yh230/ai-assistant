@@ -52,15 +52,7 @@
       <el-empty v-else-if="!loading && !error" description="暂无科室数据" :image-size="96" />
     </div>
 
-    <div class="pager" v-if="total > 0">
-      <el-pagination
-        layout="prev, pager, next, total"
-        :total="total"
-        :current-page="pageNum"
-        :page-size="pageSize"
-        @current-change="changePage"
-      />
-    </div>
+    <Pager :page-num="pageNum" :page-size="pageSize" :total="total" @change="changePage" />
 
     <el-dialog v-model="showModal" :title="isEdit ? '编辑科室' : '新增科室'" width="520px">
       <el-form label-position="top">
@@ -101,6 +93,7 @@ import {
 } from '../api/hospital'
 import { useCrudPage } from '../composables/useCrudPage'
 import { formatTime } from '../utils/format'
+import Pager from '../components/Pager.vue'
 
 const filterHospital = ref(null)
 const hospitalOptions = ref([])
