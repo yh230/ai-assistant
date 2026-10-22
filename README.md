@@ -90,18 +90,18 @@ flowchart LR
   C --> E[(Elasticsearch 可选)]
 ```
 
-> 详细服务边界、数据归属与调用链见 [架构说明](docs/design/architecture.md)。
+> 详细服务边界、数据归属、调用链与代码阅读路线见 [架构说明](docs/architecture.md)。
 
 ## 文档
 
-- [架构说明](docs/design/architecture.md)
-- [阅读路线](docs/design/reading-guide.md)
-- [AI 评测](docs/design/evaluation.md)
+- [架构说明与阅读路线](docs/architecture.md)
 - [排班查询 MCP](docs/mcp.md)
-- [UI 自动化测试](docs/ui-e2e.md)
-- [E2E 套件](ai-assistant-e2e/README.md)
+- [API E2E 套件](ai-assistant-e2e/README.md)
+- [AI 评测](ai-assistant-e2e/eval/README.md)
+- [UI 自动化测试](ai-assistant-ui-e2e/README.md)
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
+- [更新日志](CHANGELOG.md)
 
 ## 功能明细
 

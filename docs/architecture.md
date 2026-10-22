@@ -168,4 +168,50 @@ sequenceDiagram
 
 余量口径为 `number_source.status=1` 的数量；日期窗口最多 14 天，扫描上限 500 条、返回上限 100 条。
 
-后续演进方向见 [README](../../README.md)、[阅读路线](reading-guide.md) 与仓库 Issue。
+## 9. 如何阅读这个仓库
+
+建议按“先全局、再主链路、最后按兴趣深入”的顺序。
+
+### 30 分钟：建立全局感
+
+1. 读 [README](../README.md) 的「核心能力」与「架构一览」。
+2. 读本文第 1-3 节，确认服务边界、身份链路与数据归属。
+3. 打开 `ai-assistant-backend/pom.xml` 与 `sql/init.sql`，对照模块划分与四库。
+4. 按「快速开始」跑通患者注册 → 导诊 → 挂号确认。
+
+### 半天：跟一次请求
+
+| 步骤 | 入口 | 要回答的问题 |
+|------|------|--------------|
+| 1 | `gateway/.../filter/JwtAuthGlobalFilter.java` | 哪些路径免登录？身份与路径如何配对？`/inner/**` 为什么外部不可达？ |
+| 2 | `common-security/.../SecurityAutoConfiguration.java` | 服务侧如何从 JWT 还原 `UserSnapshot`？权限不足返回什么？ |
+| 3 | `services/auth-service/.../AuthServiceImpl.java` | 登录、刷新、登出分别做了什么？refresh token 如何轮换？ |
+| 4 | `services/system-service/.../UserServiceImpl.java` | RBAC 权限快照何时失效？ |
+| 5 | `services/registration-service/.../RegistrationServiceImpl.java` | 预约状态机、锁顺序、幂等键、号源抢占分别在哪里？ |
+| 6 | `services/hospital-service/...`、`common-security/.../DataScope*` | 数据权限如何按医院/科室/医生过滤？ |
+
+### 一天：按兴趣深入
+
+| 想学什么 | 先看哪里 |
+|----------|----------|
+| AI 对话与记忆 | `PatientChatServiceImpl`、`ConversationMemory`、`ModelStreamExecutor` |
+| 工具护栏与二次确认 | `GuardedToolCallback`、`PendingActionServiceImpl`、`ActionExecutor` |
+| RAG | `services/ai-chat-service/.../rag/`（切片、嵌入、Simple/ES、RRF、引用与 groundedness） |
+| Kafka 可靠性 | `api/.../mq/MqTopics.java`、`KnowledgeTaskConsumer`、消费者手动 ack 与死信 |
+| 可观测性 | `common-security/.../operlog/`、`scripts/nacos-common-shared.yaml` |
+| 分布式锁与幂等 | `RegistrationServiceImpl#withLock`、`ScheduleLock`、`buildIdempotencyKey` |
+
+### 三个容易混淆的概念
+
+1. **AI 人设角色 vs RBAC 角色**：`ai_role` 是对话人设；`sys_role` 是员工权限角色，两者无关。
+2. **SimpleVectorStore vs Elasticsearch**：默认 `simple` 是单机文件；`elasticsearch` 才启用 BM25 + kNN 混合检索。
+3. **员工聊天 vs 患者聊天**：入口、风控、工具和会话隔离都不同，不要只读其中一个就下结论。
+
+### 调试入口
+
+- 先看网关日志中的 `traceId`，再用同一个 `traceId` 搜各服务日志。
+- Redis 常用键：`auth:user:*`、`auth:patient:*`、`jwt:blacklist:*`、`jwt:invalid-after:*`。
+- 预约问题先看 `registration` 的状态与 `pay_status`，再看 `number_source` 与排班锁。
+- AI 问题先确认模型可用，再检查工具调用日志与 `pending_action`；知识库看文档状态与消费者日志。
+
+后续演进方向见 [README](../README.md) 与仓库 Issue。

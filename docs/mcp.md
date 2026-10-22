@@ -95,4 +95,3 @@ pytest -m mcp -v
 
 - `ai-assistant-backend/services/mcp-server`
 - 内部查询：`GET /inner/schedules/query`（`X-Internal-Token`）
-- 设计决策与历史方案见 `docs/design/archive/mcp-schedule-design.md`

@@ -5,7 +5,7 @@
 ## 开始之前
 
 1. 阅读 [README](README.md) 的「环境要求」与「快速开始」。
-2. 阅读 [架构说明](docs/design/architecture.md) 和 [阅读路线](docs/design/reading-guide.md)。
+2. 阅读 [架构说明](docs/architecture.md)（含代码阅读路线）。
 3. 搜索现有 Issue，避免重复。
 
 ## 分支与提交
