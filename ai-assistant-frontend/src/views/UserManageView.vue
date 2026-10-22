@@ -15,7 +15,10 @@
     </div>
 
     <!-- 表格 -->
-    <div class="table-card">
+    <div class="table-card" v-loading="loading">
+      <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon style="margin: 12px 12px 0">
+        <el-button link type="primary" @click="retry">重试</el-button>
+      </el-alert>
       <el-table v-if="list.length > 0" :data="list" stripe>
         <el-table-column label="ID" width="70">
           <template #default="{ row }"><code class="id-cell" :title="String(row.id)">{{ row.id }}</code></template>
@@ -57,7 +60,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无用户数据" :image-size="96" />
+      <el-empty v-else-if="!loading && !error" description="暂无用户数据" :image-size="96" />
     </div>
 
     <!-- 分页 -->
@@ -150,8 +153,9 @@ const roleOptions = ref([])
 
 const {
   list, total, pageNum, pageSize, keyword, totalPages,
+  loading, error,
   showModal, isEdit, saving, form,
-  loadData, reload, changePage, openCreate: openCreateBase, openEdit: openEditBase, closeModal, save, toggleStatus,
+  loadData, retry, reload, changePage, openCreate: openCreateBase, openEdit: openEditBase, closeModal, save, toggleStatus,
   remove: removeUser
 } = useCrudPage({
   fetchPage: (params) => pageUsers(params),

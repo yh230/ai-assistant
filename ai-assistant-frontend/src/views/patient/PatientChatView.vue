@@ -3,8 +3,8 @@
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="topbar-brand">
-        <el-button class="mobile-menu-btn" :icon="Menu" circle text title="会话列表" @click="sidebarOpen = !sidebarOpen" />
-        <span class="brand-badge">医</span>
+        <el-button class="mobile-menu-btn" :icon="Menu" circle text title="会话列表" aria-label="打开会话列表" :aria-expanded="sidebarOpen ? 'true' : 'false'" @click="sidebarOpen = !sidebarOpen" />
+        <span class="brand-badge" aria-hidden="true">医</span>
         <div class="brand-text">
           <div class="brand-name">AI 医院助手</div>
           <div class="brand-sub">患者端 · 导诊 / 知识库 / 闲聊</div>
@@ -13,8 +13,8 @@
       <div class="topbar-user">
         <span class="user-phone">{{ displayPhone }}</span>
         <el-badge :value="unreadCount" :hidden="unreadCount === 0" class="notify-badge">
-          <el-button circle text @click="openNotifications" title="通知">
-            <el-icon><Bell /></el-icon>
+          <el-button circle text @click="openNotifications" title="通知" aria-label="通知">
+            <el-icon aria-hidden="true"><Bell /></el-icon>
           </el-button>
         </el-badge>
         <el-button size="small" round plain class="logout-btn" @click="handleLogout">退出</el-button>
@@ -23,14 +23,24 @@
 
     <div class="chat-body">
       <!-- 移动端抽屉遮罩 -->
-      <div v-if="isMobile && sidebarOpen" class="session-mask" @click="sidebarOpen = false"></div>
+      <div v-if="isMobile && sidebarOpen" class="session-mask" aria-hidden="true" @click="sidebarOpen = false"></div>
 
       <!-- 会话侧边栏（≤768px 为抽屉） -->
       <div class="session-panel" :class="{ open: sidebarOpen }">
         <div class="session-header">
-          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu" data-testid="chat-new">新对话</el-button>
+          <el-button type="primary" class="new-chat-btn" :icon="Plus" @click="toggleTypeMenu" data-testid="chat-new" aria-haspopup="true" :aria-expanded="showTypeMenu ? 'true' : 'false'">新对话</el-button>
           <div v-if="showTypeMenu" class="type-menu">
-            <div v-for="t in SESSION_TYPES" :key="t.value" class="type-item" :data-testid="'chat-type-' + t.value" @click="createSession(t.value)">
+            <div
+              v-for="t in SESSION_TYPES"
+              :key="t.value"
+              class="type-item"
+              :data-testid="'chat-type-' + t.value"
+              role="button"
+              tabindex="0"
+              @click="createSession(t.value)"
+              @keydown.enter.prevent="createSession(t.value)"
+              @keydown.space.prevent="createSession(t.value)"
+            >
               <span class="type-name">{{ t.label }}</span>
               <span class="type-desc">{{ t.desc }}</span>
             </div>
@@ -42,13 +52,26 @@
             :key="s.sessionId"
             class="session-item"
             :class="{ active: currentSessionId === s.sessionId }"
+            role="button"
+            tabindex="0"
+            :aria-current="currentSessionId === s.sessionId ? 'true' : undefined"
             @click="loadSession(s)"
+            @keydown.enter.prevent="loadSession(s)"
+            @keydown.space.prevent="loadSession(s)"
           >
-            <el-icon class="session-icon" :size="16"><ChatDotRound /></el-icon>
+            <el-icon class="session-icon" :size="16" aria-hidden="true"><ChatDotRound /></el-icon>
             <span class="session-title">{{ s.title || '新对话' }}</span>
             <el-tag size="small" class="session-type-tag" :type="tagType(s.sessionType)" effect="light">{{ typeLabel(s.sessionType) }}</el-tag>
-            <span class="session-delete" @click.stop="removeSession(s.sessionId)">
-              <el-icon :size="14"><Close /></el-icon>
+            <span
+              class="session-delete"
+              role="button"
+              tabindex="0"
+              :aria-label="'删除会话：' + (s.title || '新对话')"
+              @click.stop="removeSession(s.sessionId)"
+              @keydown.enter.prevent.stop="removeSession(s.sessionId)"
+              @keydown.space.prevent.stop="removeSession(s.sessionId)"
+            >
+              <el-icon :size="14" aria-hidden="true"><Close /></el-icon>
             </span>
           </div>
           <div v-if="sessions.length === 0" class="empty-sessions">
@@ -66,7 +89,14 @@
             <h2 class="guide-title">{{ guide.title }}</h2>
             <p class="guide-text">{{ guide.text }}</p>
             <div class="guide-suggestions">
-              <div class="suggestion" @click="sendQuickMessage(guide.suggestion)">
+              <div
+                class="suggestion"
+                role="button"
+                tabindex="0"
+                @click="sendQuickMessage(guide.suggestion)"
+                @keydown.enter.prevent="sendQuickMessage(guide.suggestion)"
+                @keydown.space.prevent="sendQuickMessage(guide.suggestion)"
+              >
                 {{ guide.suggestion }}
               </div>
             </div>
@@ -88,13 +118,13 @@
                     <span class="reference-snippet">{{ ref.snippet }}</span>
                   </div>
                 </div>
-                <span v-if="msg.streaming" class="streaming-cursor" data-testid="chat-streaming-cursor"></span>
+                <span v-if="msg.streaming" class="streaming-cursor" data-testid="chat-streaming-cursor" aria-hidden="true"></span>
               </div>
             </div>
           </template>
 
           <!-- 打字动画：等待第一个 token 时显示 -->
-          <div v-if="showTypingDots" class="message-item assistant">
+          <div v-if="showTypingDots" class="message-item assistant" aria-hidden="true">
             <div class="message-avatar">医</div>
             <div class="message-bubble typing">
               <span class="dot"></span>
@@ -115,13 +145,16 @@
               :autosize="{ minRows: 1, maxRows: 6 }"
               placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
               data-testid="chat-input"
+              aria-label="输入消息"
               @keydown="handleKeydown"
             />
-            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" :icon="VideoPause" @click="stopGeneration" data-testid="chat-stop">停止</el-button>
+            <el-button v-if="loading" type="danger" class="stop-btn" title="停止生成" aria-label="停止生成" :icon="VideoPause" @click="stopGeneration" data-testid="chat-stop">停止</el-button>
             <el-button
               v-else
               type="primary"
               class="send-btn"
+              title="发送消息"
+              aria-label="发送消息"
               :disabled="!inputText.trim()"
               :icon="Position"
               @click="sendMessage"
@@ -160,7 +193,11 @@
       </div>
       <el-empty v-if="!notifications.length" description="暂无通知" />
       <div v-else class="notify-list">
-        <div v-for="n in notifications" :key="n.id" class="notify-item" :class="{ unread: n.readFlag === 0 }" @click="markRead(n)">
+        <div v-for="n in notifications" :key="n.id" class="notify-item" :class="{ unread: n.readFlag === 0 }"
+             role="button" tabindex="0" :aria-label="'通知：' + n.title"
+             @click="markRead(n)"
+             @keydown.enter.prevent="markRead(n)"
+             @keydown.space.prevent="markRead(n)">
           <div class="notify-title">{{ n.title }}</div>
           <div class="notify-content">{{ n.content }}</div>
           <div class="notify-time">{{ n.createTime }}</div>

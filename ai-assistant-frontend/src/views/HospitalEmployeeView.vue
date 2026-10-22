@@ -19,7 +19,10 @@
       <el-button @click="reload">查询</el-button>
     </div>
 
-    <div class="table-card">
+    <div class="table-card" v-loading="loading">
+      <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon style="margin: 12px 12px 0">
+        <el-button link type="primary" @click="retry">重试</el-button>
+      </el-alert>
       <el-table v-if="list.length > 0" :data="list" stripe>
         <el-table-column label="ID" width="70">
           <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
@@ -54,7 +57,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无员工数据" :image-size="96" />
+      <el-empty v-else-if="!loading && !error" description="暂无员工数据" :image-size="96" />
     </div>
 
     <div class="pager" v-if="total > 0">
@@ -153,8 +156,9 @@ const roleOptions = ref([])
 
 const {
   list, total, pageNum, pageSize, keyword, totalPages,
+  loading, error,
   showModal, isEdit, saving, form,
-  loadData, reload, changePage, closeModal, save, toggleStatus, remove,
+  loadData, retry, reload, changePage, closeModal, save, toggleStatus, remove,
   openCreate: openCreateBase, openEdit: openEditBase
 } = useCrudPage({
   // keyword/hospitalId/departmentId 为本页查询条件，在 fetchPage 内拼装

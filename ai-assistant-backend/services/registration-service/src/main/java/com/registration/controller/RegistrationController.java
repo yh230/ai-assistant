@@ -11,6 +11,7 @@ import com.registration.dto.RegistrationQueryDTO;
 import com.registration.dto.WalkInRegisterDTO;
 import com.registration.service.RegistrationService;
 import com.registration.vo.RegistrationVO;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,7 +47,7 @@ public class RegistrationController {
 
     @OperLog(module = "患者预约", action = "线上预约")
     @PostMapping("/appointments")
-    public Result<RegistrationVO> createAppointment(@RequestBody AppointmentCreateDTO dto) {
+    public Result<RegistrationVO> createAppointment(@Valid @RequestBody AppointmentCreateDTO dto) {
         // 匿名公开入口不接受 patientId，防止归属冒用
         dto.setPatientId(null);
         return Result.success(registrationService.createAppointment(dto));
@@ -61,13 +62,13 @@ public class RegistrationController {
 
     @OperLog(module = "患者预约", action = "确认支付")
     @PostMapping("/appointments/{id}/confirm-pay")
-    public Result<RegistrationVO> confirmPay(@PathVariable Long id, @RequestBody PayConfirmDTO dto) {
+    public Result<RegistrationVO> confirmPay(@PathVariable Long id, @Valid @RequestBody PayConfirmDTO dto) {
         return Result.success(registrationService.confirmPay(id, dto.getPatientIdCard()));
     }
 
     @OperLog(module = "患者预约", action = "取消预约")
     @PostMapping("/appointments/{id}/cancel")
-    public Result<RegistrationVO> patientCancel(@PathVariable Long id, @RequestBody CancelDTO dto) {
+    public Result<RegistrationVO> patientCancel(@PathVariable Long id, @Valid @RequestBody CancelDTO dto) {
         return Result.success(registrationService.patientCancel(id, dto.getPatientIdCard(), dto.getReason()));
     }
 
@@ -110,7 +111,7 @@ public class RegistrationController {
     @OperLog(module = "挂号管理", action = "现场挂号")
     @PostMapping("/records/walk-in")
     @PreAuthorize("hasAuthority('registration:register:create')")
-    public Result<RegistrationVO> walkIn(@RequestBody WalkInRegisterDTO dto) {
+    public Result<RegistrationVO> walkIn(@Valid @RequestBody WalkInRegisterDTO dto) {
         return Result.success(registrationService.walkIn(dto));
     }
 

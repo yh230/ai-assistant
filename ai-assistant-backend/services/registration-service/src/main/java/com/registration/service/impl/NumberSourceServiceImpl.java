@@ -3,7 +3,6 @@ package com.registration.service.impl;
 import com.api.client.UserClient;
 import com.api.dto.UserBriefDTO;
 import com.common.exception.BusinessException;
-import com.common.result.Result;
 import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.registration.entity.DoctorSchedule;
@@ -203,23 +202,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         if (cleanIds.isEmpty()) {
             return Map.of();
         }
-        List<UserBriefDTO> users = unwrap(userClient.batch(cleanIds), "查询医生信息失败");
+        List<UserBriefDTO> users = userClient.batch(cleanIds).unwrap("查询医生信息失败");
         return users.stream()
                 .collect(Collectors.toMap(UserBriefDTO::getId, UserBriefDTO::getName, (first, second) -> first));
-    }
-
-    /**
-     * 解包 Feign 返回结果（非 200 抛业务异常，文案透传）
-     *
-     * @param result Feign 返回
-     * @param failMessage 失败兜底文案
-     * @param <T> 数据类型
-     * @return 业务数据
-     */
-    private <T> T unwrap(Result<T> result, String failMessage) {
-        if (result == null || result.getCode() != 200) {
-            throw new BusinessException(result == null ? failMessage : result.getMsg());
-        }
-        return result.getData();
     }
 }

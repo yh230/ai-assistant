@@ -2,6 +2,7 @@ package com.common.security;
 
 import com.common.exception.BusinessException;
 import com.common.result.Result;
+import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,9 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+
+import java.time.format.DateTimeParseException;
 
 /**
  * 全局异常处理器：将所有异常统一包装为 {@link Result} 结构返回，
@@ -75,6 +79,28 @@ public class GlobalExceptionHandler {
         return Result.fail(400, message);
     }
 
+    /**
+     * 请求参数类型不匹配（如路径/查询参数应为数字却传了非数字）
+     *
+     * @param e 类型不匹配异常
+     * @return 400 返回体
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public Result<Void> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return Result.fail(400, "参数类型错误：" + e.getName());
+    }
+
+    /**
+     * 日期解析失败（如 yyyy-MM-dd 格式不正确）
+     *
+     * @param e 日期解析异常
+     * @return 400 返回体
+     */
+    @ExceptionHandler(DateTimeParseException.class)
+    public Result<Void> handleDateTimeParse(DateTimeParseException e) {
+        return Result.fail(400, "日期格式错误，应为 yyyy-MM-dd");
+    }
+
     /** 参数校验失败（@ModelAttribute / 表单） */
     @ExceptionHandler(BindException.class)
     public Result<Void> handleBindException(BindException e) {
@@ -94,10 +120,18 @@ public class GlobalExceptionHandler {
         return Result.fail(400, "请求体格式错误");
     }
 
-    /** Bean Validation 约束违反（路径/参数级） */
+    /**
+     * Bean Validation 约束违反（路径/参数级）：仅返回字段名 + 校验文案，不透出内部路径
+     *
+     * @param e 约束违反异常
+     * @return 400 返回体
+     */
     @ExceptionHandler(ConstraintViolationException.class)
     public Result<Void> handleConstraintViolation(ConstraintViolationException e) {
-        return Result.fail(400, e.getMessage());
+        String message = e.getConstraintViolations() == null || e.getConstraintViolations().isEmpty()
+                ? "参数校验失败"
+                : resolveViolation(e.getConstraintViolations().iterator().next());
+        return Result.fail(400, message);
     }
 
     /** 请求方法不支持 */
@@ -134,6 +168,23 @@ public class GlobalExceptionHandler {
         if (fieldError == null) {
             return "参数校验失败";
         }
-        return fieldError.getField() + " " + fieldError.getDefaultMessage();
+        String message = fieldError.getDefaultMessage();
+        return message == null || message.isBlank()
+                ? fieldError.getField() + " 参数校验失败"
+                : fieldError.getField() + " " + message;
+    }
+
+    /**
+     * 解析单条约束违反信息：取属性路径末段作为字段名，方法参数占位（arg0）时仅返回校验文案
+     *
+     * @param violation 约束违反项
+     * @return 字段名 + 校验文案
+     */
+    private String resolveViolation(ConstraintViolation<?> violation) {
+        String message = violation.getMessage();
+        String path = violation.getPropertyPath().toString();
+        int idx = path.lastIndexOf('.');
+        String field = idx >= 0 ? path.substring(idx + 1) : path;
+        return field.isEmpty() || field.startsWith("arg") ? message : field + " " + message;
     }
 }

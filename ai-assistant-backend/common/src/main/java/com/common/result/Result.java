@@ -1,5 +1,6 @@
 package com.common.result;
 
+import com.common.exception.BusinessException;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -68,5 +69,19 @@ public class Result<T> implements Serializable {
 
     public static <T> Result<T> forbidden(String msg) {
         return fail(403, msg);
+    }
+
+    /**
+     * 解包 Feign 返回结果（非 200 抛业务异常，服务端文案优先，缺失时回退调用方文案）
+     *
+     * @param failMessage 失败兜底文案（服务端 msg 为空时使用）
+     * @return 业务数据（成功但无数据时为 null）
+     * @throws BusinessException 状态码非 200
+     */
+    public T unwrap(String failMessage) {
+        if (code != 200) {
+            throw new BusinessException(msg == null || msg.isBlank() ? failMessage : msg);
+        }
+        return data;
     }
 }

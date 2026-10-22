@@ -24,6 +24,9 @@ export function useCrudPage(options) {
   const keyword = ref('')
   const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 
+  const loading = ref(false)
+  const error = ref('')
+
   const showModal = ref(false)
   const isEdit = ref(false)
   const saving = ref(false)
@@ -31,6 +34,8 @@ export function useCrudPage(options) {
   const form = ref(null)
 
   async function loadData() {
+    loading.value = true
+    error.value = ''
     try {
       const res = await options.fetchPage({
         pageNum: pageNum.value,
@@ -40,8 +45,15 @@ export function useCrudPage(options) {
       list.value = res.list || []
       total.value = res.total || 0
     } catch (e) {
-      toast.error('加载失败：' + e.message)
+      // 加载失败时保留上一次的列表与总数，错误仅用于页面内联提示
+      error.value = '加载失败：' + e.message
+      toast.error(error.value)
+    } finally {
+      loading.value = false
     }
+  }
+  function retry() {
+    return loadData()
   }
   function reload() {
     pageNum.value = 1
@@ -109,7 +121,8 @@ export function useCrudPage(options) {
 
   return {
     list, total, pageNum, pageSize, keyword, totalPages,
+    loading, error,
     showModal, isEdit, saving, form,
-    loadData, reload, changePage, openCreate, openEdit, closeModal, save, toggleStatus, remove
+    loadData, retry, reload, changePage, openCreate, openEdit, closeModal, save, toggleStatus, remove
   }
 }

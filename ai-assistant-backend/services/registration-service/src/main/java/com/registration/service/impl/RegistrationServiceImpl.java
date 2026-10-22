@@ -1056,7 +1056,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         if (cleanIds.isEmpty()) {
             return Map.of();
         }
-        List<OrgBriefDTO> orgs = unwrap(loader.apply(cleanIds), "查询医院/科室信息失败");
+        List<OrgBriefDTO> orgs = loader.apply(cleanIds).unwrap("查询医院/科室信息失败");
         return orgs.stream()
                 .collect(Collectors.toMap(OrgBriefDTO::getId, OrgBriefDTO::getName, (first, second) -> first));
     }
@@ -1072,23 +1072,8 @@ public class RegistrationServiceImpl implements RegistrationService {
         if (cleanIds.isEmpty()) {
             return Map.of();
         }
-        List<UserBriefDTO> users = unwrap(userClient.batch(cleanIds), "查询医生信息失败");
+        List<UserBriefDTO> users = userClient.batch(cleanIds).unwrap("查询医生信息失败");
         return users.stream()
                 .collect(Collectors.toMap(UserBriefDTO::getId, UserBriefDTO::getName, (first, second) -> first));
-    }
-
-    /**
-     * 解包 Feign 返回结果（非 200 抛业务异常，文案透传）
-     *
-     * @param result Feign 返回
-     * @param failMessage 失败兜底文案
-     * @param <T> 数据类型
-     * @return 业务数据
-     */
-    private <T> T unwrap(Result<T> result, String failMessage) {
-        if (result == null || result.getCode() != 200) {
-            throw new BusinessException(result == null ? failMessage : result.getMsg());
-        }
-        return result.getData();
     }
 }

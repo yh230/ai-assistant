@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-brand">
-        <div class="brand-logo">医</div>
+        <div class="brand-logo" aria-hidden="true">医</div>
         <h1 class="brand-title">AI 医院助手</h1>
         <p class="brand-sub">员工工作台</p>
       </div>
@@ -21,6 +21,7 @@
                 type="text"
                 placeholder="请输入账号"
                 autocomplete="username"
+                aria-label="账号"
                 data-testid="login-username"
               />
             </el-form-item>
@@ -31,11 +32,12 @@
                 type="password"
                 placeholder="请输入密码"
                 autocomplete="current-password"
+                aria-label="密码"
                 data-testid="login-password"
               />
             </el-form-item>
 
-            <div class="form-error" v-if="errorMsg" data-testid="login-error">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" role="alert" data-testid="login-error">{{ errorMsg }}</div>
 
             <el-button
               class="login-btn"
@@ -62,6 +64,7 @@
                 type="text"
                 placeholder="请输入手机号"
                 autocomplete="username"
+                aria-label="手机号"
               />
             </el-form-item>
 
@@ -72,6 +75,7 @@
                   type="text"
                   placeholder="请输入验证码"
                   autocomplete="one-time-code"
+                  aria-label="验证码"
                 />
                 <el-button
                   class="code-btn"
@@ -84,7 +88,7 @@
               </div>
             </el-form-item>
 
-            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" role="alert">{{ errorMsg }}</div>
 
             <el-button
               class="login-btn"
@@ -100,7 +104,7 @@
         <!-- 扫码登录 -->
         <el-tab-pane label="扫码登录" name="qr">
           <div class="qr-box">
-            <canvas ref="qrCanvas" class="qr-canvas"></canvas>
+            <canvas ref="qrCanvas" class="qr-canvas" role="img" aria-label="登录二维码"></canvas>
             <p class="qr-tip" v-if="qrStatus === 'loading'">二维码生成中…</p>
             <p class="qr-tip" v-else-if="qrStatus === 'waiting'">请使用手机端扫码并确认登录</p>
             <p class="qr-tip" v-else-if="qrStatus === 'expired'">二维码已过期</p>

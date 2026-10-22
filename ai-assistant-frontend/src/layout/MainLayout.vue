@@ -1,5 +1,30 @@
 <template>
-  <div class="app-layout">
+  <div class="app-layout" :class="{ 'sidebar-open': sidebarOpen }">
+    <!-- 移动端顶栏（桌面端隐藏） -->
+    <header class="mobile-topbar">
+      <button
+        type="button"
+        class="menu-toggle"
+        :aria-label="sidebarOpen ? '关闭菜单' : '打开菜单'"
+        :aria-expanded="sidebarOpen"
+        @click="toggleSidebar"
+      >
+        <svg v-if="!sidebarOpen" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+        <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <line x1="6" y1="6" x2="18" y2="18" />
+          <line x1="18" y1="6" x2="6" y2="18" />
+        </svg>
+      </button>
+      <span class="mobile-title">AI 医院助手</span>
+    </header>
+
+    <!-- 移动端抽屉遮罩 -->
+    <div class="sidebar-overlay" aria-hidden="true" @click="closeSidebar"></div>
+
     <!-- 侧边栏 -->
     <aside class="sidebar">
       <div class="sidebar-header">
@@ -9,7 +34,13 @@
         <span class="app-title">AI 医院助手</span>
       </div>
 
-      <el-menu class="sidebar-nav" :default-active="route.path" router data-testid="app-menu">
+      <el-menu
+        class="sidebar-nav"
+        :default-active="route.path"
+        router
+        data-testid="app-menu"
+        @select="closeSidebar"
+      >
         <el-menu-item index="/chat">
           <el-icon><ChatDotRound /></el-icon>
           <span>智能聊天</span>
@@ -130,7 +161,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ChatDotRound, Sunny, MagicStick, User, Avatar, Menu, Clock,
@@ -145,6 +176,21 @@ import { PERMS, hasPerm as checkPerm, hasAnyPerm as checkAnyPerm } from '../util
 const route = useRoute()
 const router = useRouter()
 const { token, userInfo, clear } = useAuth()
+
+// 移动端侧边栏抽屉状态（桌面端不受影响）
+const sidebarOpen = ref(false)
+const toggleSidebar = () => { sidebarOpen.value = !sidebarOpen.value }
+const closeSidebar = () => { sidebarOpen.value = false }
+
+// 路由切换后自动收起抽屉（菜单选择、浏览器前进后退等）
+watch(() => route.fullPath, closeSidebar)
+
+// Esc 关闭抽屉，提升键盘可访问性
+function handleKeydown(e) {
+  if (e.key === 'Escape') closeSidebar()
+}
+window.addEventListener('keydown', handleKeydown)
+onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
 
 // 权限判断统一走 utils/perm（与后端权限串一致）
 const hasPerm = (perm) => checkPerm(userInfo.value?.permissions, perm)
@@ -202,6 +248,15 @@ async function handleLogout() {
 .app-layout {
   display: flex;
   height: 100%;
+}
+
+/* 移动端顶栏与遮罩：桌面端默认隐藏，保持原布局不变 */
+.mobile-topbar {
+  display: none;
+}
+
+.sidebar-overlay {
+  display: none;
 }
 
 .sidebar {
@@ -368,5 +423,101 @@ async function handleLogout() {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+}
+
+.menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.menu-toggle:hover {
+  background: #f0f7f6;
+  color: #0d9488;
+}
+
+.mobile-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ==================== 移动端（<=768px）：侧边栏转为抽屉 ==================== */
+@media (max-width: 768px) {
+  .app-layout {
+    flex-direction: column;
+    position: relative;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 56px;
+    padding: 0 8px;
+    background: var(--bg-card);
+    border-bottom: 1px solid #e8f0ee;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 45;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 56px;
+    left: 0;
+    bottom: 0;
+    height: auto;
+    width: 240px;
+    max-width: 82vw;
+    z-index: 40;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0.25s ease;
+    box-shadow: 2px 0 12px rgba(15, 23, 42, 0.12);
+  }
+
+  .app-layout.sidebar-open .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 56px 0 0 0;
+    background: rgba(15, 23, 42, 0.4);
+    z-index: 35;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+  }
+
+  .app-layout.sidebar-open .sidebar-overlay {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .main-content {
+    width: 100%;
+    min-height: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar-overlay {
+    transition: none;
+  }
 }
 </style>

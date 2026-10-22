@@ -24,7 +24,10 @@
     </div>
 
     <!-- 列表 -->
-    <div class="table-card">
+    <div class="table-card" v-loading="loading">
+      <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon style="margin: 12px 12px 0">
+        <el-button link type="primary" @click="retry">重试</el-button>
+      </el-alert>
       <el-table :data="list" stripe>
         <el-table-column label="医生" width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.doctorName }}</template>
@@ -60,7 +63,7 @@
             <el-button link type="danger" @click="remove(row)">停用</el-button>
           </template>
         </el-table-column>
-        <template #empty>暂无排班数据</template>
+        <template #empty><span v-if="!loading && !error">暂无排班数据</span></template>
       </el-table>
     </div>
 
@@ -136,8 +139,9 @@ const doctors = ref([])
 
 const {
   list, total, pageSize, saving, form,
+  loading, error,
   pageNum: pageNumRef, showModal: formVisibleRef,
-  loadData: load, openCreate, openEdit, save: submit, remove
+  loadData: load, retry, openCreate, openEdit, save: submit, remove
 } = useCrudPage({
   // keyword 本页无筛选；doctorUserId/period/dateFrom/dateTo 为页面筛选条件，在 fetchPage 内拼装
   fetchPage: (params) => pageSchedules({
