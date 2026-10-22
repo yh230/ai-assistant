@@ -7,6 +7,7 @@ import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.registration.entity.DoctorSchedule;
 import com.registration.entity.NumberSource;
+import com.registration.enums.NumberSourceStatus;
 import com.registration.enums.Period;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
@@ -141,7 +142,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         // 释放该排班下空闲号源（占用中的保留，归属既有挂号记录）
         numberSourceMapper.delete(new LambdaQueryWrapper<NumberSource>()
                 .eq(NumberSource::getScheduleId, schedule.getId())
-                .eq(NumberSource::getStatus, 1));
+                .eq(NumberSource::getStatus, NumberSourceStatus.FREE.getCode()));
         // 已有最大序号（含占用），避免 seqNo 冲突
         Integer maxSeq = numberSourceMapper.selectList(new LambdaQueryWrapper<NumberSource>()
                         .eq(NumberSource::getScheduleId, schedule.getId())
@@ -158,7 +159,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
             ns.setScheduleDate(schedule.getScheduleDate());
             ns.setPeriod(schedule.getPeriod());
             ns.setSeqNo(seq);
-            ns.setStatus(1); // 空闲
+            ns.setStatus(NumberSourceStatus.FREE.getCode()); // 空闲
             numberSourceMapper.insert(ns);
         }
     }
@@ -173,7 +174,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
      */
     private NumberSourceVO buildPool(DoctorSchedule s, List<NumberSource> sources, Map<Long, String> uNames) {
         int total = s.getTotalLimit() == null ? 0 : s.getTotalLimit();
-        int used = (int) sources.stream().filter(x -> x.getStatus() != null && x.getStatus() == 2).count();
+        int used = (int) sources.stream()
+                .filter(x -> NumberSourceStatus.of(x.getStatus()) == NumberSourceStatus.OCCUPIED).count();
         NumberSourceVO vo = new NumberSourceVO();
         vo.setScheduleId(s.getId());
         vo.setDoctorUserId(s.getDoctorUserId());
@@ -189,7 +191,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
             item.setId(x.getId());
             item.setSeqNo(x.getSeqNo());
             item.setStatus(x.getStatus());
-            item.setStatusText(x.getStatus() == 1 ? "空闲" : "已占用");
+            NumberSourceStatus status = NumberSourceStatus.of(x.getStatus());
+            item.setStatusText(status == null ? NumberSourceStatus.OCCUPIED.getDesc() : status.getDesc());
             item.setRegistrationId(x.getRegistrationId());
             return item;
         }).collect(Collectors.toList()));

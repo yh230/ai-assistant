@@ -246,7 +246,7 @@ onMounted(() => {
 .pool-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 8px; max-height: 320px; overflow-y: auto; }
 .pool-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; aspect-ratio: 1;
   border-radius: var(--border-radius-sm); font-size: 14px; font-weight: 600; }
-.pool-cell.free { background: rgba(13,148,136,.12); color: #0d9488; }
+.pool-cell.free { background: var(--primary-soft); color: var(--primary); }
 .pool-cell.used { background: rgba(239,68,68,.12); color: #ef4444; }
 .pool-cell small { font-size: 10px; font-weight: 400; }
 </style>

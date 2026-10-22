@@ -120,8 +120,6 @@
           </div>
         </el-tab-pane>
       </el-tabs>
-
-      <p class="login-tip">默认管理员：admin / admin123</p>
     </div>
   </div>
 </template>
@@ -421,13 +419,6 @@ onBeforeUnmount(() => {
 
 .qr-tip.error {
   color: var(--danger);
-}
-
-.login-tip {
-  margin: 18px 0 0;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-tertiary);
 }
 
 @media (max-width: 480px) {

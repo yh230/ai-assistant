@@ -262,7 +262,7 @@ async function handleLogout() {
 .sidebar {
   width: 240px;
   background: var(--bg-card);
-  border-right: 1px solid #e8f0ee;
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -311,7 +311,7 @@ async function handleLogout() {
 }
 
 .sidebar-nav :deep(.el-menu-item:hover) {
-  background: #f0f7f6;
+  background: var(--bg-hover);
   color: #0d9488;
 }
 
@@ -370,8 +370,8 @@ async function handleLogout() {
 
 .profile-link {
   padding: 5px 12px;
-  background: #f0f7f6;
-  border: 1px solid #dcebe8;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-soft);
   color: var(--text-secondary);
   border-radius: 8px;
   cursor: pointer;
@@ -388,8 +388,8 @@ async function handleLogout() {
 .logout-btn {
   flex-shrink: 0;
   padding: 5px 12px;
-  background: #f0f7f6;
-  border: 1px solid #dcebe8;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-soft);
   color: var(--text-secondary);
   border-radius: 8px;
   cursor: pointer;
@@ -409,11 +409,11 @@ async function handleLogout() {
   font-size: 13px;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid #dcebe8;
+  border: 1px solid var(--border-soft);
 }
 
 .login-link:hover {
-  background: #f0f7f6;
+  background: var(--bg-hover);
   color: #0d9488;
 }
 
@@ -441,7 +441,7 @@ async function handleLogout() {
 }
 
 .menu-toggle:hover {
-  background: #f0f7f6;
+  background: var(--bg-hover);
   color: #0d9488;
 }
 
@@ -466,7 +466,7 @@ async function handleLogout() {
     height: 56px;
     padding: 0 8px;
     background: var(--bg-card);
-    border-bottom: 1px solid #e8f0ee;
+    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
     position: relative;
     z-index: 45;

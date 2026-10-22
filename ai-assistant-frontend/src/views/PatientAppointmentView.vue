@@ -188,7 +188,7 @@ onMounted(loadSlots)
 .result-top b { color: var(--text-primary); }
 .result-meta { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
 .r-status { padding: 2px 9px; border-radius: 10px; font-size: 12px; }
-.r-status.reserved { background: rgba(14,165,164,.15); color: var(--primary, #0d9488); }
+.r-status.reserved { background: var(--primary-soft-alt); color: var(--primary, #0d9488); }
 .r-status.called { background: rgba(245,158,11,.15); color: #f59e0b; }
 .r-status.treated { background: rgba(22,163,74,.15); color: #16a34a; }
 .r-status.cancel, .r-status.expired { background: rgba(148,163,184,.2); color: #64748b; }
