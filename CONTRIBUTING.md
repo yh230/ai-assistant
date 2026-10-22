@@ -5,7 +5,7 @@
 ## 开始之前
 
 1. 阅读 [README](README.md) 的「环境要求」与「快速开始」。
-2. 阅读 [架构说明](docs/design/architecture.md) 和 [阅读路线](docs/design/reading-guide.md)。
+2. 阅读 [架构说明](docs/architecture.md)（含代码阅读路线）。
 3. 搜索现有 Issue，避免重复。
 
 ## 分支与提交
@@ -47,6 +47,14 @@ pytest -m "not ai and not slow"
 ```
 
 涉及 LLM 的用例不要放进 PR 必过流程，放在本地或 nightly 执行。
+
+## 截图
+
+README「界面预览」使用的图片放在 `docs/images/`。提交前确认：
+
+- 不包含真实患者姓名、手机号、身份证、就诊记录等个人信息；使用演示数据，必要时打码。
+- PNG/WebP 优先，单张建议小于 1 MB；GIF 建议小于 5 MB。
+- 推荐命名：`patient-triage.png`、`patient-confirm.png`、`knowledge-admin.png`、`staff-chat.png`、`demo.gif`。
 
 ## PR 检查清单
 
