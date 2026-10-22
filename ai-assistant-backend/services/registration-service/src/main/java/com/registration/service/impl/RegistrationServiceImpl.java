@@ -27,6 +27,7 @@ import com.registration.mapper.NumberSourceMapper;
 import com.registration.mapper.RegistrationMapper;
 import com.registration.mq.RegistrationEventPublisher;
 import com.registration.service.RegistrationService;
+import com.registration.support.ScheduleLock;
 import com.registration.vo.RegistrationVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -95,16 +96,12 @@ public class RegistrationServiceImpl implements RegistrationService {
     private static final String PATIENT_DAY_LOCK_PREFIX = "lock:booking:patient:";
     /** 挂号单锁前缀（+挂号单ID；防状态跃迁双写） */
     private static final String REGISTRATION_LOCK_PREFIX = "lock:registration:";
-    /** 排班锁前缀（+排班ID；防号源双卖与占用数丢失更新） */
-    private static final String SCHEDULE_LOCK_PREFIX = "lock:schedule:";
     /** 匿名预约幂等键前缀（+SHA-256 幂等键；5 分钟内重复提交直接返回原单） */
     private static final String IDEMPOTENCY_KEY_PREFIX = "reg:idem:";
     /** 匿名预约幂等窗口（分钟） */
     private static final long IDEMPOTENCY_TTL_MINUTES = 5;
     /** 常规等锁时长（秒） */
     private static final long LOCK_WAIT_SECONDS = 3;
-    /** 锁租期（秒，覆盖 DB 操作） */
-    private static final long LOCK_LEASE_SECONDS = 15;
     /** 号源条件抢占重试上限（次） */
     private static final int CLAIM_RETRY_TIMES = 3;
 
@@ -136,8 +133,9 @@ public class RegistrationServiceImpl implements RegistrationService {
         Registration reg;
         if (dto.getPatientId() != null) {
             String patientKey = PATIENT_DAY_LOCK_PREFIX + dto.getPatientId() + ":" + dto.getScheduleDate();
-            reg = withLock(patientKey, false, () -> withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
-                    () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, null))));
+            reg = withLock(patientKey, false,
+                    () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
+                            () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, null))));
         } else {
             String idempotencyKey = buildIdempotencyKey(dto, schedule);
             RBucket<String> bucket = redissonClient.getBucket(IDEMPOTENCY_KEY_PREFIX + idempotencyKey);
@@ -151,7 +149,7 @@ public class RegistrationServiceImpl implements RegistrationService {
                 return enrichSafe(List.of(existing)).get(0);
             }
             try {
-                reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
+                reg = withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                         () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, idempotencyKey)));
             } catch (DuplicateKeyException e) {
                 // 并发穿透：唯一索引 uk_registration_idem 兜底，仅回查进行中记录（键保留在窗口内）
@@ -382,11 +380,19 @@ public class RegistrationServiceImpl implements RegistrationService {
         return vo;
     }
 
+    /**
+     * 按患者账号 ID 查询挂号记录（按创建时间倒序，硬上限 50 条，与患者自助查询上限一致）
+     *
+     * @param patientId 患者账号 ID
+     * @return 挂号视图列表（最多 50 条）
+     */
     @Override
     public List<RegistrationVO> listByPatientId(Long patientId) {
         LambdaQueryWrapper<Registration> qw = new LambdaQueryWrapper<>();
         qw.eq(Registration::getPatientId, patientId);
         qw.orderByDesc(Registration::getCreateTime);
+        // 按创建时间倒序，硬上限 50 条（与患者自助查询上限一致），避免无界 selectList
+        qw.last("LIMIT 50");
         return enrich(registrationMapper.selectList(qw));
     }
 
@@ -423,7 +429,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     public RegistrationVO walkIn(WalkInRegisterDTO dto) {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
-        Registration reg = withLock(SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
+        Registration reg = withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                 () -> txTemplate.execute(status -> doWalkIn(dto, schedule)));
         return enrichSafe(List.of(reg)).get(0);
     }
@@ -501,7 +507,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.REFUNDED, "退号");
         withLock(REGISTRATION_LOCK_PREFIX + id, false,
-                () -> withLock(SCHEDULE_LOCK_PREFIX + reg.getScheduleId(), false,
+                () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + reg.getScheduleId(), false,
                         () -> txTemplate.execute(status -> {
                             LocalDateTime now = LocalDateTime.now();
                             String remark = appendReason(reg.getRemark(), "退号：" + (reason == null ? "" : reason));
@@ -571,7 +577,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         }
         try {
             Boolean expired = withLock(REGISTRATION_LOCK_PREFIX + id, true,
-                    () -> withLock(SCHEDULE_LOCK_PREFIX + pre.getScheduleId(), true,
+                    () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + pre.getScheduleId(), true,
                             () -> txTemplate.execute(status -> doExpireOverdue(id))));
             if (Boolean.TRUE.equals(expired)) {
                 eventPublisher.publishExpired(pre);
@@ -688,6 +694,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     /**
      * 执行受 Redisson 分布式锁保护的逻辑（先锁 → 事务提交 → 解锁；
      * 锁必须覆盖事务提交，故用 TransactionTemplate 包事务，禁止改回方法级 @Transactional）
+     * <p>不显式指定锁租期，交由 Redisson 看门狗自动续期，避免长事务/Feign 调用超过固定租期被提前释放。</p>
      *
      * @param key 锁键（全局固定获取顺序：patient → registration → schedule）
      * @param failFast true=定时任务模式 tryLock(0) 拿不到立即失败；false=常规等待 LOCK_WAIT_SECONDS 秒
@@ -700,8 +707,8 @@ public class RegistrationServiceImpl implements RegistrationService {
         boolean acquired;
         try {
             acquired = failFast
-                    ? lock.tryLock(0, LOCK_LEASE_SECONDS, TimeUnit.SECONDS)
-                    : lock.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
+                    ? lock.tryLock(0, TimeUnit.SECONDS)
+                    : lock.tryLock(LOCK_WAIT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("当前操作繁忙，请稍后重试");
@@ -787,7 +794,7 @@ public class RegistrationServiceImpl implements RegistrationService {
      */
     private void doPatientCancel(Registration reg, RegistrationStatus from, String reason) {
         withLock(REGISTRATION_LOCK_PREFIX + reg.getId(), false,
-                () -> withLock(SCHEDULE_LOCK_PREFIX + reg.getScheduleId(), false,
+                () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + reg.getScheduleId(), false,
                         () -> txTemplate.execute(status -> {
                             String remark = appendReason(reg.getRemark(), "患者取消：" + (reason == null ? "" : reason));
                             transit(reg.getId(), from, uw -> uw
@@ -899,7 +906,8 @@ public class RegistrationServiceImpl implements RegistrationService {
         }
         qw.orderByAsc(NumberSource::getSeqNo);
         // 空闲号源可能有多条（同排班 status=1 的全部），selectOne 会抛 TooManyResultsException；
-        // 取排序后首条即最小可用序号，等价于“挑一个空闲号”。
+        // 取排序后首条即最小可用序号，故直接 LIMIT 1，避免把全部空闲号源拉回内存。
+        qw.last("LIMIT 1");
         List<NumberSource> sources = numberSourceMapper.selectList(qw);
         if (sources.isEmpty()) {
             throw new BusinessException("号源已满或该序号不可用");
@@ -1056,7 +1064,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         if (cleanIds.isEmpty()) {
             return Map.of();
         }
-        List<OrgBriefDTO> orgs = unwrap(loader.apply(cleanIds), "查询医院/科室信息失败");
+        List<OrgBriefDTO> orgs = loader.apply(cleanIds).unwrap("查询医院/科室信息失败");
         return orgs.stream()
                 .collect(Collectors.toMap(OrgBriefDTO::getId, OrgBriefDTO::getName, (first, second) -> first));
     }
@@ -1072,23 +1080,8 @@ public class RegistrationServiceImpl implements RegistrationService {
         if (cleanIds.isEmpty()) {
             return Map.of();
         }
-        List<UserBriefDTO> users = unwrap(userClient.batch(cleanIds), "查询医生信息失败");
+        List<UserBriefDTO> users = userClient.batch(cleanIds).unwrap("查询医生信息失败");
         return users.stream()
                 .collect(Collectors.toMap(UserBriefDTO::getId, UserBriefDTO::getName, (first, second) -> first));
-    }
-
-    /**
-     * 解包 Feign 返回结果（非 200 抛业务异常，文案透传）
-     *
-     * @param result Feign 返回
-     * @param failMessage 失败兜底文案
-     * @param <T> 数据类型
-     * @return 业务数据
-     */
-    private <T> T unwrap(Result<T> result, String failMessage) {
-        if (result == null || result.getCode() != 200) {
-            throw new BusinessException(result == null ? failMessage : result.getMsg());
-        }
-        return result.getData();
     }
 }

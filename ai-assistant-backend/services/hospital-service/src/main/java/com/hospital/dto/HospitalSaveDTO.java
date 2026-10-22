@@ -1,5 +1,7 @@
 package com.hospital.dto;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
@@ -17,5 +19,7 @@ public class HospitalSaveDTO {
     private String phone;
 
     /** 状态：1-启用，0-禁用，默认启用 */
+    @Min(value = 0, message = "状态值不正确")
+    @Max(value = 1, message = "状态值不正确")
     private Integer status = 1;
 }

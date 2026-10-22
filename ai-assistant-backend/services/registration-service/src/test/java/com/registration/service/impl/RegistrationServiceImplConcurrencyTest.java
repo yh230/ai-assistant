@@ -105,7 +105,7 @@ class RegistrationServiceImplConcurrencyTest {
         when(scheduleMapper.selectOne(any())).thenReturn(schedule);
 
         RLock scheduleLock = lockByKey.computeIfAbsent("lock:schedule:1", k -> mock(RLock.class));
-        when(scheduleLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+        when(scheduleLock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(false);
         // 匿名路径新增幂等键占位：键写入成功后才进入加锁分支
         RBucket<String> bucket = mock(RBucket.class);
         doReturn(bucket).when(redissonClient).getBucket(anyString());
@@ -134,7 +134,7 @@ class RegistrationServiceImplConcurrencyTest {
         when(registrationMapper.selectById(7L)).thenReturn(reg);
 
         RLock registrationLock = lockByKey.computeIfAbsent("lock:registration:7", k -> mock(RLock.class));
-        when(registrationLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(registrationLock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
         when(registrationLock.isHeldByCurrentThread()).thenReturn(true);
         when(registrationMapper.update(isNull(), any())).thenReturn(0);
         // 事务模板 mock：直接执行事务体回调
@@ -168,7 +168,7 @@ class RegistrationServiceImplConcurrencyTest {
         when(numberSourceMapper.update(isNull(), any())).thenReturn(1);
 
         RLock scheduleLock = lockByKey.computeIfAbsent("lock:schedule:1", k -> mock(RLock.class));
-        when(scheduleLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(scheduleLock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
         when(scheduleLock.isHeldByCurrentThread()).thenReturn(true);
         when(txTemplate.execute(any())).thenAnswer(inv ->
                 ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(mock(TransactionStatus.class)));

@@ -15,7 +15,10 @@
     </div>
 
     <!-- 表格 -->
-    <div class="table-card">
+    <div class="table-card" v-loading="loading">
+      <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon style="margin: 12px 12px 0">
+        <el-button link type="primary" @click="retry">重试</el-button>
+      </el-alert>
       <el-table v-if="list.length > 0" :data="list" stripe>
         <el-table-column label="ID" width="70">
           <template #default="{ row }"><code class="id-cell" :title="String(row.id)">{{ row.id }}</code></template>
@@ -57,7 +60,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无用户数据" :image-size="96" />
+      <el-empty v-else-if="!loading && !error" description="暂无用户数据" :image-size="96" />
     </div>
 
     <!-- 分页 -->
@@ -78,7 +81,7 @@
           <el-input v-model="form.username" :disabled="isEdit" placeholder="登录账号" />
         </el-form-item>
         <el-form-item v-if="!isEdit" label="密码">
-          <el-input v-model="form.password" type="text" placeholder="留空则使用默认密码 123456" />
+          <el-input v-model="form.password" type="password" show-password placeholder="留空则使用默认密码 123456" />
         </el-form-item>
         <el-form-item label="姓名" required>
           <el-input v-model="form.name" placeholder="如 张三" />
@@ -116,7 +119,7 @@
     <el-dialog v-model="showReset" :title="`重置密码 - ${resetTarget?.name}`" width="460px">
       <el-form label-position="top">
         <el-form-item label="新密码">
-          <el-input v-model="newPassword" type="text" placeholder="留空则重置为默认密码 123456" />
+          <el-input v-model="newPassword" type="password" show-password placeholder="留空则重置为默认密码 123456" />
         </el-form-item>
       </el-form>
       <p class="form-hint">重置后用户需使用新密码登录。</p>
@@ -150,8 +153,9 @@ const roleOptions = ref([])
 
 const {
   list, total, pageNum, pageSize, keyword, totalPages,
+  loading, error,
   showModal, isEdit, saving, form,
-  loadData, reload, changePage, openCreate: openCreateBase, openEdit: openEditBase, closeModal, save, toggleStatus,
+  loadData, retry, reload, changePage, openCreate: openCreateBase, openEdit: openEditBase, closeModal, save, toggleStatus,
   remove: removeUser
 } = useCrudPage({
   fetchPage: (params) => pageUsers(params),

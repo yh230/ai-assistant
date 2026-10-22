@@ -23,8 +23,14 @@
   --text-inverse: #ffffff;
 
   --border-color: #e2e8f0;
+  --border-subtle: #e8f0ee;
+  --border-soft: #dcebe8;
   --border-radius: 12px;
   --border-radius-sm: 8px;
+
+  --primary-soft: rgba(13, 148, 136, 0.12);
+  --primary-soft-alt: rgba(14, 165, 164, 0.15);
+  --code-text: #0f766e;
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
   --shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.05);

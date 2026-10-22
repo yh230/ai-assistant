@@ -6,7 +6,6 @@ import com.api.dto.UserBriefDTO;
 import com.common.constant.StatusConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
-import com.common.result.Result;
 import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.common.support.StatusValidator;
@@ -247,6 +246,7 @@ public class DepartmentServiceImpl implements DepartmentService {
 
     /**
      * 经用户中心批量查询员工 ID→姓名 映射（返回可能分批，缺失时回填为空）
+     * <p>下游非 200 抛业务异常，不再静默降级为空列表；code=200/data=null 仍按空列表处理。</p>
      *
      * @param ids 员工 ID 集合（已去空去重）
      * @return ID→姓名 映射
@@ -255,9 +255,10 @@ public class DepartmentServiceImpl implements DepartmentService {
         if (ids.isEmpty()) {
             return Map.of();
         }
-        Result<List<UserBriefDTO>> result = userClient.batch(ids);
-        List<UserBriefDTO> rows = (result != null && result.getCode() == 200 && result.getData() != null)
-                ? result.getData() : List.of();
+        List<UserBriefDTO> rows = userClient.batch(ids).unwrap("查询科室失败");
+        if (rows == null) {
+            rows = List.of();
+        }
         return rows.stream().collect(Collectors.toMap(UserBriefDTO::getId, UserBriefDTO::getName, (first, second) -> first));
     }
 

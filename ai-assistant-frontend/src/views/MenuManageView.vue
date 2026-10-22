@@ -8,7 +8,10 @@
       <el-button type="primary" :icon="Plus" @click="openCreateRoot">新增顶级菜单</el-button>
     </div>
 
-    <div class="table-card">
+    <div class="table-card" v-loading="loading">
+      <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon style="margin: 12px 12px 0">
+        <el-button link type="primary" @click="retry">重试</el-button>
+      </el-alert>
       <el-table
         v-if="tree.length > 0"
         :data="tree"
@@ -37,7 +40,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无菜单数据" :image-size="96" />
+      <el-empty v-else-if="!loading && !error" description="暂无菜单数据" :image-size="96" />
     </div>
 
     <!-- 新增/编辑弹窗 -->
@@ -95,7 +98,8 @@ import { useCrudPage } from '../composables/useCrudPage'
 
 const {
   list: tree, showModal: showModalRef, isEdit, saving, form,
-  loadData,
+  loading, error,
+  loadData, retry,
   openCreate: openCreateBase, openEdit: openEditBase, save,
   remove: removeMenu
 } = useCrudPage({

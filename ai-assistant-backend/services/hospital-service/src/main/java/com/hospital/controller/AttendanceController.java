@@ -7,6 +7,7 @@ import com.hospital.dto.AttendanceQueryDTO;
 import com.hospital.dto.AttendanceSaveDTO;
 import com.hospital.service.AttendanceService;
 import com.hospital.vo.AttendanceVO;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -72,7 +73,7 @@ public class AttendanceController {
     @OperLog(module = "出勤管理", action = "新增出勤")
     @PostMapping
     @PreAuthorize("hasAuthority('hospital:attendance:edit')")
-    public Result<Void> create(@RequestBody AttendanceSaveDTO dto) {
+    public Result<Void> create(@Valid @RequestBody AttendanceSaveDTO dto) {
         attendanceService.create(dto);
         return Result.success();
     }
@@ -80,7 +81,7 @@ public class AttendanceController {
     @OperLog(module = "出勤管理", action = "修改出勤")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('hospital:attendance:edit')")
-    public Result<Void> update(@PathVariable Long id, @RequestBody AttendanceSaveDTO dto) {
+    public Result<Void> update(@PathVariable Long id, @Valid @RequestBody AttendanceSaveDTO dto) {
         attendanceService.update(id, dto);
         return Result.success();
     }

@@ -3,11 +3,11 @@ package com.registration.service.impl;
 import com.api.client.UserClient;
 import com.api.dto.UserBriefDTO;
 import com.common.exception.BusinessException;
-import com.common.result.Result;
 import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.registration.entity.DoctorSchedule;
 import com.registration.entity.NumberSource;
+import com.registration.enums.NumberSourceStatus;
 import com.registration.enums.Period;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
@@ -40,6 +40,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class NumberSourceServiceImpl implements NumberSourceService {
 
+    /** 号源池列表单次最多加载的排班数，避免筛选较宽时全量加载 */
+    private static final int MAX_POOL_SCHEDULES = 1000;
+
     private final NumberSourceMapper numberSourceMapper;
     private final DoctorScheduleMapper scheduleMapper;
     private final UserClient userClient;
@@ -69,6 +72,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         if (period != null) qw.eq(DoctorSchedule::getPeriod, period);
         qw.eq(DoctorSchedule::getStatus, 1);
         qw.orderByAsc(DoctorSchedule::getScheduleDate).orderByAsc(DoctorSchedule::getId);
+        // 安全上限：筛选较宽时按日期/ID 排序截断，避免一次加载过多排班
+        qw.last("LIMIT " + MAX_POOL_SCHEDULES);
         List<DoctorSchedule> schedules = scheduleMapper.selectList(qw);
         if (schedules.isEmpty()) return List.of();
 
@@ -137,7 +142,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         // 释放该排班下空闲号源（占用中的保留，归属既有挂号记录）
         numberSourceMapper.delete(new LambdaQueryWrapper<NumberSource>()
                 .eq(NumberSource::getScheduleId, schedule.getId())
-                .eq(NumberSource::getStatus, 1));
+                .eq(NumberSource::getStatus, NumberSourceStatus.FREE.getCode()));
         // 已有最大序号（含占用），避免 seqNo 冲突
         Integer maxSeq = numberSourceMapper.selectList(new LambdaQueryWrapper<NumberSource>()
                         .eq(NumberSource::getScheduleId, schedule.getId())
@@ -154,7 +159,7 @@ public class NumberSourceServiceImpl implements NumberSourceService {
             ns.setScheduleDate(schedule.getScheduleDate());
             ns.setPeriod(schedule.getPeriod());
             ns.setSeqNo(seq);
-            ns.setStatus(1); // 空闲
+            ns.setStatus(NumberSourceStatus.FREE.getCode()); // 空闲
             numberSourceMapper.insert(ns);
         }
     }
@@ -169,7 +174,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
      */
     private NumberSourceVO buildPool(DoctorSchedule s, List<NumberSource> sources, Map<Long, String> uNames) {
         int total = s.getTotalLimit() == null ? 0 : s.getTotalLimit();
-        int used = (int) sources.stream().filter(x -> x.getStatus() != null && x.getStatus() == 2).count();
+        int used = (int) sources.stream()
+                .filter(x -> NumberSourceStatus.of(x.getStatus()) == NumberSourceStatus.OCCUPIED).count();
         NumberSourceVO vo = new NumberSourceVO();
         vo.setScheduleId(s.getId());
         vo.setDoctorUserId(s.getDoctorUserId());
@@ -185,7 +191,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
             item.setId(x.getId());
             item.setSeqNo(x.getSeqNo());
             item.setStatus(x.getStatus());
-            item.setStatusText(x.getStatus() == 1 ? "空闲" : "已占用");
+            NumberSourceStatus status = NumberSourceStatus.of(x.getStatus());
+            item.setStatusText(status == null ? NumberSourceStatus.OCCUPIED.getDesc() : status.getDesc());
             item.setRegistrationId(x.getRegistrationId());
             return item;
         }).collect(Collectors.toList()));
@@ -203,23 +210,8 @@ public class NumberSourceServiceImpl implements NumberSourceService {
         if (cleanIds.isEmpty()) {
             return Map.of();
         }
-        List<UserBriefDTO> users = unwrap(userClient.batch(cleanIds), "查询医生信息失败");
+        List<UserBriefDTO> users = userClient.batch(cleanIds).unwrap("查询医生信息失败");
         return users.stream()
                 .collect(Collectors.toMap(UserBriefDTO::getId, UserBriefDTO::getName, (first, second) -> first));
-    }
-
-    /**
-     * 解包 Feign 返回结果（非 200 抛业务异常，文案透传）
-     *
-     * @param result Feign 返回
-     * @param failMessage 失败兜底文案
-     * @param <T> 数据类型
-     * @return 业务数据
-     */
-    private <T> T unwrap(Result<T> result, String failMessage) {
-        if (result == null || result.getCode() != 200) {
-            throw new BusinessException(result == null ? failMessage : result.getMsg());
-        }
-        return result.getData();
     }
 }

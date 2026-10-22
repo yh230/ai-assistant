@@ -183,7 +183,7 @@ class RegistrationIdempotencyTest {
         RBucket<String> bucket = stubBucket(true);
         RLock lock = mock(RLock.class);
         when(redissonClient.getLock(anyString())).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+        when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(false);
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> registrationService.createAppointment(anonymousDto()));
@@ -466,7 +466,7 @@ class RegistrationIdempotencyTest {
     private void stubLockAcquired() throws InterruptedException {
         RLock lock = mock(RLock.class);
         when(redissonClient.getLock(anyString())).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
     }
 

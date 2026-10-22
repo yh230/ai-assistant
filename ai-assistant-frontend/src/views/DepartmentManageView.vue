@@ -16,7 +16,10 @@
       <el-button @click="reload">查询</el-button>
     </div>
 
-    <div class="table-card">
+    <div class="table-card" v-loading="loading">
+      <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon style="margin: 12px 12px 0">
+        <el-button link type="primary" @click="retry">重试</el-button>
+      </el-alert>
       <el-table v-if="list.length > 0" :data="list" stripe>
         <el-table-column label="ID" width="70">
           <template #default="{ row }"><code class="id-cell">{{ row.id }}</code></template>
@@ -46,18 +49,10 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无科室数据" :image-size="96" />
+      <el-empty v-else-if="!loading && !error" description="暂无科室数据" :image-size="96" />
     </div>
 
-    <div class="pager" v-if="total > 0">
-      <el-pagination
-        layout="prev, pager, next, total"
-        :total="total"
-        :current-page="pageNum"
-        :page-size="pageSize"
-        @current-change="changePage"
-      />
-    </div>
+    <Pager :page-num="pageNum" :page-size="pageSize" :total="total" @change="changePage" />
 
     <el-dialog v-model="showModal" :title="isEdit ? '编辑科室' : '新增科室'" width="520px">
       <el-form label-position="top">
@@ -98,6 +93,7 @@ import {
 } from '../api/hospital'
 import { useCrudPage } from '../composables/useCrudPage'
 import { formatTime } from '../utils/format'
+import Pager from '../components/Pager.vue'
 
 const filterHospital = ref(null)
 const hospitalOptions = ref([])
@@ -105,8 +101,9 @@ const employeeOptions = ref([])
 
 const {
   list, total, pageNum, pageSize, keyword, totalPages,
+  loading, error,
   showModal, isEdit, saving, form,
-  loadData, reload, changePage, openCreate, openEdit, closeModal, save, toggleStatus, remove
+  loadData, retry, reload, changePage, openCreate, openEdit, closeModal, save, toggleStatus, remove
 } = useCrudPage({
   // keyword 由骨架透传；hospitalId 为本页筛选条件，在 fetchPage 内拼装
   fetchPage: (params) => pageDepartments({

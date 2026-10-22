@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-brand">
-        <div class="brand-logo">医</div>
+        <div class="brand-logo" aria-hidden="true">医</div>
         <h1 class="brand-title">AI 医院助手</h1>
         <p class="brand-sub">患者自助入口</p>
       </div>
@@ -12,8 +12,9 @@
         <el-tab-pane label="登录" name="login">
           <form class="login-form" @submit.prevent="handleLogin">
             <div class="field">
-              <label>手机号</label>
+              <label for="patient-login-phone">手机号</label>
               <el-input
+                id="patient-login-phone"
                 v-model="loginForm.phone"
                 type="text"
                 placeholder="请输入手机号"
@@ -23,8 +24,9 @@
             </div>
 
             <div class="field">
-              <label>密码</label>
+              <label for="patient-login-password">密码</label>
               <el-input
+                id="patient-login-password"
                 v-model="loginForm.password"
                 type="password"
                 placeholder="请输入密码"
@@ -33,7 +35,7 @@
               />
             </div>
 
-            <div class="form-error" v-if="errorMsg" data-testid="patient-error">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" role="alert" data-testid="patient-error">{{ errorMsg }}</div>
 
             <el-button class="login-btn" type="primary" native-type="submit" :loading="loading" data-testid="patient-login-submit">
               {{ loading ? '登录中…' : '登 录' }}
@@ -45,8 +47,9 @@
         <el-tab-pane label="手机号验证码" name="sms">
           <form class="login-form" @submit.prevent="handleSmsLogin">
             <div class="field">
-              <label>手机号</label>
+              <label for="patient-sms-phone">手机号</label>
               <el-input
+                id="patient-sms-phone"
                 v-model="smsForm.phone"
                 type="text"
                 placeholder="请输入手机号"
@@ -55,9 +58,10 @@
             </div>
 
             <div class="field">
-              <label>验证码</label>
+              <label for="patient-sms-code">验证码</label>
               <div class="code-row">
                 <el-input
+                  id="patient-sms-code"
                   v-model="smsForm.code"
                   type="text"
                   placeholder="请输入验证码"
@@ -74,7 +78,7 @@
               </div>
             </div>
 
-            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" role="alert">{{ errorMsg }}</div>
 
             <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">
               {{ loading ? '登录中…' : '登 录' }}
@@ -85,7 +89,7 @@
         <!-- 扫码登录 -->
         <el-tab-pane label="扫码登录" name="qr">
           <div class="qr-box">
-            <canvas ref="qrCanvas" class="qr-canvas"></canvas>
+            <canvas ref="qrCanvas" class="qr-canvas" role="img" aria-label="登录二维码"></canvas>
             <p class="qr-tip" v-if="qrStatus === 'loading'">二维码生成中…</p>
             <p class="qr-tip" v-else-if="qrStatus === 'waiting'">请使用手机端扫码并确认登录</p>
             <p class="qr-tip" v-else-if="qrStatus === 'expired'">二维码已过期</p>
@@ -105,13 +109,14 @@
         <el-tab-pane label="注册" name="register">
           <form class="login-form" @submit.prevent="handleRegister">
             <div class="field">
-              <label>姓名</label>
-              <el-input v-model="registerForm.name" type="text" placeholder="请输入姓名" data-testid="patient-register-name" />
+              <label for="patient-register-name">姓名</label>
+              <el-input id="patient-register-name" v-model="registerForm.name" type="text" placeholder="请输入姓名" data-testid="patient-register-name" />
             </div>
 
             <div class="field">
-              <label>手机号</label>
+              <label for="patient-register-phone">手机号</label>
               <el-input
+                id="patient-register-phone"
                 v-model="registerForm.phone"
                 type="text"
                 placeholder="请输入手机号"
@@ -121,8 +126,9 @@
             </div>
 
             <div class="field">
-              <label>密码</label>
+              <label for="patient-register-password">密码</label>
               <el-input
+                id="patient-register-password"
                 v-model="registerForm.password"
                 type="password"
                 placeholder="6-32 位密码"
@@ -132,8 +138,9 @@
             </div>
 
             <div class="field">
-              <label>所属医院</label>
+              <label for="patient-register-hospital">所属医院</label>
               <el-select
+                id="patient-register-hospital"
                 v-model="registerForm.hospitalId"
                 class="hospital-select"
                 :disabled="hospitalsLoading"
@@ -149,7 +156,7 @@
               </el-select>
             </div>
 
-            <div class="form-error" v-if="errorMsg">{{ errorMsg }}</div>
+            <div class="form-error" v-if="errorMsg" role="alert">{{ errorMsg }}</div>
 
             <el-button class="login-btn" type="primary" native-type="submit" :loading="loading" data-testid="patient-register-submit">
               {{ loading ? '注册中…' : '注 册' }}

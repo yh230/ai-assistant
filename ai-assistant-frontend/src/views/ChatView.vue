@@ -11,12 +11,25 @@
           :key="s.sessionId"
           class="session-item"
           :class="{ active: currentSessionId === s.sessionId }"
+          role="button"
+          tabindex="0"
+          :aria-current="currentSessionId === s.sessionId ? 'true' : undefined"
           @click="loadSession(s.sessionId)"
+          @keydown.enter.prevent="loadSession(s.sessionId)"
+          @keydown.space.prevent="loadSession(s.sessionId)"
         >
-          <el-icon class="session-icon" :size="16"><ChatDotRound /></el-icon>
+          <el-icon class="session-icon" :size="16" aria-hidden="true"><ChatDotRound /></el-icon>
           <span class="session-title">{{ s.title }}</span>
-          <span class="session-delete" @click.stop="removeSession(s.sessionId)">
-            <el-icon :size="14"><Close /></el-icon>
+          <span
+            class="session-delete"
+            role="button"
+            tabindex="0"
+            :aria-label="'删除会话：' + (s.title || '新对话')"
+            @click.stop="removeSession(s.sessionId)"
+            @keydown.enter.prevent.stop="removeSession(s.sessionId)"
+            @keydown.space.prevent.stop="removeSession(s.sessionId)"
+          >
+            <el-icon :size="14" aria-hidden="true"><Close /></el-icon>
           </span>
         </div>
         <div v-if="sessions.length === 0" class="empty-sessions">
@@ -33,9 +46,11 @@
           <button
             v-for="role in roles"
             :key="role.id"
+            type="button"
             class="role-pill"
             :class="{ active: selectedRoleId === role.id }"
             :title="role.description"
+            :aria-pressed="selectedRoleId === role.id ? 'true' : 'false'"
             @click="switchRole(role.id)"
           >
             <span class="role-avatar">{{ role.avatar }}</span>
@@ -56,16 +71,37 @@
           <h2>你好！我是你的{{ currentRole ? currentRole.name : 'AI 医院助手' }}</h2>
           <p>可以陪我聊天解闷，也可以直接问我天气，比如「北京今天天气怎么样」。</p>
           <div class="welcome-suggestions">
-            <div class="suggestion" @click="sendQuickMessage('你好呀，介绍下你自己')">
-              <span class="suggestion-emoji">👋</span>
+            <div
+              class="suggestion"
+              role="button"
+              tabindex="0"
+              @click="sendQuickMessage('你好呀，介绍下你自己')"
+              @keydown.enter.prevent="sendQuickMessage('你好呀，介绍下你自己')"
+              @keydown.space.prevent="sendQuickMessage('你好呀，介绍下你自己')"
+            >
+              <span class="suggestion-emoji" aria-hidden="true">👋</span>
               <span>打个招呼</span>
             </div>
-            <div class="suggestion" @click="sendQuickMessage('北京今天天气怎么样？')">
-              <span class="suggestion-emoji">🌤️</span>
+            <div
+              class="suggestion"
+              role="button"
+              tabindex="0"
+              @click="sendQuickMessage('北京今天天气怎么样？')"
+              @keydown.enter.prevent="sendQuickMessage('北京今天天气怎么样？')"
+              @keydown.space.prevent="sendQuickMessage('北京今天天气怎么样？')"
+            >
+              <span class="suggestion-emoji" aria-hidden="true">🌤️</span>
               <span>查查天气</span>
             </div>
-            <div class="suggestion" @click="sendQuickMessage('讲个笑话解解闷')">
-              <span class="suggestion-emoji">😄</span>
+            <div
+              class="suggestion"
+              role="button"
+              tabindex="0"
+              @click="sendQuickMessage('讲个笑话解解闷')"
+              @keydown.enter.prevent="sendQuickMessage('讲个笑话解解闷')"
+              @keydown.space.prevent="sendQuickMessage('讲个笑话解解闷')"
+            >
+              <span class="suggestion-emoji" aria-hidden="true">😄</span>
               <span>讲个笑话</span>
             </div>
           </div>
@@ -82,13 +118,13 @@
           </div>
           <div class="message-bubble">
             <div class="markdown-body" v-html="renderMarkdownSafe(msg.content)"></div>
-            <span v-if="msg.streaming" class="streaming-cursor"></span>
+            <span v-if="msg.streaming" class="streaming-cursor" aria-hidden="true"></span>
             <el-tag v-if="msg.role === 'assistant' && msg.localFallback" type="warning" class="local-badge" effect="light">本地回复</el-tag>
           </div>
         </div>
 
         <!-- 打字动画：等待第一个 token 时显示 -->
-        <div v-if="showTypingDots" class="message-item assistant">
+        <div v-if="showTypingDots" class="message-item assistant" aria-hidden="true">
           <div class="message-avatar">医</div>
           <div class="message-bubble typing">
             <span class="dot"></span>
@@ -108,6 +144,7 @@
             class="input-textarea"
             :autosize="{ minRows: 1, maxRows: 6 }"
             placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
+            aria-label="输入消息"
             @keydown="handleKeydown"
           />
           <el-button
@@ -115,12 +152,15 @@
             type="danger"
             class="stop-btn"
             title="停止生成"
+            aria-label="停止生成"
             :icon="VideoPause"
             @click="stopGeneration"
           />
           <el-button
             type="primary"
             class="send-btn"
+            title="发送消息"
+            aria-label="发送消息"
             :disabled="!inputText.trim() || loading"
             :icon="Position"
             @click="sendMessage"

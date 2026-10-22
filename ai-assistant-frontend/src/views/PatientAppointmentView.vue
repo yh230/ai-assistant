@@ -7,14 +7,20 @@
       <el-tabs v-model="tab">
         <el-tab-pane label="在线预约" name="book">
           <div class="form-row">
-            <label>就诊日期</label>
-            <el-date-picker v-model="bookDate" type="date" value-format="YYYY-MM-DD"
-                            style="width: 100%" @change="loadSlots" />
+            <label for="book-date">就诊日期</label>
+            <el-date-picker id="book-date" v-model="bookDate" type="date" value-format="YYYY-MM-DD"
+                            style="width: 100%" aria-label="就诊日期" @change="loadSlots" />
           </div>
           <p class="section-tip">可选号源（余量 > 0 可约）</p>
           <div class="slot-list" v-if="slots.length">
             <div v-for="s in slots" :key="s.id" class="slot"
-                 :class="{ disabled: s.remaining <= 0 }" @click="s.remaining > 0 && pickSlot(s)">
+                 :class="{ disabled: s.remaining <= 0 }"
+                 role="button"
+                 :tabindex="s.remaining > 0 ? 0 : -1"
+                 :aria-disabled="s.remaining <= 0 ? 'true' : 'false'"
+                 @click="s.remaining > 0 && pickSlot(s)"
+                 @keydown.enter.prevent="s.remaining > 0 && pickSlot(s)"
+                 @keydown.space.prevent="s.remaining > 0 && pickSlot(s)">
               <div class="slot-doc">{{ s.doctorName }}</div>
               <div class="slot-meta">{{ s.departmentName }} · {{ s.scheduleDate }} {{ s.periodText }}</div>
               <div class="slot-remain">余量 <b>{{ s.remaining }}</b> / {{ s.totalLimit }}</div>
@@ -35,9 +41,9 @@
 
         <el-tab-pane label="我的预约" name="query">
           <div class="form-row query-row">
-            <el-input v-model="q.phone" placeholder="手机号" />
-            <el-input v-model="q.idCard" placeholder="身份证号" />
-            <el-input v-model="q.registrationNo" placeholder="预约号（可选）" />
+            <el-input v-model="q.phone" placeholder="手机号" aria-label="手机号" />
+            <el-input v-model="q.idCard" placeholder="身份证号" aria-label="身份证号" />
+            <el-input v-model="q.registrationNo" placeholder="预约号（可选）" aria-label="预约号（可选）" />
             <el-button @click="doQuery">查询</el-button>
           </div>
           <div class="result-list" v-if="myList.length">
@@ -182,7 +188,7 @@ onMounted(loadSlots)
 .result-top b { color: var(--text-primary); }
 .result-meta { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
 .r-status { padding: 2px 9px; border-radius: 10px; font-size: 12px; }
-.r-status.reserved { background: rgba(14,165,164,.15); color: var(--primary, #0d9488); }
+.r-status.reserved { background: var(--primary-soft-alt); color: var(--primary, #0d9488); }
 .r-status.called { background: rgba(245,158,11,.15); color: #f59e0b; }
 .r-status.treated { background: rgba(22,163,74,.15); color: #16a34a; }
 .r-status.cancel, .r-status.expired { background: rgba(148,163,184,.2); color: #64748b; }

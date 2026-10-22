@@ -8,7 +8,6 @@ import com.common.auth.UserSnapshot;
 import com.common.constant.RoleConstants;
 import com.common.exception.BusinessException;
 import com.common.result.PageResult;
-import com.common.result.Result;
 import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.common.security.RoleGrantPolicy;
@@ -91,8 +90,7 @@ public class EmployeeServiceImpl implements EmployeeService {
             req.setHospitalId(query.getHospitalId());
             req.setDepartmentId(query.getDepartmentId());
         }
-        Result<PageResult<UserBriefDTO>> result = userClient.page(req);
-        PageResult<UserBriefDTO> page = unwrap(result, "查询员工列表失败");
+        PageResult<UserBriefDTO> page = userClient.page(req).unwrap("查询员工列表失败");
         return PageResult.of(page.getTotal(), page.getPageNum(), page.getPageSize(), enrich(page.getList()));
     }
 
@@ -121,7 +119,7 @@ public class EmployeeServiceImpl implements EmployeeService {
         if (dto.getRoleIds() != null && !dto.getRoleIds().isEmpty()) {
             assertRoleGrantable(dto.getRoleIds(), loadRoleCodeMap());
         }
-        unwrap(userClient.create(dto), "新增员工失败");
+        userClient.create(dto).unwrap("新增员工失败");
     }
 
     /**
@@ -161,14 +159,14 @@ public class EmployeeServiceImpl implements EmployeeService {
             dto.setDepartmentId(scope.getDepartmentId());
             dto.setHospitalId(scope.getHospitalId());
         }
-        unwrap(userClient.update(id, dto), "更新员工失败");
+        userClient.update(id, dto).unwrap("更新员工失败");
     }
 
     @Override
     public void delete(Long id) {
         UserBriefDTO target = requireUser(id, "无权操作该员工");
         assertAdminTarget(target, "无权操作管理员账号");
-        unwrap(userClient.delete(id), "删除员工失败");
+        userClient.delete(id).unwrap("删除员工失败");
     }
 
     /**
@@ -188,7 +186,7 @@ public class EmployeeServiceImpl implements EmployeeService {
         req.setEmail(u.getEmail());
         req.setStatus(status);
         // 角色与绑定字段不传：用户中心仅在显式传入时重建角色、非空才覆盖绑定
-        unwrap(userClient.update(id, req), "变更员工状态失败");
+        userClient.update(id, req).unwrap("变更员工状态失败");
     }
 
     /**
@@ -208,7 +206,7 @@ public class EmployeeServiceImpl implements EmployeeService {
         req.setStatus(u.getStatus());
         // 空密码回退默认密码（用户中心 encodeOrDefault），角色与绑定字段不传避免误清
         req.setPassword(newPassword == null ? "" : newPassword);
-        unwrap(userClient.update(id, req), "重置密码失败");
+        userClient.update(id, req).unwrap("重置密码失败");
     }
 
     /**
@@ -219,8 +217,7 @@ public class EmployeeServiceImpl implements EmployeeService {
      * @return 员工分页结果
      */
     private PageResult<EmployeeVO> pageSelf(EmployeeQueryDTO query, DataScope scope) {
-        Result<List<UserBriefDTO>> result = userClient.batch(List.of(scope.getUserId()));
-        List<UserBriefDTO> rows = unwrap(result, "查询员工列表失败");
+        List<UserBriefDTO> rows = userClient.batch(List.of(scope.getUserId())).unwrap("查询员工列表失败");
         List<UserBriefDTO> list = rows;
         if (StringUtils.hasText(query.getKeyword()) && !rows.isEmpty()) {
             UserBriefDTO u = rows.get(0);
@@ -291,7 +288,7 @@ public class EmployeeServiceImpl implements EmployeeService {
      * @return 角色 ID→角色编码映射
      */
     private Map<Long, String> loadRoleCodeMap() {
-        List<RoleBriefDTO> allRoles = unwrap(userClient.roles(), "查询角色列表失败");
+        List<RoleBriefDTO> allRoles = userClient.roles().unwrap("查询角色列表失败");
         if (allRoles == null) {
             return Map.of();
         }
@@ -345,8 +342,7 @@ public class EmployeeServiceImpl implements EmployeeService {
      * @return 员工简要信息
      */
     private UserBriefDTO requireUser(Long id, String failMessage) {
-        Result<List<UserBriefDTO>> result = userClient.batch(List.of(id));
-        List<UserBriefDTO> list = unwrap(result, "查询员工失败");
+        List<UserBriefDTO> list = userClient.batch(List.of(id)).unwrap("查询员工失败");
         if (list.isEmpty()) {
             throw new BusinessException("员工不存在");
         }
@@ -407,20 +403,5 @@ public class EmployeeServiceImpl implements EmployeeService {
         }
         return batchLoader.apply(ids).stream()
                 .collect(Collectors.toMap(idGetter, nameGetter, (first, second) -> first));
-    }
-
-    /**
-     * 解包用户中心返回结果（非 200 抛业务异常，文案透传）
-     *
-     * @param result 用户中心返回
-     * @param failMessage 失败兜底文案
-     * @param <T> 数据类型
-     * @return 业务数据
-     */
-    private <T> T unwrap(Result<T> result, String failMessage) {
-        if (result == null || result.getCode() != 200) {
-            throw new BusinessException(result == null ? failMessage : result.getMsg());
-        }
-        return result.getData();
     }
 }

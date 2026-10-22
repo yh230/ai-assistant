@@ -1,6 +1,9 @@
 package com.hospital.dto;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
 import java.time.LocalDate;
@@ -21,12 +24,16 @@ public class AttendanceSaveDTO {
     private LocalDate attendDate;
 
     /** 出勤状态：1-出勤 2-缺勤 3-请假 4-迟到 */
+    @Min(value = 1, message = "出勤状态不正确")
+    @Max(value = 4, message = "出勤状态不正确")
     private Integer status = 1;
 
     /** 上班打卡 HH:mm */
+    @Pattern(regexp = "^([01]\\d|2[0-3]):[0-5]\\d$", message = "上班打卡时间格式应为 HH:mm")
     private String checkIn;
 
     /** 下班打卡 HH:mm */
+    @Pattern(regexp = "^([01]\\d|2[0-3]):[0-5]\\d$", message = "下班打卡时间格式应为 HH:mm")
     private String checkOut;
 
     private String remark;

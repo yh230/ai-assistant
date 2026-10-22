@@ -29,13 +29,25 @@ a {
 button {
   cursor: pointer;
   border: none;
-  outline: none;
   font-family: inherit;
 }
 
 input, textarea {
-  outline: none;
   font-family: inherit;
+}
+
+/* ==================== 键盘焦点可见性 ==================== */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible,
+.el-button:focus-visible,
+.el-menu-item:focus-visible,
+.el-dropdown-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 ul {
@@ -86,11 +98,11 @@ ul {
 }
 
 .markdown-body code {
-  background: #f0f7f6;
+  background: var(--bg-hover);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 13px;
-  color: #0f766e;
+  color: var(--code-text);
 }
 
 .markdown-body strong {
@@ -117,3 +129,18 @@ ul {
 :where(.manage-page) .time-cell { color: var(--text-tertiary); font-size: 13px; }
 :where(.manage-page) .empty-tip { padding: 48px; text-align: center; color: var(--text-tertiary); font-size: 14px; }
 :where(.manage-page) .pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 16px; }
+
+/* ==================== 弹窗响应式 ==================== */
+/* 移动端弹窗不超出视口，避免固定 width 在 390px 屏幕溢出 */
+@media (max-width: 768px) {
+  .el-dialog {
+    width: 92vw !important;
+    max-width: 92vw;
+    margin-top: 5vh;
+  }
+
+  .el-message-box {
+    width: 92vw !important;
+    max-width: 92vw;
+  }
+}

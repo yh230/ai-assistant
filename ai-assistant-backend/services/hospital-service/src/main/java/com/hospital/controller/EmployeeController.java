@@ -15,6 +15,7 @@ import com.hospital.dto.EmployeeSaveDTO;
 import com.hospital.dto.EmployeeUpdateDTO;
 import com.hospital.service.EmployeeService;
 import com.hospital.vo.EmployeeVO;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -70,7 +71,7 @@ public class EmployeeController {
     @OperLog(module = "员工管理", action = "新增员工")
     @PostMapping
     @PreAuthorize("hasAuthority('hospital:employee:edit')")
-    public Result<Void> create(@RequestBody EmployeeSaveDTO dto) {
+    public Result<Void> create(@Valid @RequestBody EmployeeSaveDTO dto) {
         employeeService.create(dto);
         return Result.success();
     }
