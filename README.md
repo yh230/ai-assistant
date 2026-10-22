@@ -97,10 +97,11 @@ flowchart LR
 - [架构说明](docs/design/architecture.md)
 - [阅读路线](docs/design/reading-guide.md)
 - [AI 评测](docs/design/evaluation.md)
+- [排班查询 MCP](docs/mcp.md)
+- [UI 自动化测试](docs/ui-e2e.md)
 - [E2E 套件](ai-assistant-e2e/README.md)
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
-- [MCP 排班查询设计](docs/design/mcp-schedule-design.md)
 
 ## 功能明细
 
@@ -123,27 +124,6 @@ flowchart LR
 - 安全加固：登录失败锁定（默认 5 次锁 15 分钟）、公开接口限流、关键操作审计（`sys_oper_log`）
 - 可观测性：全链路追踪（Zipkin）+ Prometheus 指标 + traceId 日志
 - Kafka 异步解耦：站内信通知 / 审计落库 / 知识库异步向量化（幂等消费 + 死信队列）
-
-## 系统架构
-
-```text
-┌──────────────┐        ┌───────────────────────────────┐
-│ 前端 Vue 3    │  HTTP  │ 网关 gateway :8080            │
-│ dev :5173    │ ─────▶ │ 统一鉴权 · 身份隔离 · 限流      │
-└──────────────┘        └───────────────┬───────────────┘
-                                        │ 路由转发（Nacos 服务发现）
-      ┌──────────────┬──────────────┬───┴──────────┬──────────────────┐
-      ▼              ▼              ▼              ▼                  ▼
- auth-service  system-service  hospital-service  registration-service  ai-chat-service
-   :9200          :9201            :9202              :9203              :9204
- 登录/令牌       用户/RBAC       医院/出勤/科室     排班/号源/挂号    聊天/AI 导诊/RAG
-      └──────────────┴──────────────┴──────────────┴──────────────────┘
-                                        │
-       ┌───────────┬────────────────────┴────────────┬──────────────┐
-       ▼           ▼                                 ▼              ▼
-   MySQL 8     Redis（≥6.2）                     Nacos 3.x      DeepSeek API
- （四库分治）  登录态/权限快照/限流/令牌白名单    注册+配置中心   （可选，未配置自动本地降级）
-```
 
 ## 技术栈
 
@@ -286,60 +266,14 @@ npm run dev
 
 ## MCP 排班查询（对外）
 
-对外提供只读 MCP Server，第三方 AI 客户端凭 API Key 查询绑定医院的医生排班与号源余量。
+对外只读 MCP Server：第三方 AI 客户端凭 API Key 查询绑定医院的医生排班与号源余量。
 
-MCP 是协议（JSON-RPC 2.0），不是某种语言的 SDK。本服务端使用 Java（Spring AI 1.0.9 + MCP Java SDK），Python、TypeScript、Go 等任意 MCP 客户端都可以接入；`ai-assistant-e2e` 中的 MCP 用例甚至直接用 httpx 发 JSON-RPC，不依赖 Python MCP SDK。
+- 传输：SSE，`/mcp/sse` 建流、`/mcp/message` 发送 JSON-RPC
+- 认证：`X-API-Key`，Key 绑定医院；网关 IP 限流 + Key 级限流
+- 工具：`list_hospitals`、`query_doctor_schedules`
+- 限制：14 天窗口、单次 100 条、45 秒缓存；业务错误通过 MCP `isError=true` 返回
 
-### 配置
-
-1. 在 Nacos 新建配置 `mcp-shared.yaml`（group `DEFAULT_GROUP`），内容参考 `scripts/nacos-mcp-shared.example.yaml`。
-2. 生成 Key 与哈希（推荐 Python，跨平台）：
-
-   ```bash
-   python -c "import secrets,hashlib; k='mcp_'+secrets.token_hex(32); print('KEY =',k); print('HASH=',hashlib.sha256(k.encode()).hexdigest())"
-   ```
-
-   也可用 Git Bash：
-
-   ```bash
-   KEY="mcp_$(openssl rand -hex 32)"
-   printf '%s' "$KEY" | sha256sum
-   ```
-
-3. 把 64 位哈希填入 `key-sha256`，把允许访问的医院 ID 填入 `hospital-ids`。
-   - `key-sha256` 必须是 64 位十六进制，否则该 Key 会被忽略并输出启动警告；
-   - `hospital-ids` 不能为空或包含 null；
-   - 明文 Key 只交给调用方，不写入仓库或 Nacos。
-4. 启动 `mcp-server`（端口 9205）；网关入口为 `http://localhost:8080/mcp/sse`（SSE 建流）与 `http://localhost:8080/mcp/message`（消息投递）。
-
-### 连接
-
-- 传输：SSE（`/mcp/sse` 建立事件流，`/mcp/message` 发送 JSON-RPC 消息）
-- 地址：`http://localhost:8080/mcp/sse`
-- 请求头：`X-API-Key: <原始 Key>`；SSE 与消息端点每次请求都需携带
-- 限流：网关按 IP 默认 120 次/分钟（突发 240），mcp-server 再按 Key 默认 60 次/分钟
-- 生产环境：在网关/Ingress 终止 TLS，对外使用 HTTPS；9205 只开内网，不要直接暴露
-- Key 无效/缺失返回 401，频率超限返回 429；Key 轮换后重启 mcp-server（或确认 Nacos 刷新已生效）
-
-可用 MCP Inspector 验证：
-
-```bash
-npx @modelcontextprotocol/inspector
-# Transport 选择 SSE
-# URL 填 http://localhost:8080/mcp/sse
-# 增加 Header X-API-Key
-```
-
-### 工具
-
-| 工具 | 用途 |
-|------|------|
-| `list_hospitals` | 返回当前 Key 可访问的医院 |
-| `query_doctor_schedules` | 按医院、日期窗口、科室、医生姓名、时段查询排班与余量 |
-
-工具入参使用 snake_case（如 `hospital_id`、`date_from`），返回字段为 `items`、`truncated`、`dateFrom`、`dateTo`。
-
-限制：日期窗口最多 14 天，单次最多返回 100 条，结果缓存 45 秒；Key 只能访问绑定医院。工具业务错误通过 MCP `isError=true` 返回，错误文本在 `content[0].text`。
+配置、Key 生成、连接示例和生产安全说明见 [排班查询 MCP](docs/mcp.md)。
 
 ## 自动化测试
 
