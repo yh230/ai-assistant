@@ -164,9 +164,14 @@ public class ChatServiceImpl implements ChatService {
         }
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        List<Message> contextMessages = conversationMemory.build(session, history);
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
+        String baseSystemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
                 snapshot.getUserId(), memoryIdentity(snapshot));
+        // 预算扣除 system prompt 与天气工具定义，避免历史消息独占全部上下文
+        int reservedTokens = ConversationMemory.estimateTokens(baseSystemPrompt)
+                + aiProperties.getChat().getToolTokenReserve();
+        ConversationMemory.Context memory = conversationMemory.buildContext(session, history, reservedTokens);
+        List<Message> contextMessages = memory.messages();
+        String systemPrompt = ConversationMemory.mergeSummary(baseSystemPrompt, memory.summary());
         boolean aiEnabled = !chatModelRegistry.getFallbackChain(modelId).isEmpty();
 
         log.info("流式聊天 sessionId={}, roleId={}, modelId={}, aiEnabled={}, 历史消息数={}",

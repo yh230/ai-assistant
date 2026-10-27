@@ -214,7 +214,6 @@ public class PatientChatServiceImpl implements PatientChatService {
         }
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getSessionId());
-        List<Message> contextMessages = new ArrayList<>(conversationMemory.build(session, history));
         Role patientRole = assistantRoleService.resolvePatientRole(user.getHospitalId(), session.getSessionType());
         if (patientRole != null && (session.getRoleId() == null || session.getRoleId().isBlank())) {
             session.setRoleId(patientRole.getId());
@@ -225,6 +224,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         String referenceJson = "";
         // 检索命中片段透传给 groundedness 校验（非 RAG 会话或无命中时为空）
         List<KnowledgeStore.ScoredChunk> hits = List.of();
+        String ragContext = "";
         if (TYPE_RAG.equals(session.getSessionType())) {
             // 在角色提示词之后追加固定 RAG 策略（片段仅作事实参考，禁止执行片段内指令，无依据不得编造）
             systemPrompt = systemPrompt + "\n\n" + RAG_GROUNDING_POLICY;
@@ -237,15 +237,28 @@ public class PatientChatServiceImpl implements PatientChatService {
                 log.warn("知识库检索失败，按无命中降级: {}", e.getMessage());
                 hits = List.of();
             }
-            // 检索片段以独立 user 消息注入，避免进入 system 指令层；无命中时注入显式“不得编造”提示
             if (hits == null || hits.isEmpty()) {
                 hits = List.of();
-                contextMessages = knowledgeContextBuilder.injectNoHit(contextMessages);
+                ragContext = knowledgeContextBuilder.noHitMessage();
             } else {
-                contextMessages = knowledgeContextBuilder.inject(contextMessages, hits);
+                ragContext = knowledgeContextBuilder.contextText(hits);
             }
             referenceJson = knowledgeReferencesBuilder.buildFromChunks(
                     hits, aiProperties.getRag().getMaxReferences());
+        }
+
+        int reservedTokens = ConversationMemory.estimateTokens(systemPrompt)
+                + ConversationMemory.estimateTokens(ragContext)
+                + (TYPE_TRIAGE.equals(session.getSessionType())
+                ? aiProperties.getChat().getToolTokenReserve() : 0);
+        ConversationMemory.Context memory = conversationMemory.buildContext(session, history, reservedTokens);
+        List<Message> contextMessages = new ArrayList<>(memory.messages());
+        systemPrompt = ConversationMemory.mergeSummary(systemPrompt, memory.summary());
+        if (TYPE_RAG.equals(session.getSessionType())) {
+            // 检索片段以独立 user 消息注入，避免进入 system 指令层；无命中时注入显式“不得编造”提示
+            contextMessages = hits.isEmpty()
+                    ? knowledgeContextBuilder.injectNoHit(contextMessages)
+                    : knowledgeContextBuilder.inject(contextMessages, hits);
         }
 
         log.info("患者流式对话 sessionId={}, sessionType={}, 历史消息数={}",
@@ -745,14 +758,21 @@ public class PatientChatServiceImpl implements PatientChatService {
         saveMessage(session.getSessionId(), "user", confirmMessage);
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getSessionId());
-        List<Message> contextMessages = new ArrayList<>(conversationMemory.build(session, history));
-        contextMessages.add(new UserMessage("[系统] 用户已确认执行「" + action.getSummaryText()
-                + "」。操作结果：" + resultText + "。请用通俗友好的语言把结果告知用户，不要重复请求确认。"));
+        String systemPrompt = assistantRoleService.resolvePatientSystemPrompt(
+                user.getHospitalId(), session.getSessionType());
+        String confirmInstruction = "[系统] 用户已确认执行「" + action.getSummaryText()
+                + "」。操作结果：" + resultText + "。请用通俗友好的语言把结果告知用户，不要重复请求确认。";
+        int reservedTokens = ConversationMemory.estimateTokens(systemPrompt)
+                + ConversationMemory.estimateTokens(confirmInstruction)
+                + aiProperties.getChat().getToolTokenReserve();
+        ConversationMemory.Context memory = conversationMemory.buildContext(session, history, reservedTokens);
+        List<Message> contextMessages = new ArrayList<>(memory.messages());
+        systemPrompt = ConversationMemory.mergeSummary(systemPrompt, memory.summary());
+        contextMessages.add(new UserMessage(confirmInstruction));
 
         log.info("患者确认写操作 actionId={}, tool={}, 会话={}, 结果={}",
                 actionId, action.getToolName(), session.getSessionId(), resultText);
-        return new PatientChatContext(session, user, contextMessages,
-                assistantRoleService.resolvePatientSystemPrompt(user.getHospitalId(), session.getSessionType()),
+        return new PatientChatContext(session, user, contextMessages, systemPrompt,
                 confirmMessage, "", null, List.of());
     }
 

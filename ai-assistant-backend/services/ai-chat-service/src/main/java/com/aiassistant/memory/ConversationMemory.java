@@ -72,24 +72,47 @@ public class ConversationMemory {
     }
 
     /**
-     * 按 token 预算构建上下文消息列表
+     * 按 token 预算构建上下文消息列表（摘要作为独立 SystemMessage，保留给单测/兼容调用）。
      * <p>
-     * 未超预算时返回全部历史消息；超预算时保留最近消息，并把更早（最近窗口之前）的消息压缩为一条系统摘要消息。
-     * 每次都会基于完整早期区<b>最后</b> {@value #MAX_SUMMARY_ITEMS} 条用户消息重新生成摘要，
-     * 不依赖 {@code summaryUpdatedAt} 判断新旧（被挤出最近窗口的消息创建时间可能早于摘要时间戳）。
-     * 生成文本与会话已有摘要相同则不写库；不同则写回 {@code summary} 并刷新 {@code summaryUpdatedAt}。
+     * 生产链路应使用 {@link #buildContext(ChatSession, List, int)}，把摘要合并进系统提示词，
+     * 避免同时出现“人设 SystemMessage + 摘要 SystemMessage”两条系统消息。
      *
      * @param session 当前会话（可为空，为空时不复用/持久化摘要）
      * @param history 历史消息（按时间正序，含本轮用户消息）
      * @return Spring AI 上下文消息列表
      */
     public List<Message> build(ChatSession session, List<ChatMessage> history) {
-        if (history == null || history.isEmpty()) {
-            return List.of();
+        Context context = buildContext(session, history, 0);
+        List<Message> messages = new ArrayList<>(context.messages().size() + 1);
+        if (StringUtils.hasText(context.summary())) {
+            messages.add(new SystemMessage(SUMMARY_PREFIX + context.summary()));
         }
-        int budget = aiProperties.getChat().getContextTokenBudget();
-        if (budget <= 0 || totalTokens(history) <= budget) {
-            return toMessages(history);
+        messages.addAll(context.messages());
+        return messages;
+    }
+
+    /**
+     * 按 token 预算构建上下文，并单独返回早期摘要供调用方合并进系统提示词。
+     * <p>
+     * 预算会先扣除 {@code reservedTokens}（system prompt、RAG 片段、工具定义等），
+     * 避免只统计历史消息造成实际输入超出预算。
+     *
+     * @param session        当前会话（可为空，为空时不复用/持久化摘要）
+     * @param history        历史消息（按时间正序，含本轮用户消息）
+     * @param reservedTokens 历史消息之外的预留 token 数
+     * @return 摘要与上下文消息
+     */
+    public Context buildContext(ChatSession session, List<ChatMessage> history, int reservedTokens) {
+        if (history == null || history.isEmpty()) {
+            return new Context("", List.of());
+        }
+        int configuredBudget = aiProperties.getChat().getContextTokenBudget();
+        if (configuredBudget <= 0) {
+            return new Context("", toMessages(history));
+        }
+        int budget = configuredBudget - Math.max(0, reservedTokens);
+        if (totalTokens(history) <= budget) {
+            return new Context("", toMessages(history));
         }
 
         int recentBudget = budget * RECENT_BUDGET_PERCENT / 100;
@@ -106,13 +129,22 @@ public class ConversationMemory {
             }
         }
         summary = persistSummary(session, summary);
+        return new Context(summary == null ? "" : summary,
+                toMessages(history.subList(recentStart, history.size())));
+    }
 
-        List<Message> messages = new ArrayList<>();
-        if (StringUtils.hasText(summary)) {
-            messages.add(new SystemMessage(SUMMARY_PREFIX + summary));
+    /**
+     * 把早期摘要合并进系统提示词（避免产生第二条 SystemMessage）。
+     *
+     * @param systemPrompt 系统提示词
+     * @param summary      早期摘要（可为空）
+     * @return 合并后的系统提示词
+     */
+    public static String mergeSummary(String systemPrompt, String summary) {
+        if (!StringUtils.hasText(summary)) {
+            return systemPrompt;
         }
-        messages.addAll(toMessages(history.subList(recentStart, history.size())));
-        return messages;
+        return systemPrompt + "\n\n" + SUMMARY_PREFIX + summary;
     }
 
     /**
@@ -297,5 +329,14 @@ public class ConversationMemory {
             }
         }
         return result;
+    }
+
+    /**
+     * 记忆构建结果：早期摘要与历史消息分离，供调用方把摘要合并进系统提示词。
+     *
+     * @param summary  早期摘要（无摘要时为空串）
+     * @param messages 历史消息
+     */
+    public record Context(String summary, List<Message> messages) {
     }
 }
