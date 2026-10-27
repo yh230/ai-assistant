@@ -34,22 +34,6 @@ public class ChatController {
     private final ChatService chatService;
 
     /**
-     * 发送消息并获取 AI 回复（非流式，兼容旧接口）
-     * POST /api/chat/send
-     *
-     * @param request 聊天请求体
-     * @return 聊天响应
-     */
-    @PostMapping("/send")
-    public Result<ChatResponse> sendMessage(@RequestBody ChatRequest request) {
-        log.info("收到聊天消息: sessionId={}, roleId={}, model={}", request.getSessionId(), request.getRoleId(), request.getModel());
-        if (request.getMessage() == null || request.getMessage().trim().isEmpty()) {
-            return Result.fail(400, "消息内容不能为空");
-        }
-        return Result.success(chatService.chat(request));
-    }
-
-    /**
      * 流式聊天：SSE 逐 token 推送。
      * POST /api/chat/stream
      * <p>

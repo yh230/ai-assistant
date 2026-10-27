@@ -35,9 +35,7 @@ import com.common.security.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -118,9 +116,6 @@ public class ChatServiceImpl implements ChatService {
     private final ObjectMapper objectMapper;
     private final ChatMessagePersister messagePersister;
     private final OutputSafetyFilter safetyFilter;
-
-    @Value("${ai.local-fallback:true}")
-    private boolean useLocalFallback;
 
     // ==================== 流式聊天（核心） ====================
 
@@ -344,68 +339,6 @@ public class ChatServiceImpl implements ChatService {
                 .event(ChatConstants.EVENT_ERROR)
                 .build();
         return Flux.just(errorEvent);
-    }
-
-    // ==================== 非流式聊天（兼容旧接口） ====================
-
-    @Override
-    @Transactional
-    public ChatResponse chat(ChatRequest request) {
-        Assert.notNull(request, "请求参数不能为空");
-        Assert.hasText(request.getMessage(), "消息内容不能为空");
-        ChatTextSupport.validateInput(aiProperties.getChat().getMaxInputChars(), request.getMessage());
-
-        UserSnapshot snapshot = currentStaffSnapshot();
-        String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
-        String modelId = assistantProperties.resolveModelId(request.getModel());
-
-        String sessionId = ensureSession(request, snapshot, requestedRoleId);
-        ChatSession session = requireOwnedSession(sessionId, snapshot);
-        String roleId = resolveEffectiveRoleId(session, requestedRoleId);
-        if (session.getRoleId() == null || session.getRoleId().isBlank()) {
-            session.setRoleId(roleId);
-            sessionRepository.save(session);
-        }
-        String systemPrompt = buildSystemPrompt(assistantRoleService.resolveSystemPrompt(roleId),
-                snapshot.getUserId(), memoryIdentity(snapshot));
-        saveUserMessage(sessionId, request.getMessage());
-        List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-
-        String reply;
-        boolean usedFallback = false;
-
-        if (chatModelRegistry.isActive(modelId)) {
-            try {
-                reply = callAi(systemPrompt, session, history, modelId);
-            } catch (Exception e) {
-                log.warn("AI 调用失败，切换本地回复: {}", e.getMessage());
-                if (useLocalFallback) {
-                    reply = generateLocalResponse(request.getMessage(), history);
-                    usedFallback = true;
-                } else {
-                    reply = "哎呀，我这边信号不太好（AI 服务暂时不可用），稍后再找我聊吧~";
-                }
-            }
-        } else {
-            reply = generateLocalResponse(request.getMessage(), history);
-            usedFallback = true;
-        }
-
-        saveAssistantMessage(sessionId, reply);
-        return buildChatResponse(sessionId, reply, usedFallback);
-    }
-
-    /**
-     * 调用指定模型生成完整回复（非流式）。
-     */
-    private String callAi(String systemPrompt, ChatSession session, List<ChatMessage> history, String modelId) {
-        ChatClient client = chatClientFactory.getChatClient(modelId);
-        List<Message> messages = conversationMemory.build(session, history);
-        return client.prompt()
-                .system(systemPrompt)
-                .messages(messages)
-                .call()
-                .content();
     }
 
     // ==================== 角色与模型列表 ====================
@@ -643,21 +576,6 @@ public class ChatServiceImpl implements ChatService {
                 .hospitalId(snapshot.getHospitalId())
                 .roleId(roleId)
                 .build());
-    }
-
-    /**
-     * 组装完整聊天响应。
-     */
-    private ChatResponse buildChatResponse(String sessionId, String reply, boolean usedFallback) {
-        List<ChatResponse.ChatMessageDTO> dtos = messageRepository
-                .findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
-                .map(m -> ChatResponse.ChatMessageDTO.builder()
-                        .role(m.getRole()).content(m.getContent()).createdAt(m.getCreatedAt()).build())
-                .collect(Collectors.toList());
-        return ChatResponse.builder()
-                .sessionId(sessionId).reply(reply)
-                .timestamp(LocalDateTime.now()).localFallback(usedFallback)
-                .messages(dtos).build();
     }
 
     /**

@@ -63,9 +63,8 @@ spring:
     openai:
       enabled: false
 
-# 本地降级开关：AI 调用失败时是否使用内置回复引擎
+# AI 业务配置
 ai:
-  local-fallback: true
   rag:
     # 向量存储实现：simple（本地文件）| elasticsearch（BM25+kNN 混合检索）
     store: ${AI_RAG_STORE:simple}

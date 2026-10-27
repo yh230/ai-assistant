@@ -18,14 +18,6 @@ import java.util.List;
 public interface ChatService {
 
     /**
-     * 发送消息并获取 AI 回复（非流式，兼容旧接口）。
-     *
-     * @param request 聊天请求
-     * @return 完整聊天响应
-     */
-    ChatResponse chat(ChatRequest request);
-
-    /**
      * 流式聊天：通过 SSE 逐 token 推送回复。
      * <p>
      * 直接返回 {@code Flux<ServerSentEvent<String>>}，由 Spring MVC 适配为 HTTP SSE 流，
