@@ -24,19 +24,19 @@ import com.aiassistant.service.ChatService;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.UserMemoryBuilder;
 import com.aiassistant.service.WeatherService;
+import com.aiassistant.service.support.AiStreamSupport;
 import com.aiassistant.service.support.ChatMessagePersister;
+import com.aiassistant.service.support.ChatTextSupport;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
 import com.common.constant.SecurityConstants;
 import com.common.exception.BusinessException;
 import com.common.security.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
@@ -44,7 +44,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
-import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -109,7 +108,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatModelRegistry chatModelRegistry;
     private final ModelStreamExecutor modelStreamExecutor;
     private final SceneOptionsFactory sceneOptionsFactory;
-    private final MeterRegistry meterRegistry;
+    private final AiStreamSupport aiStreamSupport;
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final ConversationMemory conversationMemory;
@@ -151,7 +150,7 @@ public class ChatServiceImpl implements ChatService {
      * @return 聊天上下文
      */
     private ChatContext prepareContext(ChatRequest request, String requestedRoleId, String modelId, UserSnapshot snapshot) {
-        validateInput(request.getMessage());
+        ChatTextSupport.validateInput(aiProperties.getChat().getMaxInputChars(), request.getMessage());
         String sessionId = ensureSession(request, snapshot, requestedRoleId);
         ChatSession session = requireOwnedSession(sessionId, snapshot);
         String roleId = resolveEffectiveRoleId(session, requestedRoleId);
@@ -194,7 +193,8 @@ public class ChatServiceImpl implements ChatService {
      */
     private Flux<ServerSentEvent<String>> buildReplyFlux(ChatContext ctx) {
         ServerSentEvent<String> sessionEvent = ServerSentEvent.builder(
-                        toJson(Map.of("sessionId", ctx.sessionId(), "title", ctx.title())))
+                        ChatTextSupport.toJson(objectMapper,
+                                Map.of("sessionId", ctx.sessionId(), "title", ctx.title())))
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
@@ -224,7 +224,7 @@ public class ChatServiceImpl implements ChatService {
             if (truncated.get()) {
                 payload.put("truncated", true);
             }
-            return ServerSentEvent.builder(toJson(payload))
+            return ServerSentEvent.builder(ChatTextSupport.toJson(objectMapper, payload))
                     .event(ChatConstants.EVENT_DONE)
                     .build();
         });
@@ -276,29 +276,14 @@ public class ChatServiceImpl implements ChatService {
         Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
         long startNanos = System.nanoTime();
 
-        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
-            long startNanosPerModel = System.nanoTime();
-            AtomicBoolean firstToken = new AtomicBoolean(true);
-            return Flux.<org.springframework.ai.chat.model.ChatResponse>defer(() -> {
-                        meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
-                        return chatClientFactory.getChatClient(candidate).prompt()
+        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate ->
+                aiStreamSupport.tokenFlux(candidate, scene, () ->
+                        chatClientFactory.getChatClient(candidate).prompt()
                                 .system(ctx.systemPrompt())
                                 .messages(ctx.messages())
                                 .options(sceneOptionsFactory.options(scene))
                                 .stream()
-                                .chatResponse();
-                    })
-                    .doOnNext(response -> recordUsage(candidate, scene, response))
-                    .map(this::extractText)
-                    .filter(StringUtils::hasText)
-                    .doOnNext(token -> {
-                        if (firstToken.compareAndSet(true, false)) {
-                            meterRegistry.timer("ai.model.latency", "model", candidate)
-                                    .record(Duration.ofNanos(System.nanoTime() - startNanosPerModel));
-                        }
-                    })
-                    .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
-        });
+                                .chatResponse()));
 
         return GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
                         aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
@@ -308,88 +293,24 @@ public class ChatServiceImpl implements ChatService {
                 .doOnComplete(() -> {
                     if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
                         truncated.set(true);
-                        recordFailure(primaryModel, scene, "OverallTimeout");
-                        meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
-                                .increment();
+                        aiStreamSupport.recordFailure(primaryModel, scene, "OverallTimeout");
+                        aiStreamSupport.recordTruncated(primaryModel, scene);
                         log.warn("AI 生成达总超时（{} 秒）被截断: sessionId={}",
                                 aiProperties.getChat().getOverallTimeoutSeconds(), ctx.sessionId());
                     }
                 })
                 .onErrorResume(ex -> {
                     if (ex instanceof TimeoutException) {
-                        recordFailure(primaryModel, scene, "IdleTimeout");
+                        aiStreamSupport.recordFailure(primaryModel, scene, "IdleTimeout");
                     } else if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
                         // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
-                        recordFailure(primaryModel, scene, "EmptyChain");
+                        aiStreamSupport.recordFailure(primaryModel, scene, "EmptyChain");
                     }
                     log.warn("AI 流式响应异常，降级本地引擎: {}", ex.getMessage());
                     usedFallback.set(true);
                     return buildLocalChunkFlux(generateLocalResponse(ctx.userMessage(), ctx.history()),
                             full, blocked, guardRef);
                 });
-    }
-
-    /**
-     * 记录失败计数（model + reason 维度）。
-     *
-     * @param modelId 模型ID
-     * @param scene   场景标识
-     * @param reason  失败原因标签
-     */
-    private void recordFailure(String modelId, String scene, String reason) {
-        meterRegistry.counter("ai.model.failures", "model", modelId, "scene", scene, "reason", reason)
-                .increment();
-    }
-
-    /**
-     * 从模型响应中提取正文（工具调用等无文本片段返回空串，由调用方过滤）。
-     *
-     * @param response 模型响应
-     * @return 正文文本
-     */
-    private String extractText(org.springframework.ai.chat.model.ChatResponse response) {
-        if (response == null || response.getResult() == null || response.getResult().getOutput() == null
-                || response.getResult().getOutput().getText() == null) {
-            return "";
-        }
-        return response.getResult().getOutput().getText();
-    }
-
-    /**
-     * 记录模型用量指标（提示/补全 token）；流式响应未携带用量时静默跳过。
-     *
-     * @param modelId  模型ID
-     * @param scene    场景标识
-     * @param response 模型响应
-     */
-    private void recordUsage(String modelId, String scene, org.springframework.ai.chat.model.ChatResponse response) {
-        if (response == null || response.getMetadata() == null) {
-            return;
-        }
-        Usage usage = response.getMetadata().getUsage();
-        if (usage == null) {
-            return;
-        }
-        Integer promptTokens = usage.getPromptTokens();
-        if (promptTokens != null && promptTokens > 0) {
-            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "prompt")
-                    .increment(promptTokens);
-        }
-        Integer completionTokens = usage.getCompletionTokens();
-        if (completionTokens != null && completionTokens > 0) {
-            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "completion")
-                    .increment(completionTokens);
-        }
-    }
-
-    /**
-     * 归一化失败原因标签（异常类型名），用于失败计数维度。
-     *
-     * @param ex 异常
-     * @return 失败原因标签
-     */
-    private String failureReason(Throwable ex) {
-        return ex.getClass().getSimpleName();
     }
 
     /**
@@ -405,7 +326,7 @@ public class ChatServiceImpl implements ChatService {
     private Flux<ServerSentEvent<String>> buildLocalChunkFlux(String text, StringBuffer full,
                                                               AtomicBoolean blocked,
                                                               AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
-        List<String> chunks = splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
+        List<String> chunks = ChatTextSupport.splitIntoChunks(text, ChatConstants.LOCAL_CHUNK_SIZE);
         return GuardedSse.guardedSse(
                 Flux.fromIterable(chunks).delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
                 full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
@@ -418,7 +339,8 @@ public class ChatServiceImpl implements ChatService {
     private Flux<ServerSentEvent<String>> buildErrorFlux(Throwable ex) {
         log.error("流式聊天处理失败", ex);
         ServerSentEvent<String> errorEvent = ServerSentEvent.builder(
-                        toJson(Map.of("message", ex.getMessage() != null ? ex.getMessage() : "未知错误")))
+                        ChatTextSupport.toJson(objectMapper,
+                                Map.of("message", ex.getMessage() != null ? ex.getMessage() : "未知错误")))
                 .event(ChatConstants.EVENT_ERROR)
                 .build();
         return Flux.just(errorEvent);
@@ -431,7 +353,7 @@ public class ChatServiceImpl implements ChatService {
     public ChatResponse chat(ChatRequest request) {
         Assert.notNull(request, "请求参数不能为空");
         Assert.hasText(request.getMessage(), "消息内容不能为空");
-        validateInput(request.getMessage());
+        ChatTextSupport.validateInput(aiProperties.getChat().getMaxInputChars(), request.getMessage());
 
         UserSnapshot snapshot = currentStaffSnapshot();
         String requestedRoleId = assistantRoleService.resolveRoleId(request.getRoleId());
@@ -513,20 +435,6 @@ public class ChatServiceImpl implements ChatService {
                     .build());
         }
         return result;
-    }
-
-    // ==================== 输入校验 ====================
-
-    /**
-     * 校验用户消息长度（服务层兜底，上限来自 {@code ai.chat.max-input-chars}）。
-     *
-     * @param message 用户消息
-     */
-    private void validateInput(String message) {
-        int maxChars = aiProperties.getChat().getMaxInputChars();
-        if (message != null && message.length() > maxChars) {
-            throw new BusinessException("消息长度不能超过" + maxChars + "字");
-        }
     }
 
     // ==================== 动态系统提示词（用户画像注入） ====================
@@ -753,18 +661,6 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 将对象序列化为 JSON 字符串（失败返回空对象）。
-     */
-    private String toJson(Object obj) {
-        try {
-            return objectMapper.writeValueAsString(obj);
-        } catch (Exception e) {
-            log.warn("JSON 序列化失败: {}", e.getMessage());
-            return "{}";
-        }
-    }
-
-    /**
      * 生成会话标题（取消息前 20 字）。
      */
     private String generateTitle(String message) {
@@ -772,21 +668,6 @@ public class ChatServiceImpl implements ChatService {
             return "新对话";
         }
         return message.length() > 20 ? message.substring(0, 20) + "..." : message;
-    }
-
-    /**
-     * 将文本按固定长度切片。
-     */
-    private List<String> splitIntoChunks(String text, int chunkSize) {
-        List<String> chunks = new ArrayList<>();
-        if (text == null || text.isEmpty()) {
-            return chunks;
-        }
-        for (int i = 0; i < text.length(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, text.length());
-            chunks.add(text.substring(i, end));
-        }
-        return chunks;
     }
 
     // ==================== 本地回复引擎（降级方案） ====================
