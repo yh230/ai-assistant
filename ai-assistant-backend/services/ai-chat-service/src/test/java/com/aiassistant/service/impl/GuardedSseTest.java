@@ -130,4 +130,21 @@ class GuardedSseTest {
         assertFalse(blocked.get());
         assertEquals("建议您先休息", full.toString());
     }
+
+    @Test
+    void refusalAwareOutputPassesModelRefusal() {
+        StringBuffer full = new StringBuffer();
+        AtomicBoolean blocked = new AtomicBoolean(false);
+
+        List<ServerSentEvent<String>> events = GuardedSse.guardedSse(
+                        Flux.just("抱歉，我不能", "提供用药", "建议，请咨询医生"),
+                        full, blocked, KEYWORDS, BLOCKED_MESSAGE, null, true)
+                .collectList()
+                .block();
+
+        String emitted = events.stream().map(ServerSentEvent::data).collect(Collectors.joining());
+        assertFalse(blocked.get());
+        assertEquals("抱歉，我不能提供用药建议，请咨询医生", emitted);
+        assertEquals("抱歉，我不能提供用药建议，请咨询医生", full.toString());
+    }
 }

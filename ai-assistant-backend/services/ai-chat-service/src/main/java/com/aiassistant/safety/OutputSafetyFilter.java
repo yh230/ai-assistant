@@ -5,15 +5,14 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.text.Normalizer;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * AI 输入输出风控过滤器（关键词规则）：命中开药/确诊类敏感词即拦截（输入抛错/输出改文案）；急症红线词命中由服务层短路返回就医指引
  * <p>
  * 输入侧命中：不调用大模型，直接返回标准提示文案；输出侧命中：丢弃生成内容，持久化标准文案。
  * 文本统一经 NFKC + 去空白归一后再比对，避免全角字符/空格拆分绕过；急症词命中若紧邻否定词（如"没有胸痛"）则视为否定描述而不拦截。
+ * 输出侧额外识别拒绝语境：模型回复“不能提供用药建议”时不应被当成违规内容拦截。
  * 否定词仅统计同一分句内、紧邻关键词的前置片段，且"排除/除外/诱因"等例外标记会取消否定
  * （"不排除心梗""无诱因胸痛"仍按急症处理）。
  *
@@ -40,9 +39,6 @@ public class OutputSafetyFilter {
     /** 分句标点：否定作用域不跨分句 */
     private static final String CLAUSE_DELIMITERS = "，。；：！？、,.!?;:\n\r";
 
-    /** 文本归一：NFKC（全角转半角）+ 去除所有空白 */
-    private static final Pattern WHITESPACE = Pattern.compile("[\\s\\u3000]+");
-
     private final AiProperties aiProperties;
 
     /**
@@ -55,11 +51,42 @@ public class OutputSafetyFilter {
         if (text == null || aiProperties.getSafety().getKeywords() == null) {
             return false;
         }
-        String normalized = normalize(text);
+        String normalized = SafetyText.normalize(text);
         return aiProperties.getSafety().getKeywords().stream()
                 .filter(StringUtils::hasText)
-                .map(OutputSafetyFilter::normalize)
+                .map(SafetyText::normalize)
                 .anyMatch(normalized::contains);
+    }
+
+    /**
+     * 判断模型输出是否命中敏感词；拒绝语境（“不能提供用药建议”）不拦截。
+     *
+     * @param text 模型输出
+     * @return true=命中（应拦截）
+     */
+    public boolean blockedOutput(String text) {
+        List<String> keywords = aiProperties.getSafety().getKeywords();
+        if (text == null || keywords == null) {
+            return false;
+        }
+        String normalized = SafetyText.normalize(text);
+        for (String word : keywords) {
+            if (!StringUtils.hasText(word)) {
+                continue;
+            }
+            String keyword = SafetyText.normalize(word);
+            if (keyword.isEmpty()) {
+                continue;
+            }
+            int index = normalized.indexOf(keyword);
+            while (index >= 0) {
+                if (!SafetyText.refusalPrefixed(normalized, index)) {
+                    return true;
+                }
+                index = normalized.indexOf(keyword, index + keyword.length());
+            }
+        }
+        return false;
     }
 
     /**
@@ -82,12 +109,12 @@ public class OutputSafetyFilter {
         if (text == null || words == null) {
             return false;
         }
-        String normalized = normalize(text);
+        String normalized = SafetyText.normalize(text);
         for (String word : words) {
             if (!StringUtils.hasText(word)) {
                 continue;
             }
-            String keyword = normalize(word);
+            String keyword = SafetyText.normalize(word);
             if (keyword.isEmpty()) {
                 continue;
             }
@@ -109,16 +136,6 @@ public class OutputSafetyFilter {
      */
     public String emergencyMessage() {
         return aiProperties.getSafety().getEmergencyMessage();
-    }
-
-    /**
-     * 文本归一：NFKC 兼容分解（全角转半角等）+ 去除空白，防止空格/全角拆分绕过关键词
-     *
-     * @param text 原始文本
-     * @return 归一后文本
-     */
-    private static String normalize(String text) {
-        return WHITESPACE.matcher(Normalizer.normalize(text, Normalizer.Form.NFKC)).replaceAll("");
     }
 
     /**

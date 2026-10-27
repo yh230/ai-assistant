@@ -191,4 +191,37 @@ class OutputSafetyFilterTest {
         // 输入侧为敏感句式，否定词不豁免
         assertTrue(filterWith(List.of("开药")).blockedInput("不要开药，只想知道挂什么科"));
     }
+
+    @Test
+    void blockedOutputPassesRefusalPhrase() {
+        assertFalse(filterWith(List.of("用药建议")).blockedOutput("抱歉，我不能提供用药建议，请咨询医生"));
+    }
+
+    @Test
+    void blockedOutputPassesRefusalVariants() {
+        OutputSafetyFilter filter = filterWith(List.of("用药建议"));
+        assertFalse(filter.blockedOutput("无法提供用药建议"));
+        assertFalse(filter.blockedOutput("不建议给出用药建议"));
+        assertFalse(filter.blockedOutput("请勿参考任何用药建议"));
+    }
+
+    @Test
+    void blockedOutputBlocksDirectAdvice() {
+        assertTrue(filterWith(List.of("用药建议")).blockedOutput("可以参考以下用药建议"));
+    }
+
+    @Test
+    void blockedOutputBlocksKeywordInAnotherClause() {
+        // 拒绝语境不跨分句，"。"之后的敏感词仍应拦截
+        assertTrue(filterWith(List.of("用药建议")).blockedOutput("不能开药。以下是具体用药建议"));
+    }
+
+    @Test
+    void blockedOutputDoesNotReuseInputStrictness() {
+        // 同一段拒绝文案：输入侧严格命中，输出侧视为正常拒答
+        OutputSafetyFilter filter = filterWith(List.of("用药建议"));
+        String refusal = "不能提供用药建议";
+        assertTrue(filter.blockedInput(refusal));
+        assertFalse(filter.blockedOutput(refusal));
+    }
 }

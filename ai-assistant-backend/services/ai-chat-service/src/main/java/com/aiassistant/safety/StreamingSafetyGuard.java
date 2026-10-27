@@ -3,11 +3,9 @@ package com.aiassistant.safety;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
-import java.text.Normalizer;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Predicate;
-import java.util.regex.Pattern;
+import java.util.function.BiPredicate;
 
 /**
  * 流式安全守卫：holdback 缓冲跨 token 关键词，命中后终止上游并仅下发标准文案
@@ -18,6 +16,7 @@ import java.util.regex.Pattern;
  * 内容的长度不小于 {@code maxKeywordLength - 1}），既保证跨 token 关键词不会提前泄露，
  * 也保证被归一移除的空格/全角字符不会把关键词藏在已下发前缀中。
  * 命中后立即取消上游，标准文案只下发一次且不再参与关键词扫描。
+ * 输出侧可开启拒绝语境识别：模型回复“不能提供用药建议”时视为正常拒答，不触发拦截。
  * 上游非安全类异常原样透传，不在此吞掉。
  * <p>
  * 注意：守卫实例持有本次流的 {@link StringBuilder} 状态，<b>不是可重复订阅（re-subscription-safe）</b>
@@ -28,8 +27,8 @@ import java.util.regex.Pattern;
  */
 public class StreamingSafetyGuard {
 
-    /** 归一用空白（含全角空格 U+3000） */
-    private static final Pattern WHITESPACE = Pattern.compile("[\\s\\u3000]+");
+    /** 拒绝语境判断使用的已下发文本尾部长度（字符） */
+    private static final int REFUSAL_CONTEXT_CHARS = 24;
 
     /** 归一后的关键词列表 */
     private final List<String> keywords;
@@ -42,6 +41,9 @@ public class StreamingSafetyGuard {
     /** 未命中时保留在缓冲区中的原始字符数（保守取值） */
     private final int holdback;
 
+    /** 是否识别拒绝语境（输出侧开启，输入侧关闭） */
+    private final boolean refusalAware;
+
     /**
      * 使用关键词列表内部计算的最大长度构造守卫（推荐）。
      *
@@ -49,7 +51,7 @@ public class StreamingSafetyGuard {
      * @param blockedMessage 命中后下发的标准文案（为 null 时下发空串）
      */
     public StreamingSafetyGuard(List<String> keywords, String blockedMessage) {
-        this(keywords, blockedMessage, 0);
+        this(keywords, blockedMessage, 0, false);
     }
 
     /**
@@ -60,13 +62,27 @@ public class StreamingSafetyGuard {
      * @param maxKeywordLength 关键词最大长度；内部会与词表实际最大归一长度取较大值，避免漏检
      */
     public StreamingSafetyGuard(List<String> keywords, String blockedMessage, int maxKeywordLength) {
+        this(keywords, blockedMessage, maxKeywordLength, false);
+    }
+
+    /**
+     * 全参构造。
+     *
+     * @param keywords         需要拦截的关键词列表（空白项自动忽略）
+     * @param blockedMessage   命中后下发的标准文案（为 null 时下发空串）
+     * @param maxKeywordLength 关键词最大长度；内部会与词表实际最大归一长度取较大值，避免漏检
+     * @param refusalAware     是否识别拒绝语境（输出侧开启）
+     */
+    public StreamingSafetyGuard(List<String> keywords, String blockedMessage, int maxKeywordLength,
+                                boolean refusalAware) {
         List<String> normalizedKeywords = (keywords == null ? List.<String>of() : keywords).stream()
                 .filter(StringUtils::hasText)
-                .map(StreamingSafetyGuard::normalize)
+                .map(SafetyText::normalize)
                 .filter(keyword -> !keyword.isEmpty())
                 .toList();
         this.keywords = normalizedKeywords;
         this.blockedMessage = blockedMessage;
+        this.refusalAware = refusalAware;
         int actualMax = normalizedKeywords.stream().mapToInt(String::length).max().orElse(0);
         this.maxKeywordLength = Math.max(Math.max(0, maxKeywordLength), actualMax);
         // 保守 holdback：原始字符取 2 倍最长关键词，避免被归一删除的空格/全角字符掩盖关键词
@@ -98,7 +114,8 @@ public class StreamingSafetyGuard {
                             return Flux.empty();
                         }
                         pending.append(token);
-                        if (hit(pending.toString())) {
+                        if (hit(pending.toString(),
+                                tail(delivered.toString(), REFUSAL_CONTEXT_CHARS) + pending)) {
                             blocked.set(true);
                             pending.setLength(0);
                             return Flux.error(new SafetyBlockedException());
@@ -121,7 +138,7 @@ public class StreamingSafetyGuard {
                         }
                         String tail = pending.toString();
                         pending.setLength(0);
-                        if (hit(tail)) {
+                        if (hit(tail, tail(delivered.toString(), REFUSAL_CONTEXT_CHARS) + tail)) {
                             // 命中发生在最后一个 token 的滞留区：同样只下发标准文案，且不回扫该文案
                             blocked.set(true);
                             delivered.setLength(0);
@@ -158,36 +175,65 @@ public class StreamingSafetyGuard {
             return pending.length();
         }
         int need = Math.max(0, maxKeywordLength - 1);
-        if (normalize(pending).length() <= need) {
+        if (SafetyText.normalize(pending).length() <= need) {
             return 0;
         }
         int rawSafe = Math.max(0, pending.length() - holdback);
         int suffixStart = pending.length();
-        while (suffixStart > 0 && normalize(pending.substring(suffixStart)).length() < need) {
+        while (suffixStart > 0 && SafetyText.normalize(pending.substring(suffixStart)).length() < need) {
             suffixStart--;
         }
         return Math.max(0, Math.min(rawSafe, suffixStart));
     }
 
     /**
-     * 在归一后的文本上匹配关键词
+     * 判断待放行文本是否命中关键词。
+     * <p>
+     * 非拒绝语境模式下扫描 {@code raw} 本身；拒绝语境模式下在 {@code context} 中定位关键词，
+     * 并跳过被“不能/无法/不建议”等拒绝前缀修饰的出现位置。
+     *
+     * @param raw        本次待判断文本（通常是 pending 尾部）
+     * @param contextRaw 已下发文本尾部 + 待判断文本（用于跨 token 拒绝语境判断）
+     * @return 是否应拦截
      */
-    private boolean hit(String raw) {
+    private boolean hit(String raw, String contextRaw) {
         if (raw == null || raw.isEmpty()) {
             return false;
         }
-        String normalized = normalize(raw);
-        if (normalized.isEmpty()) {
+        String normalizedRaw = SafetyText.normalize(raw);
+        if (normalizedRaw.isEmpty()) {
             return false;
         }
-        return keywords.stream().anyMatch(normalized::contains);
+        if (!refusalAware) {
+            return keywords.stream().anyMatch(normalizedRaw::contains);
+        }
+        String context = SafetyText.normalize(
+                contextRaw == null || contextRaw.isEmpty() ? raw : contextRaw);
+        int offset = context.endsWith(normalizedRaw) ? context.length() - normalizedRaw.length() : 0;
+        for (String keyword : keywords) {
+            int index = context.indexOf(keyword, offset);
+            while (index >= 0) {
+                if (!SafetyText.refusalPrefixed(context, index)) {
+                    return true;
+                }
+                index = context.indexOf(keyword, index + keyword.length());
+            }
+        }
+        return false;
     }
 
     /**
-     * 文本归一：NFKC（全角转半角等）+ 去除所有空白
+     * 取文本尾部（用于拼接拒绝语境判断的上下文）。
+     *
+     * @param text   原始文本
+     * @param maxLen 最大保留字符数
+     * @return 文本尾部
      */
-    private static String normalize(String text) {
-        return WHITESPACE.matcher(Normalizer.normalize(text, Normalizer.Form.NFKC)).replaceAll("");
+    private static String tail(String text, int maxLen) {
+        if (text == null || text.isEmpty() || maxLen <= 0) {
+            return "";
+        }
+        return text.length() <= maxLen ? text : text.substring(text.length() - maxLen);
     }
 
     /**
@@ -214,11 +260,12 @@ public class StreamingSafetyGuard {
         /** 上报线程与取消线程共享的状态锁 */
         private final Object lock;
 
-        /** 命中判定（复用守卫的归一化匹配） */
-        private final Predicate<String> hitTest;
+        /** 命中判定（复用守卫的归一化与拒绝语境匹配） */
+        private final BiPredicate<String, String> hitTest;
 
         private Guarded(Flux<String> tokens, AtomicBoolean blocked, StringBuilder delivered,
-                        StringBuilder pending, String fallback, Object lock, Predicate<String> hitTest) {
+                        StringBuilder pending, String fallback, Object lock,
+                        BiPredicate<String, String> hitTest) {
             this.tokens = tokens;
             this.blocked = blocked;
             this.delivered = delivered;
@@ -264,7 +311,7 @@ public class StreamingSafetyGuard {
                 }
                 String tail = pending.toString();
                 pending.setLength(0);
-                if (hitTest.test(tail)) {
+                if (hitTest.test(tail, tail(delivered.toString(), REFUSAL_CONTEXT_CHARS) + tail)) {
                     blocked.set(true);
                     delivered.setLength(0);
                     delivered.append(fallback);

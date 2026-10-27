@@ -287,7 +287,7 @@ public class ChatServiceImpl implements ChatService {
 
         return GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
                         aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
-                        guardRef::set)
+                        guardRef::set, true)
                 .take(overallTimeout)
                 .doOnComplete(() -> {
                     if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
@@ -329,7 +329,7 @@ public class ChatServiceImpl implements ChatService {
         return GuardedSse.guardedSse(
                 Flux.fromIterable(chunks).delayElements(java.time.Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
                 full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
-                guardRef == null ? null : guardRef::set);
+                guardRef == null ? null : guardRef::set, true);
     }
 
     /**

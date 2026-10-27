@@ -506,7 +506,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         Flux<ServerSentEvent<String>> content =
                 GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
                                 aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
-                                guardRef::set)
+                                guardRef::set, true)
                         .take(overallTimeout)
                         .doOnComplete(() -> {
                             // take 到点属正常完成，没有异常信号；按耗时判定是否被总超时截断
@@ -641,7 +641,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         return GuardedSse.guardedSse(
                 Flux.fromIterable(chunks).delayElements(Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
                 full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
-                guardRef == null ? null : guardRef::set);
+                guardRef == null ? null : guardRef::set, true);
     }
 
     /**
@@ -673,7 +673,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                 return Mono.empty();
             }
             String body = full.toString();
-            if (safetyFilter.blockedInput(body)) {
+            if (safetyFilter.blockedOutput(body)) {
                 blocked.set(true);
                 log.warn("输出侧命中风控敏感词，已拦截并按标准文案落库");
                 return Mono.just(ServerSentEvent.builder(ChatTextSupport.toJson(objectMapper,

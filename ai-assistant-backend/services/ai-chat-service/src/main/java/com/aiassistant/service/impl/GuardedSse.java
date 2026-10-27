@@ -45,7 +45,7 @@ final class GuardedSse {
     static Flux<ServerSentEvent<String>> guardedSse(Flux<String> tokens, StringBuffer full,
                                                     AtomicBoolean blocked, List<String> keywords,
                                                     String blockedMessage) {
-        return guardedSse(tokens, full, blocked, keywords, blockedMessage, null);
+        return guardedSse(tokens, full, blocked, keywords, blockedMessage, null, false);
     }
 
     /**
@@ -66,8 +66,31 @@ final class GuardedSse {
                                                     AtomicBoolean blocked, List<String> keywords,
                                                     String blockedMessage,
                                                     Consumer<StreamingSafetyGuard.Guarded> onGuard) {
+        return guardedSse(tokens, full, blocked, keywords, blockedMessage, onGuard, false);
+    }
+
+    /**
+     * 以流式安全守卫包装 token 流并映射为 SSE token 事件，可开启拒绝语境识别
+     * <p>
+     * 输出侧传 {@code refusalAware=true}：模型回复“不能提供用药建议”时属于正常拒答，不触发拦截；
+     * 输入侧回显等场景保持 {@code false}，任何关键词出现都按命中处理。
+     *
+     * @param tokens         原始 token 流（模型或本地降级）
+     * @param full           回复正文累积器（仅追加实际下发内容）
+     * @param blocked        输出侧拦截标记（命中后置为 true）
+     * @param keywords       敏感词列表（来自 {@code ai.safety.keywords}）
+     * @param blockedMessage 命中后的标准文案
+     * @param onGuard        守卫创建回调（可为 null）；调用方持有该实例以便在取消/落库前主动冲刷
+     * @param refusalAware   是否识别拒绝语境（输出侧为 true）
+     * @return SSE token 事件流
+     */
+    static Flux<ServerSentEvent<String>> guardedSse(Flux<String> tokens, StringBuffer full,
+                                                    AtomicBoolean blocked, List<String> keywords,
+                                                    String blockedMessage,
+                                                    Consumer<StreamingSafetyGuard.Guarded> onGuard,
+                                                    boolean refusalAware) {
         StreamingSafetyGuard.Guarded guarded =
-                new StreamingSafetyGuard(keywords, blockedMessage).guard(tokens);
+                new StreamingSafetyGuard(keywords, blockedMessage, 0, refusalAware).guard(tokens);
         if (onGuard != null) {
             onGuard.accept(guarded);
         }
