@@ -401,7 +401,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * 若包装层比下游 Feign 超时更早触发，模型会收到超时错误，但下游可能仍在继续执行并最终落库，
      * 造成“模型认为失败、系统实际成功”的语义不一致。放大包装层超时让下游 Feign 先超时并返回明确错误，
      * 保证先失败的一方是真正执行写操作的一方。代价是超时写调用会占用工具执行线程更久，
-     * 线程数由 GuardedToolCallback 的固定大小守护线程池封顶。
+     * 线程数由 {@link ToolExecutionPool} 的固定大小守护线程池封顶。
      * 写工具识别基于包装后透传的 {@code getToolDefinition().name()}，不因包装失效。
      *
      * @param ctx               患者聊天上下文
