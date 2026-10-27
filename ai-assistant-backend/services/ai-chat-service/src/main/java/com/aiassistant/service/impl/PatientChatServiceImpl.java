@@ -40,6 +40,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
@@ -59,7 +60,6 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -147,12 +147,24 @@ public class PatientChatServiceImpl implements PatientChatService {
     /** 当前活跃患者 SSE 流数（Gauge 底层数据源） */
     private final AtomicInteger patientSseActive = new AtomicInteger();
 
+    /** 患者工具原始回调（启动时扫描一次，按请求再包装限额/超时） */
+    private List<ToolCallback> rawPatientToolCallbacks;
+
     /**
      * 注册患者 SSE 活跃流 Gauge（容器就绪后执行一次）
      */
     @PostConstruct
     void registerSseActiveGauge() {
         meterRegistry.gauge("ai.patient.sse.active", patientSseActive);
+    }
+
+    /**
+     * 扫描患者工具回调（@Tool 注解反射只做一次，请求级仅做安全包装）
+     */
+    @PostConstruct
+    void initPatientToolCallbacks() {
+        rawPatientToolCallbacks = List.of(
+                MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks());
     }
 
     // ==================== 流式对话（核心链路） ====================
@@ -385,7 +397,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         // 每次请求独立计数器：同一次回答内所有工具累计调用次数受同一上限约束
         AtomicInteger remainingToolCalls = new AtomicInteger(resolveToolMaxIterations());
         int baseTimeoutSeconds = aiProperties.getChat().getToolTimeoutSeconds();
-        return Arrays.stream(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
+        return rawPatientToolCallbacks.stream()
                 .filter(callback -> includeWriteTools
                         || !WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()))
                 .map(callback -> (ToolCallback) new GuardedToolCallback(callback, remainingToolCalls,
@@ -460,14 +472,17 @@ public class PatientChatServiceImpl implements PatientChatService {
             AtomicBoolean firstToken = new AtomicBoolean(true);
             return Flux.<org.springframework.ai.chat.model.ChatResponse>defer(() -> {
                         meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
-                        return chatClientFactory.getChatClientWithTools(candidate, tools).prompt()
+                        ChatClient.ChatClientRequestSpec spec = chatClientFactory.getBaseChatClient(candidate).prompt()
                                 .system(ctx.systemPrompt())
                                 .messages(ctx.messages())
                                 .options(sceneOptionsFactory.options(scene))
                                 .toolContext(Map.of("patientId", ctx.user().getUserId(),
                                         "hospitalId", ctx.user().getHospitalId(),
-                                        "sessionId", ctx.session().getSessionId()))
-                                .stream()
+                                        "sessionId", ctx.session().getSessionId()));
+                        if (!tools.isEmpty()) {
+                            spec = spec.toolCallbacks(tools);
+                        }
+                        return spec.stream()
                                 .chatResponse();
                     })
                     .doOnNext(response -> recordUsage(candidate, scene, response))
