@@ -125,5 +125,13 @@ public class AiProperties {
         private int toolTimeoutSeconds = 5;
         /** 单次回答最大输出 token */
         private int maxTokens = 1024;
+        /** AI HTTP 连接超时（秒） */
+        private int httpConnectTimeoutSeconds = 10;
+        /** AI HTTP 读超时（秒，仅非流式使用） */
+        private int httpReadTimeoutSeconds = 120;
+        /** 工具执行线程池大小 */
+        private int toolExecutorThreads = 32;
+        /** 工具定义预留 token（上下文预算扣除） */
+        private int toolTokenReserve = 300;
     }
 }

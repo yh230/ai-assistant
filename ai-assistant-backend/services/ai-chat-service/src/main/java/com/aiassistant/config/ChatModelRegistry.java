@@ -6,8 +6,16 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.cloud.context.environment.EnvironmentChangeEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -20,9 +28,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * 设计目标：
  * <ul>
- *     <li>支持同时接入多个大模型提供方（OpenAI / DeepSeek / 通义 / Ollama...），运行时按模型ID取用；</li>
+ *     <li>支持同时接入多个 OpenAI 兼容端点（OpenAI / DeepSeek / 通义兼容模式等），运行时按模型ID取用；</li>
  *     <li>对无效或禁用的模型自动跳过，避免启动失败；</li>
- *     <li>新增厂商只需在 {@link #buildChatModel} 中补充构建分支，调用方无感知（开闭原则）。</li>
+ *     <li>Nacos 配置变更后按 {@link EnvironmentChangeEvent} 重建缓存，新增/修改模型无需重启；</li>
+ *     <li>HTTP 客户端复用 Spring Boot 管理的 {@link RestClient.Builder}/{@link WebClient.Builder}，保留超时、代理等定制。</li>
  * </ul>
  *
  * @author AI Assistant
@@ -39,35 +48,65 @@ public class ChatModelRegistry {
 
     private final AssistantProperties assistantProperties;
     private final ObservationRegistry observationRegistry;
+    private final ObjectProvider<RestClient.Builder> restClientBuilders;
+    private final ObjectProvider<WebClient.Builder> webClientBuilders;
     private final Map<String, ChatModel> modelCache = new ConcurrentHashMap<>();
 
-    public ChatModelRegistry(AssistantProperties assistantProperties, ObservationRegistry observationRegistry) {
+    /** 模型缓存重建锁（Nacos 刷新与请求读取并发安全） */
+    private final Object rebuildLock = new Object();
+
+    public ChatModelRegistry(AssistantProperties assistantProperties,
+                             ObservationRegistry observationRegistry,
+                             ObjectProvider<RestClient.Builder> restClientBuilders,
+                             ObjectProvider<WebClient.Builder> webClientBuilders) {
         this.assistantProperties = assistantProperties;
         this.observationRegistry = observationRegistry;
-        initModels();
+        this.restClientBuilders = restClientBuilders;
+        this.webClientBuilders = webClientBuilders;
+        rebuildModels();
     }
 
     /**
-     * 启动时根据配置构建所有「启用且凭据有效」的模型实例并放入缓存。
+     * 环境变更后重建模型缓存（Nacos 配置刷新）。
+     * <p>
+     * 使用最低优先级，确保 {@code @ConfigurationProperties} 已完成重新绑定。
+     *
+     * @param event 环境变更事件
      */
-    private void initModels() {
-        for (Map.Entry<String, ModelProperties> entry : assistantProperties.getModels().entrySet()) {
-            String modelId = entry.getKey();
-            ModelProperties props = entry.getValue();
-            if (props == null || !Boolean.TRUE.equals(props.getEnabled())) {
-                log.debug("模型[{}]未启用，跳过", modelId);
-                continue;
+    @EventListener(EnvironmentChangeEvent.class)
+    @Order(Ordered.LOWEST_PRECEDENCE)
+    void onEnvironmentChange(EnvironmentChangeEvent event) {
+        log.info("检测到环境配置变更，重建模型注册表");
+        rebuildModels();
+    }
+
+    /**
+     * 根据配置构建所有「启用且凭据有效」的模型实例并替换缓存。
+     */
+    private void rebuildModels() {
+        synchronized (rebuildLock) {
+            Map<String, ChatModel> next = new LinkedHashMap<>();
+            for (Map.Entry<String, ModelProperties> entry : assistantProperties.getModels().entrySet()) {
+                String modelId = entry.getKey();
+                ModelProperties props = entry.getValue();
+                if (props == null || !Boolean.TRUE.equals(props.getEnabled())) {
+                    log.debug("模型[{}]未启用，跳过", modelId);
+                    continue;
+                }
+                if (!isValidApiKey(props.getApiKey())) {
+                    log.warn("模型[{}]未配置有效 API Key，已跳过初始化", modelId);
+                    continue;
+                }
+                ChatModel chatModel = buildChatModel(props);
+                if (chatModel != null) {
+                    next.put(modelId, chatModel);
+                    log.info("已加载模型[{}]: type={}, baseUrl={}, model={}",
+                            modelId, props.getType(), props.getBaseUrl(), props.getModel());
+                }
             }
-            if (!isValidApiKey(props.getApiKey())) {
-                log.warn("模型[{}]未配置有效 API Key，已跳过初始化", modelId);
-                continue;
-            }
-            ChatModel chatModel = buildChatModel(props);
-            if (chatModel != null) {
-                modelCache.put(modelId, chatModel);
-                log.info("已加载模型[{}]: type={}, baseUrl={}, model={}",
-                        modelId, props.getType(), props.getBaseUrl(), props.getModel());
-            }
+            modelCache.clear();
+            modelCache.putAll(next);
+            log.info("模型注册表已刷新: models={}", next.keySet());
         }
     }
 
@@ -83,16 +122,17 @@ public class ChatModelRegistry {
             case OPENAI:
             case DASHSCOPE:
                 // DashScope 等兼容 OpenAI 协议的服务，复用 OpenAI 接入
-                OpenAiApi api = OpenAiApi.builder()
+                OpenAiApi.Builder apiBuilder = OpenAiApi.builder()
                         .baseUrl(resolveBaseUrl(props.getBaseUrl()))
-                        .apiKey(props.getApiKey())
-                        .build();
+                        .apiKey(props.getApiKey());
+                restClientBuilders.ifAvailable(apiBuilder::restClientBuilder);
+                webClientBuilders.ifAvailable(apiBuilder::webClientBuilder);
                 OpenAiChatOptions options = OpenAiChatOptions.builder()
                         .model(props.getModel())
                         .temperature(props.getTemperature() != null ? props.getTemperature() : 0.8)
                         .build();
                 return OpenAiChatModel.builder()
-                        .openAiApi(api)
+                        .openAiApi(apiBuilder.build())
                         .defaultOptions(options)
                         .observationRegistry(observationRegistry)
                         .build();

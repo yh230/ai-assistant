@@ -22,6 +22,10 @@ class AiPropertiesTest {
         assertEquals(5, props.getChat().getToolMaxIterations());
         assertEquals(5, props.getChat().getToolTimeoutSeconds());
         assertEquals(1024, props.getChat().getMaxTokens());
+        assertEquals(10, props.getChat().getHttpConnectTimeoutSeconds());
+        assertEquals(120, props.getChat().getHttpReadTimeoutSeconds());
+        assertEquals(32, props.getChat().getToolExecutorThreads());
+        assertEquals(300, props.getChat().getToolTokenReserve());
         assertEquals("simple", props.getRag().getStore());
         assertEquals(0.15, props.getRag().getChunkOverlap());
     }

@@ -53,7 +53,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
@@ -271,19 +270,19 @@ public class ChatServiceImpl implements ChatService {
         Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
         long startNanos = System.nanoTime();
 
-        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate ->
-                aiStreamSupport.tokenFlux(candidate, scene, () ->
-                        chatClientFactory.getChatClient(candidate).prompt()
-                                .system(ctx.systemPrompt())
-                                .messages(ctx.messages())
-                                .options(sceneOptionsFactory.options(scene))
-                                .stream()
-                                .chatResponse()));
+        Flux<String> tokens = modelStreamExecutor.stream(chain,
+                Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()), candidate ->
+                        aiStreamSupport.tokenFlux(candidate, scene, () ->
+                                chatClientFactory.getChatClient(candidate).prompt()
+                                        .system(ctx.systemPrompt())
+                                        .messages(ctx.messages())
+                                        .options(sceneOptionsFactory.options(scene))
+                                        .stream()
+                                        .chatResponse()));
 
         return GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
                         aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
                         guardRef::set)
-                .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
                 .take(overallTimeout)
                 .doOnComplete(() -> {
                     if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
@@ -295,7 +294,7 @@ public class ChatServiceImpl implements ChatService {
                     }
                 })
                 .onErrorResume(ex -> {
-                    if (ex instanceof TimeoutException) {
+                    if (AiStreamSupport.isTimeout(ex)) {
                         aiStreamSupport.recordFailure(primaryModel, scene, "IdleTimeout");
                     } else if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
                         // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次

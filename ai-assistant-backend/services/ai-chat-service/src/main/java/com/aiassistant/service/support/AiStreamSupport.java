@@ -9,6 +9,7 @@ import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
@@ -51,6 +52,16 @@ public class AiStreamSupport {
                     }
                 })
                 .doOnError(ex -> recordFailure(modelId, scene, failureReason(ex)));
+    }
+
+    /**
+     * 判断异常是否由单模型/整体超时引起（含链耗尽时保留的 cause）。
+     *
+     * @param ex 异常
+     * @return 是超时异常返回 true
+     */
+    public static boolean isTimeout(Throwable ex) {
+        return ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException;
     }
 
     /**

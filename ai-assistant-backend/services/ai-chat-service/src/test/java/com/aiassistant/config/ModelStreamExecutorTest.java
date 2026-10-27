@@ -3,6 +3,7 @@ package com.aiassistant.config;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -81,5 +82,31 @@ class ModelStreamExecutorTest {
                         model -> Flux.just("", "hello", ""))
                 .collectList().block();
         assertEquals(List.of("hello"), out);
+    }
+
+    @Test
+    void fallsBackWhenCandidateTimesOutBeforeToken() {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> out = new ModelStreamExecutor().stream(List.of("a", "b"), Duration.ofMillis(50), model -> {
+            if (calls.getAndIncrement() == 0) {
+                return Flux.never();
+            }
+            return Flux.just("ok");
+        }).collectList().block();
+        assertEquals(List.of("ok"), out);
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void doesNotFallbackWhenTimeoutAfterToken() {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> out = new ModelStreamExecutor().stream(List.of("a", "b"), Duration.ofMillis(50), model -> {
+                    calls.incrementAndGet();
+                    return Flux.concat(Flux.just("partial"), Flux.never());
+                })
+                .onErrorResume(e -> Flux.just("中断"))
+                .collectList().block();
+        assertEquals(List.of("partial", "中断"), out);
+        assertEquals(1, calls.get());
     }
 }

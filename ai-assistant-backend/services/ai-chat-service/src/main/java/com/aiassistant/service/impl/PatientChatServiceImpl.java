@@ -65,7 +65,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -471,27 +470,27 @@ public class PatientChatServiceImpl implements PatientChatService {
         Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
         long startNanos = System.nanoTime();
 
-        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate ->
-                aiStreamSupport.tokenFlux(candidate, scene, () -> {
-                    ChatClient.ChatClientRequestSpec spec = chatClientFactory.getBaseChatClient(candidate).prompt()
-                            .system(ctx.systemPrompt())
-                            .messages(ctx.messages())
-                            .options(sceneOptionsFactory.options(scene))
-                            .toolContext(Map.of("patientId", ctx.user().getUserId(),
-                                    "hospitalId", ctx.user().getHospitalId(),
-                                    "sessionId", ctx.session().getSessionId()));
-                    if (!tools.isEmpty()) {
-                        spec = spec.toolCallbacks(tools);
-                    }
-                    return spec.stream()
-                            .chatResponse();
-                }));
+        Flux<String> tokens = modelStreamExecutor.stream(chain,
+                Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()), candidate ->
+                        aiStreamSupport.tokenFlux(candidate, scene, () -> {
+                            ChatClient.ChatClientRequestSpec spec = chatClientFactory.getBaseChatClient(candidate).prompt()
+                                    .system(ctx.systemPrompt())
+                                    .messages(ctx.messages())
+                                    .options(sceneOptionsFactory.options(scene))
+                                    .toolContext(Map.of("patientId", ctx.user().getUserId(),
+                                            "hospitalId", ctx.user().getHospitalId(),
+                                            "sessionId", ctx.session().getSessionId()));
+                            if (!tools.isEmpty()) {
+                                spec = spec.toolCallbacks(tools);
+                            }
+                            return spec.stream()
+                                    .chatResponse();
+                        }));
 
         Flux<ServerSentEvent<String>> content =
                 GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
                                 aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
                                 guardRef::set)
-                        .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
                         .take(overallTimeout)
                         .doOnComplete(() -> {
                             // take 到点属正常完成，没有异常信号；按耗时判定是否被总超时截断
@@ -505,7 +504,7 @@ public class PatientChatServiceImpl implements PatientChatService {
                             }
                         })
                         .onErrorResume(ex -> {
-                            if (ex instanceof TimeoutException) {
+                            if (AiStreamSupport.isTimeout(ex)) {
                                 // 生成超时（空闲超时）：按异常处理，固定文案由顶层转为 error 事件
                                 aiStreamSupport.recordFailure(primaryModel, scene, "IdleTimeout");
                                 log.warn("患者侧 AI 生成超时（{} 秒无新 token）: sessionId={}",
