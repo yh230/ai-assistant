@@ -6,6 +6,7 @@ import com.aiassistant.config.ChatClientFactory;
 import com.aiassistant.config.ChatModelRegistry;
 import com.aiassistant.config.ModelStreamExecutor;
 import com.aiassistant.config.SceneOptionsFactory;
+import com.aiassistant.config.ToolExecutionPool;
 import com.aiassistant.dto.ChatResponse;
 import com.aiassistant.dto.PatientChatRequest;
 import com.aiassistant.dto.SessionDTO;
@@ -128,6 +129,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final SceneOptionsFactory sceneOptionsFactory;
     private final OutputSafetyFilter safetyFilter;
     private final PatientTools patientTools;
+    private final ToolExecutionPool toolExecutionPool;
     private final PendingActionService pendingActionService;
     private final ActionExecutor actionExecutor;
     private final ChatSessionRepository sessionRepository;
@@ -417,7 +419,8 @@ public class PatientChatServiceImpl implements PatientChatService {
                 .filter(callback -> includeWriteTools
                         || !WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()))
                 .map(callback -> (ToolCallback) new GuardedToolCallback(callback, remainingToolCalls,
-                        resolveToolTimeout(callback.getToolDefinition().name(), baseTimeoutSeconds), meterRegistry))
+                        resolveToolTimeout(callback.getToolDefinition().name(), baseTimeoutSeconds),
+                        meterRegistry, toolExecutionPool.executor()))
                 .toList();
     }
 
