@@ -7,7 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AI 业务配置（Nacos common-shared.yaml 下发，禁止业务代码硬编码 prompt/文案/参数）
+ * AI 业务配置（Nacos common-shared.yaml 下发；核心 prompt/风控文案/运行参数禁止硬编码，
+ * 本地降级话术集中内置，可由后续配置化）
  *
  * @author yh
  * @date 2026-10-13
@@ -88,15 +89,13 @@ public class AiProperties {
     }
 
     /**
-     * Elasticsearch 连接与索引配置。
+     * Elasticsearch 索引配置（连接地址由 {@code spring.elasticsearch.uris} 提供）。
      *
      * @author yh
      * @date 2026-10-19
      */
     @Data
     public static class Elasticsearch {
-        /** ES 服务地址 */
-        private String uri = "http://localhost:9200";
         /** 知识片段索引名 */
         private String indexName = "ai_knowledge_chunk_v1";
         /** 分词器名称 */

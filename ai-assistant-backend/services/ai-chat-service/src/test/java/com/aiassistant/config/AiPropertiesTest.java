@@ -35,7 +35,6 @@ class AiPropertiesTest {
         AiProperties props = new AiProperties();
         assertEquals(384, props.getRag().getEmbeddingDimensions());
         assertEquals(0.35, props.getRag().getGroundednessThreshold());
-        assertEquals("http://localhost:9200", props.getRag().getElasticsearch().getUri());
         assertEquals("ai_knowledge_chunk_v1", props.getRag().getElasticsearch().getIndexName());
         assertEquals("cjk_ngram", props.getRag().getElasticsearch().getAnalyzer());
     }

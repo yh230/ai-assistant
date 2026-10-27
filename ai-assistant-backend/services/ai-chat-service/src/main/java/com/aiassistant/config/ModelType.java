@@ -25,10 +25,6 @@ public enum ModelType {
         this.value = value;
     }
 
-    public String getValue() {
-        return value;
-    }
-
     /**
      * 根据配置字符串解析模型类型，未知类型默认按 OpenAI 兼容处理（提高容错）。
      *

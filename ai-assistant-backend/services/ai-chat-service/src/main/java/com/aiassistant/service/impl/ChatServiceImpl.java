@@ -27,6 +27,8 @@ import com.aiassistant.service.WeatherService;
 import com.aiassistant.service.support.AiStreamSupport;
 import com.aiassistant.service.support.ChatMessagePersister;
 import com.aiassistant.service.support.ChatTextSupport;
+import com.aiassistant.service.support.CityExtractor;
+import com.aiassistant.service.support.WeatherTextFormatter;
 import com.common.auth.UserSnapshot;
 import com.common.constant.ChatConstants;
 import com.common.constant.SecurityConstants;
@@ -55,8 +57,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -86,10 +86,6 @@ public class ChatServiceImpl implements ChatService {
 
     // ==================== 常量 ====================
 
-    /** 城市提取正则 */
-    private static final Pattern CITY_PATTERN =
-            Pattern.compile("([\\u4e00-\\u9fa5]{2,8})(?:市|地区)?的?(?:今天|现在|明天|当前)?(?:实时)?(?:的)?天气");
-
     /** 用户画像注入分隔符 */
     private static final String MEMORY_SEPARATOR = "\n\n## 你对用户的了解（来自过去的对话记录）\n";
 
@@ -111,6 +107,7 @@ public class ChatServiceImpl implements ChatService {
     private final ConversationMemory conversationMemory;
     private final UserMemoryBuilder userMemoryBuilder;
     private final WeatherService weatherService;
+    private final WeatherTextFormatter weatherTextFormatter;
     private final PlatformTransactionManager txManager;
     private final ObjectMapper objectMapper;
     private final ChatMessagePersister messagePersister;
@@ -671,7 +668,7 @@ public class ChatServiceImpl implements ChatService {
      * 本地天气回答（真实调用天气服务）。
      */
     private String answerWeatherLocally(String userMessage) {
-        String city = extractCity(userMessage);
+        String city = CityExtractor.firstCity(userMessage);
         if (city == null) {
             return "想查哪个城市的天气呀？告诉我城市名，比如「北京天气」「上海今天多少度」，我马上帮你查 ☀️";
         }
@@ -681,55 +678,7 @@ public class ChatServiceImpl implements ChatService {
             return "唔，没查到「" + city + "」的天气，" +
                     (w != null && w.getError() != null ? w.getError() : "换个城市名试试？") + " 🤔";
         }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format("%s现在%s，气温 %.1f℃", w.getCity(), w.getWeatherDescription(), w.getCurrentTemperature()));
-        if (w.getApparentTemperature() != null) {
-            sb.append(String.format("（体感 %.1f℃）", w.getApparentTemperature()));
-        }
-        if (w.getHumidity() != null) {
-            sb.append(String.format("，湿度 %d%%", w.getHumidity()));
-        }
-        if (w.getWindSpeed() != null) {
-            sb.append(String.format("，%s %.1fkm/h", w.getWindDirection(), w.getWindSpeed()));
-        }
-        sb.append("。");
-
-        double temp = w.getCurrentTemperature();
-        if (w.getPrecipitation() != null && w.getPrecipitation() > 0) {
-            sb.append("外面在下雨，出门记得带伞哦 ☔");
-        } else if (temp <= 5) {
-            sb.append("天儿挺冷的，多穿点别冻着~ 🧣");
-        } else if (temp >= 32) {
-            sb.append("有点热，注意防暑多喝水 🥤");
-        } else {
-            sb.append("天气还不错，适合出去走走 😊");
-        }
-
-        if (w.getDailyForecasts() != null && w.getDailyForecasts().size() > 1) {
-            WeatherResponse.DailyForecast tomorrow = w.getDailyForecasts().get(1);
-            sb.append(String.format("明天%s，%.0f~%.0f℃。",
-                    tomorrow.getDescription(), tomorrow.getMinTemperature(), tomorrow.getMaxTemperature()));
-        }
-        return sb.toString();
-    }
-
-    /**
-     * 从消息中提取城市名。
-     */
-    private String extractCity(String message) {
-        if (message == null) {
-            return null;
-        }
-        Matcher matcher = CITY_PATTERN.matcher(message);
-        if (matcher.find()) {
-            String city = matcher.group(1);
-            if (city.matches("(查|问|看|找|这|那|个|的|我|你|他|她|今|明|后|白|晚)+")) {
-                return null;
-            }
-            return city;
-        }
-        return null;
+        return weatherTextFormatter.forLocal(w);
     }
 
     /**

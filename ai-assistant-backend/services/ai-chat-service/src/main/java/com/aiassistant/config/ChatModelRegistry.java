@@ -176,15 +176,6 @@ public class ChatModelRegistry {
     }
 
     /**
-     * 返回所有可用模型ID。
-     *
-     * @return 可用模型ID集合
-     */
-    public Set<String> getActiveModelIds() {
-        return new LinkedHashSet<>(modelCache.keySet());
-    }
-
-    /**
      * 构建故障转移模型链：主模型优先（仅当可用），随后按配置顺序追加可用备用模型，自动去重。
      *
      * @param primary 主模型ID
