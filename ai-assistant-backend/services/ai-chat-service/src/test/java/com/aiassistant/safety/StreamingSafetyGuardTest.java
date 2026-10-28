@@ -203,8 +203,9 @@ class StreamingSafetyGuardTest {
         StreamingSafetyGuard guard = new StreamingSafetyGuard(
                 List.of("用药建议"), "不能提供用药建议", 0, true);
         StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("不能开药。以下是", "用药建议"));
+        String output = String.join("", guarded.tokens().collectList().block());
         assertTrue(guarded.blocked().get());
-        assertTrue(String.join("", guarded.tokens().collectList().block()).endsWith("不能提供用药建议"));
+        assertTrue(output.endsWith("不能提供用药建议"));
     }
 
     @Test
@@ -212,6 +213,7 @@ class StreamingSafetyGuardTest {
         // 输入侧/严格模式不做拒绝语境豁免
         StreamingSafetyGuard guard = new StreamingSafetyGuard(List.of("用药建议"), "不能提供用药建议");
         StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("不能提供用药建议"));
+        assertEquals(List.of("不能提供用药建议"), guarded.tokens().collectList().block());
         assertTrue(guarded.blocked().get());
     }
 
