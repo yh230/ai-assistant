@@ -6,6 +6,7 @@ import com.aiassistant.config.ChatClientFactory;
 import com.aiassistant.config.ChatModelRegistry;
 import com.aiassistant.config.ModelStreamExecutor;
 import com.aiassistant.config.SceneOptionsFactory;
+import com.aiassistant.config.ToolExecutionPool;
 import com.aiassistant.dto.ChatResponse;
 import com.aiassistant.dto.PatientChatRequest;
 import com.aiassistant.dto.SessionDTO;
@@ -26,8 +27,10 @@ import com.aiassistant.service.ActionExecutor;
 import com.aiassistant.service.AssistantRoleService;
 import com.aiassistant.service.PatientChatService;
 import com.aiassistant.service.PendingActionService;
+import com.aiassistant.service.support.AiStreamSupport;
 import com.aiassistant.service.support.ChatMessagePersister;
 import com.aiassistant.service.support.ChatPersistContent;
+import com.aiassistant.service.support.ChatTextSupport;
 import com.aiassistant.tool.GuardedToolCallback;
 import com.aiassistant.tool.PatientTools;
 import com.common.auth.UserSnapshot;
@@ -40,9 +43,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.http.codec.ServerSentEvent;
@@ -51,7 +54,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
-import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -59,13 +61,11 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -129,6 +129,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final SceneOptionsFactory sceneOptionsFactory;
     private final OutputSafetyFilter safetyFilter;
     private final PatientTools patientTools;
+    private final ToolExecutionPool toolExecutionPool;
     private final PendingActionService pendingActionService;
     private final ActionExecutor actionExecutor;
     private final ChatSessionRepository sessionRepository;
@@ -141,11 +142,15 @@ public class PatientChatServiceImpl implements PatientChatService {
     private final KnowledgeReferencesBuilder knowledgeReferencesBuilder;
     private final GroundednessChecker groundednessChecker;
     private final AssistantRoleService assistantRoleService;
+    private final AiStreamSupport aiStreamSupport;
     private final MeterRegistry meterRegistry;
     private final ChatMessagePersister messagePersister;
 
     /** 当前活跃患者 SSE 流数（Gauge 底层数据源） */
     private final AtomicInteger patientSseActive = new AtomicInteger();
+
+    /** 患者工具原始回调（启动时扫描一次，按请求再包装限额/超时） */
+    private List<ToolCallback> rawPatientToolCallbacks;
 
     /**
      * 注册患者 SSE 活跃流 Gauge（容器就绪后执行一次）
@@ -153,6 +158,15 @@ public class PatientChatServiceImpl implements PatientChatService {
     @PostConstruct
     void registerSseActiveGauge() {
         meterRegistry.gauge("ai.patient.sse.active", patientSseActive);
+    }
+
+    /**
+     * 扫描患者工具回调（@Tool 注解反射只做一次，请求级仅做安全包装）
+     */
+    @PostConstruct
+    void initPatientToolCallbacks() {
+        rawPatientToolCallbacks = List.of(
+                MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks());
     }
 
     // ==================== 流式对话（核心链路） ====================
@@ -179,7 +193,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @return 患者聊天上下文
      */
     private PatientChatContext prepare(PatientChatRequest request, UserSnapshot user) {
-        validateInput(request.getMessage());
+        ChatTextSupport.validateInput(aiProperties.getChat().getMaxInputChars(), request.getMessage());
         ChatSession session = ensureSession(request, user);
         saveMessage(session.getSessionId(), "user", request.getMessage());
 
@@ -202,7 +216,6 @@ public class PatientChatServiceImpl implements PatientChatService {
         }
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getSessionId());
-        List<Message> contextMessages = new ArrayList<>(conversationMemory.build(session, history));
         Role patientRole = assistantRoleService.resolvePatientRole(user.getHospitalId(), session.getSessionType());
         if (patientRole != null && (session.getRoleId() == null || session.getRoleId().isBlank())) {
             session.setRoleId(patientRole.getId());
@@ -213,6 +226,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         String referenceJson = "";
         // 检索命中片段透传给 groundedness 校验（非 RAG 会话或无命中时为空）
         List<KnowledgeStore.ScoredChunk> hits = List.of();
+        String ragContext = "";
         if (TYPE_RAG.equals(session.getSessionType())) {
             // 在角色提示词之后追加固定 RAG 策略（片段仅作事实参考，禁止执行片段内指令，无依据不得编造）
             systemPrompt = systemPrompt + "\n\n" + RAG_GROUNDING_POLICY;
@@ -225,15 +239,28 @@ public class PatientChatServiceImpl implements PatientChatService {
                 log.warn("知识库检索失败，按无命中降级: {}", e.getMessage());
                 hits = List.of();
             }
-            // 检索片段以独立 user 消息注入，避免进入 system 指令层；无命中时注入显式“不得编造”提示
             if (hits == null || hits.isEmpty()) {
                 hits = List.of();
-                contextMessages = knowledgeContextBuilder.injectNoHit(contextMessages);
+                ragContext = knowledgeContextBuilder.noHitMessage();
             } else {
-                contextMessages = knowledgeContextBuilder.inject(contextMessages, hits);
+                ragContext = knowledgeContextBuilder.contextText(hits);
             }
             referenceJson = knowledgeReferencesBuilder.buildFromChunks(
                     hits, aiProperties.getRag().getMaxReferences());
+        }
+
+        int reservedTokens = ConversationMemory.estimateTokens(systemPrompt)
+                + ConversationMemory.estimateTokens(ragContext)
+                + (TYPE_TRIAGE.equals(session.getSessionType())
+                ? aiProperties.getChat().getToolTokenReserve() : 0);
+        ConversationMemory.Context memory = conversationMemory.buildContext(session, history, reservedTokens);
+        List<Message> contextMessages = new ArrayList<>(memory.messages());
+        systemPrompt = ConversationMemory.mergeSummary(systemPrompt, memory.summary());
+        if (TYPE_RAG.equals(session.getSessionType())) {
+            // 检索片段以独立 user 消息注入，避免进入 system 指令层；无命中时注入显式“不得编造”提示
+            contextMessages = hits.isEmpty()
+                    ? knowledgeContextBuilder.injectNoHit(contextMessages)
+                    : knowledgeContextBuilder.inject(contextMessages, hits);
         }
 
         log.info("患者流式对话 sessionId={}, sessionType={}, 历史消息数={}",
@@ -255,7 +282,8 @@ public class PatientChatServiceImpl implements PatientChatService {
     private Flux<ServerSentEvent<String>> buildReplyFlux(PatientChatContext ctx) {
         String sessionId = ctx.session().getSessionId();
         ServerSentEvent<String> sessionEvent = ServerSentEvent.builder(
-                        toJson(Map.of("sessionId", sessionId, "title", ctx.session().getTitle())))
+                        ChatTextSupport.toJson(objectMapper,
+                                Map.of("sessionId", sessionId, "title", ctx.session().getTitle())))
                 .event(ChatConstants.EVENT_SESSION)
                 .build();
 
@@ -265,7 +293,8 @@ public class PatientChatServiceImpl implements PatientChatService {
             ServerSentEvent<String> emergencyEvent = ServerSentEvent.builder(ctx.emergencyReply())
                     .event(ChatConstants.EVENT_TOKEN)
                     .build();
-            ServerSentEvent<String> emergencyDone = ServerSentEvent.builder(toJson(Map.of("localFallback", false)))
+            ServerSentEvent<String> emergencyDone = ServerSentEvent.builder(
+                            ChatTextSupport.toJson(objectMapper, Map.of("localFallback", false)))
                     .event(ChatConstants.EVENT_DONE)
                     .build();
             return Flux.concat(Mono.just(sessionEvent), Mono.just(emergencyEvent), Mono.just(emergencyDone))
@@ -349,7 +378,8 @@ public class PatientChatServiceImpl implements PatientChatService {
         return Mono.fromCallable(() -> pendingActionService.findLatestPending(sessionId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(pending -> pending
-                        .map(action -> Mono.just(ServerSentEvent.builder(toJson(Map.of(
+                        .map(action -> Mono.just(ServerSentEvent.builder(ChatTextSupport.toJson(objectMapper,
+                                        Map.of(
                                         "actionId", action.getActionId(),
                                         "toolName", action.getToolName(),
                                         "summary", action.getSummaryText())))
@@ -371,7 +401,7 @@ public class PatientChatServiceImpl implements PatientChatService {
      * 若包装层比下游 Feign 超时更早触发，模型会收到超时错误，但下游可能仍在继续执行并最终落库，
      * 造成“模型认为失败、系统实际成功”的语义不一致。放大包装层超时让下游 Feign 先超时并返回明确错误，
      * 保证先失败的一方是真正执行写操作的一方。代价是超时写调用会占用工具执行线程更久，
-     * 线程数由 GuardedToolCallback 的固定大小守护线程池封顶。
+     * 线程数由 {@link ToolExecutionPool} 的固定大小守护线程池封顶。
      * 写工具识别基于包装后透传的 {@code getToolDefinition().name()}，不因包装失效。
      *
      * @param ctx               患者聊天上下文
@@ -385,11 +415,12 @@ public class PatientChatServiceImpl implements PatientChatService {
         // 每次请求独立计数器：同一次回答内所有工具累计调用次数受同一上限约束
         AtomicInteger remainingToolCalls = new AtomicInteger(resolveToolMaxIterations());
         int baseTimeoutSeconds = aiProperties.getChat().getToolTimeoutSeconds();
-        return Arrays.stream(MethodToolCallbackProvider.builder().toolObjects(patientTools).build().getToolCallbacks())
+        return rawPatientToolCallbacks.stream()
                 .filter(callback -> includeWriteTools
                         || !WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()))
                 .map(callback -> (ToolCallback) new GuardedToolCallback(callback, remainingToolCalls,
-                        resolveToolTimeout(callback.getToolDefinition().name(), baseTimeoutSeconds), meterRegistry))
+                        resolveToolTimeout(callback.getToolDefinition().name(), baseTimeoutSeconds),
+                        meterRegistry, toolExecutionPool.executor()))
                 .toList();
     }
 
@@ -455,62 +486,50 @@ public class PatientChatServiceImpl implements PatientChatService {
         Duration overallTimeout = Duration.ofSeconds(aiProperties.getChat().getOverallTimeoutSeconds());
         long startNanos = System.nanoTime();
 
-        Flux<String> tokens = modelStreamExecutor.stream(chain, candidate -> {
-            long startNanosPerModel = System.nanoTime();
-            AtomicBoolean firstToken = new AtomicBoolean(true);
-            return Flux.<org.springframework.ai.chat.model.ChatResponse>defer(() -> {
-                        meterRegistry.counter("ai.model.requests", "model", candidate, "scene", scene).increment();
-                        return chatClientFactory.getChatClientWithTools(candidate, tools).prompt()
-                                .system(ctx.systemPrompt())
-                                .messages(ctx.messages())
-                                .options(sceneOptionsFactory.options(scene))
-                                .toolContext(Map.of("patientId", ctx.user().getUserId(),
-                                        "hospitalId", ctx.user().getHospitalId(),
-                                        "sessionId", ctx.session().getSessionId()))
-                                .stream()
-                                .chatResponse();
-                    })
-                    .doOnNext(response -> recordUsage(candidate, scene, response))
-                    .map(this::extractText)
-                    .filter(StringUtils::hasText)
-                    .doOnNext(token -> {
-                        if (firstToken.compareAndSet(true, false)) {
-                            meterRegistry.timer("ai.model.latency", "model", candidate)
-                                    .record(Duration.ofNanos(System.nanoTime() - startNanosPerModel));
-                        }
-                    })
-                    .doOnError(ex -> recordFailure(candidate, scene, failureReason(ex)));
-        });
+        Flux<String> tokens = modelStreamExecutor.stream(chain,
+                Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()), candidate ->
+                        aiStreamSupport.tokenFlux(candidate, scene, () -> {
+                            ChatClient.ChatClientRequestSpec spec = chatClientFactory.getBaseChatClient(candidate).prompt()
+                                    .system(ctx.systemPrompt())
+                                    .messages(ctx.messages())
+                                    .options(sceneOptionsFactory.options(scene))
+                                    .toolContext(Map.of("patientId", ctx.user().getUserId(),
+                                            "hospitalId", ctx.user().getHospitalId(),
+                                            "sessionId", ctx.session().getSessionId()));
+                            if (!tools.isEmpty()) {
+                                spec = spec.toolCallbacks(tools);
+                            }
+                            return spec.stream()
+                                    .chatResponse();
+                        }));
 
         Flux<ServerSentEvent<String>> content =
                 GuardedSse.guardedSse(tokens.publishOn(Schedulers.boundedElastic()), full, blocked,
                                 aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
-                                guardRef::set)
-                        .timeout(Duration.ofSeconds(aiProperties.getChat().getIdleTimeoutSeconds()))
+                                guardRef::set, true)
                         .take(overallTimeout)
                         .doOnComplete(() -> {
                             // take 到点属正常完成，没有异常信号；按耗时判定是否被总超时截断
                             if (System.nanoTime() - startNanos >= overallTimeout.toNanos()) {
                                 truncated.set(true);
-                                recordFailure(primaryModel, scene, "OverallTimeout");
-                                meterRegistry.counter("ai.model.truncated", "model", primaryModel, "scene", scene)
-                                        .increment();
+                                aiStreamSupport.recordFailure(primaryModel, scene, "OverallTimeout");
+                                aiStreamSupport.recordTruncated(primaryModel, scene);
                                 log.warn("患者侧 AI 生成达总超时（{} 秒）被截断: sessionId={}",
                                         aiProperties.getChat().getOverallTimeoutSeconds(),
                                         ctx.session().getSessionId());
                             }
                         })
                         .onErrorResume(ex -> {
-                            if (ex instanceof TimeoutException) {
+                            if (AiStreamSupport.isTimeout(ex)) {
                                 // 生成超时（空闲超时）：按异常处理，固定文案由顶层转为 error 事件
-                                recordFailure(primaryModel, scene, "IdleTimeout");
+                                aiStreamSupport.recordFailure(primaryModel, scene, "IdleTimeout");
                                 log.warn("患者侧 AI 生成超时（{} 秒无新 token）: sessionId={}",
                                         aiProperties.getChat().getIdleTimeoutSeconds(), ctx.session().getSessionId());
                                 return Flux.error(new BusinessException("生成超时，请稍后重试"));
                             }
                             if (ex instanceof ModelStreamExecutor.ModelChainExhaustedException && emptyChain) {
                                 // 有候选模型时失败已由候选级 doOnError 计数，此处不再重复计；仅空链无候选，计数一次
-                                recordFailure(primaryModel, scene, "EmptyChain");
+                                aiStreamSupport.recordFailure(primaryModel, scene, "EmptyChain");
                             }
                             log.warn("患者侧 AI 流式异常，降级本地引擎: {}", ex.getMessage());
                             fallback.set(true);
@@ -530,18 +549,6 @@ public class PatientChatServiceImpl implements PatientChatService {
     private boolean hasWriteTools(List<ToolCallback> tools) {
         return tools.stream().anyMatch(callback ->
                 WRITE_TOOL_NAMES.contains(callback.getToolDefinition().name()));
-    }
-
-    /**
-     * 记录失败计数（model + reason 维度）。
-     *
-     * @param modelId 模型ID
-     * @param scene   场景标识
-     * @param reason  失败原因标签
-     */
-    private void recordFailure(String modelId, String scene, String reason) {
-        meterRegistry.counter("ai.model.failures", "model", modelId, "scene", scene, "reason", reason)
-                .increment();
     }
 
     /**
@@ -572,7 +579,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         if (grounded != null) {
             payload.put("grounded", grounded);
         }
-        return ServerSentEvent.builder(toJson(payload))
+        return ServerSentEvent.builder(ChatTextSupport.toJson(objectMapper, payload))
                 .event(ChatConstants.EVENT_DONE)
                 .build();
     }
@@ -617,57 +624,6 @@ public class PatientChatServiceImpl implements PatientChatService {
     }
 
     /**
-     * 从模型响应中提取正文（工具调用等无文本片段返回空串，由调用方过滤）。
-     *
-     * @param response 模型响应
-     * @return 正文文本
-     */
-    private String extractText(org.springframework.ai.chat.model.ChatResponse response) {
-        if (response == null || response.getResult() == null || response.getResult().getOutput() == null
-                || response.getResult().getOutput().getText() == null) {
-            return "";
-        }
-        return response.getResult().getOutput().getText();
-    }
-
-    /**
-     * 记录模型用量指标（提示/补全 token）；流式响应未携带用量时静默跳过。
-     *
-     * @param modelId 模型ID
-     * @param scene   场景标识
-     * @param response 模型响应
-     */
-    private void recordUsage(String modelId, String scene, org.springframework.ai.chat.model.ChatResponse response) {
-        if (response == null || response.getMetadata() == null) {
-            return;
-        }
-        Usage usage = response.getMetadata().getUsage();
-        if (usage == null) {
-            return;
-        }
-        Integer promptTokens = usage.getPromptTokens();
-        if (promptTokens != null && promptTokens > 0) {
-            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "prompt")
-                    .increment(promptTokens);
-        }
-        Integer completionTokens = usage.getCompletionTokens();
-        if (completionTokens != null && completionTokens > 0) {
-            meterRegistry.counter("ai.model.tokens", "model", modelId, "scene", scene, "type", "completion")
-                    .increment(completionTokens);
-        }
-    }
-
-    /**
-     * 归一化失败原因标签（异常类型名），用于失败计数维度。
-     *
-     * @param ex 异常
-     * @return 失败原因标签
-     */
-    private String failureReason(Throwable ex) {
-        return ex.getClass().getSimpleName();
-    }
-
-    /**
      * 构建本地降级 token 流（按字符切片模拟打字机效果）：token 先经流式风控守卫，
      * 再映射为 SSE 并累积正文，与 AI 分支共用同一拦截标记。
      *
@@ -681,11 +637,11 @@ public class PatientChatServiceImpl implements PatientChatService {
                                                               AtomicBoolean blocked,
                                                               AtomicReference<StreamingSafetyGuard.Guarded> guardRef) {
         String localReply = generateLocalResponse(ctx.userMessage());
-        List<String> chunks = splitIntoChunks(localReply, ChatConstants.LOCAL_CHUNK_SIZE);
+        List<String> chunks = ChatTextSupport.splitIntoChunks(localReply, ChatConstants.LOCAL_CHUNK_SIZE);
         return GuardedSse.guardedSse(
                 Flux.fromIterable(chunks).delayElements(Duration.ofMillis(ChatConstants.LOCAL_STREAM_INTERVAL_MS)),
                 full, blocked, aiProperties.getSafety().getKeywords(), aiProperties.getSafety().getBlockedMessage(),
-                guardRef == null ? null : guardRef::set);
+                guardRef == null ? null : guardRef::set, true);
     }
 
     /**
@@ -717,10 +673,11 @@ public class PatientChatServiceImpl implements PatientChatService {
                 return Mono.empty();
             }
             String body = full.toString();
-            if (safetyFilter.blockedInput(body)) {
+            if (safetyFilter.blockedOutput(body)) {
                 blocked.set(true);
                 log.warn("输出侧命中风控敏感词，已拦截并按标准文案落库");
-                return Mono.just(ServerSentEvent.builder(toJson(Map.of("message", safetyFilter.blockedMessage())))
+                return Mono.just(ServerSentEvent.builder(ChatTextSupport.toJson(objectMapper,
+                                Map.of("message", safetyFilter.blockedMessage())))
                         .event(ChatConstants.EVENT_ERROR)
                         .build());
             }
@@ -757,7 +714,8 @@ public class PatientChatServiceImpl implements PatientChatService {
     private Flux<ServerSentEvent<String>> buildErrorFlux(Throwable ex) {
         log.error("患者流式聊天处理失败", ex);
         String msg = ex instanceof BusinessException ? ex.getMessage() : "服务暂时不可用，请稍后重试";
-        return Flux.just(ServerSentEvent.builder(toJson(Map.of("message", msg)))
+        return Flux.just(ServerSentEvent.builder(ChatTextSupport.toJson(objectMapper,
+                        Map.of("message", msg)))
                 .event(ChatConstants.EVENT_ERROR)
                 .build());
     }
@@ -803,14 +761,21 @@ public class PatientChatServiceImpl implements PatientChatService {
         saveMessage(session.getSessionId(), "user", confirmMessage);
 
         List<ChatMessage> history = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getSessionId());
-        List<Message> contextMessages = new ArrayList<>(conversationMemory.build(session, history));
-        contextMessages.add(new UserMessage("[系统] 用户已确认执行「" + action.getSummaryText()
-                + "」。操作结果：" + resultText + "。请用通俗友好的语言把结果告知用户，不要重复请求确认。"));
+        String systemPrompt = assistantRoleService.resolvePatientSystemPrompt(
+                user.getHospitalId(), session.getSessionType());
+        String confirmInstruction = "[系统] 用户已确认执行「" + action.getSummaryText()
+                + "」。操作结果：" + resultText + "。请用通俗友好的语言把结果告知用户，不要重复请求确认。";
+        int reservedTokens = ConversationMemory.estimateTokens(systemPrompt)
+                + ConversationMemory.estimateTokens(confirmInstruction)
+                + aiProperties.getChat().getToolTokenReserve();
+        ConversationMemory.Context memory = conversationMemory.buildContext(session, history, reservedTokens);
+        List<Message> contextMessages = new ArrayList<>(memory.messages());
+        systemPrompt = ConversationMemory.mergeSummary(systemPrompt, memory.summary());
+        contextMessages.add(new UserMessage(confirmInstruction));
 
         log.info("患者确认写操作 actionId={}, tool={}, 会话={}, 结果={}",
                 actionId, action.getToolName(), session.getSessionId(), resultText);
-        return new PatientChatContext(session, user, contextMessages,
-                assistantRoleService.resolvePatientSystemPrompt(user.getHospitalId(), session.getSessionType()),
+        return new PatientChatContext(session, user, contextMessages, systemPrompt,
                 confirmMessage, "", null, List.of());
     }
 
@@ -1021,18 +986,6 @@ public class PatientChatServiceImpl implements PatientChatService {
                         .sessionId(sessionId).role(role).content(content).build()));
     }
 
-    /**
-     * 校验用户消息长度（服务层兜底，上限来自 {@code ai.chat.max-input-chars}）
-     *
-     * @param message 用户消息
-     */
-    private void validateInput(String message) {
-        int maxChars = aiProperties.getChat().getMaxInputChars();
-        if (message != null && message.length() > maxChars) {
-            throw new BusinessException("消息长度不能超过" + maxChars + "字");
-        }
-    }
-
     // ==================== 本地回复引擎（降级方案） ====================
 
     /**
@@ -1055,40 +1008,6 @@ public class PatientChatServiceImpl implements PatientChatService {
         }
         return "您说的是：「" + msg + "」。当前智能问答服务暂时不可用（本地模式），"
                 + "导诊相关信息建议稍后重试或前往医院线下分诊台咨询。";
-    }
-
-    /**
-     * 将文本按固定长度切片
-     *
-     * @param text      原始文本
-     * @param chunkSize 每片字符数
-     * @return 切片列表；文本为空时返回空列表
-     */
-    private List<String> splitIntoChunks(String text, int chunkSize) {
-        List<String> chunks = new ArrayList<>();
-        if (text == null || text.isEmpty()) {
-            return chunks;
-        }
-        for (int i = 0; i < text.length(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, text.length());
-            chunks.add(text.substring(i, end));
-        }
-        return chunks;
-    }
-
-    /**
-     * 将对象序列化为 JSON 字符串（失败返回空对象）
-     *
-     * @param obj 待序列化对象
-     * @return JSON 字符串
-     */
-    private String toJson(Object obj) {
-        try {
-            return objectMapper.writeValueAsString(obj);
-        } catch (Exception e) {
-            log.warn("JSON 序列化失败: {}", e.getMessage());
-            return "{}";
-        }
     }
 
     // ==================== 内部上下文记录 ====================

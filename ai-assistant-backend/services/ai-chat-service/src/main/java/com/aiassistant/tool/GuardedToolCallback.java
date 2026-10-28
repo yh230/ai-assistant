@@ -14,7 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -27,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *     <li><b>次数上限</b>：同一请求内所有工具共享一个 {@link AtomicInteger} 剩余次数，
  *         超出上限不再执行底层工具，直接返回结构化错误，交由模型基于已有信息作答。</li>
- *     <li><b>调用超时</b>：单次调用在独立线程执行，超时即取消并返回结构化错误，避免拖垮模型流。</li>
+ *     <li><b>调用超时</b>：单次调用在应用级工具线程池执行，超时即取消并返回结构化错误，避免拖垮模型流。</li>
  *     <li><b>异常兜底</b>：底层工具抛出的任何异常（含堆栈）不外泄，统一转为 {@code {"error":"..."}} JSON。</li>
  *     <li><b>可观测</b>：每次调用记录 {@code ai.tool.calls{tool,result}}，result 取
  *         success/validation_error/limit/timeout/error；底层工具正常返回但结果是错误 JSON（如参数校验失败）
@@ -62,24 +61,6 @@ public class GuardedToolCallback implements ToolCallback {
     /** 结构化错误序列化器（仅用于错误响应，线程安全） */
     private static final ObjectMapper ERROR_MAPPER = new ObjectMapper();
 
-    /** 工具执行线程池线程数：固定上限，防止不响应中断的底层调用无限累积线程 */
-    private static final int TOOL_EXECUTOR_THREADS = 8;
-
-    /**
-     * 工具执行线程池（固定 8 个守护线程）
-     * <p>
-     * 超时只取消 Future 并中断执行线程；若底层 HTTP 客户端不响应中断，线程会继续占用至其自身超时。
-     * 使用无界 cached pool 时这类线程会随调用次数无限增长，故改为固定大小守护线程池，
-     * 把线程占用上界钉死在 {@value #TOOL_EXECUTOR_THREADS} 个。代价是并发工具调用超过该数量时
-     * 后续任务在队列中排队并更早触发包装层超时（返回结构化超时错误），属于用少量吞吐换资源可预测性。
-     */
-    private static final ExecutorService TOOL_EXECUTOR = Executors.newFixedThreadPool(
-            TOOL_EXECUTOR_THREADS, runnable -> {
-                Thread thread = new Thread(runnable, "ai-tool-guard");
-                thread.setDaemon(true);
-                return thread;
-            });
-
     /** 被包装的原始工具回调 */
     private final ToolCallback delegate;
 
@@ -92,6 +73,9 @@ public class GuardedToolCallback implements ToolCallback {
     /** 指标注册表 */
     private final MeterRegistry meterRegistry;
 
+    /** 工具执行线程池（应用级共享，线程数由配置决定） */
+    private final ExecutorService executor;
+
     /**
      * 以秒为单位构造包装（超时值非正时回退 1 秒，避免无限等待）
      *
@@ -99,11 +83,12 @@ public class GuardedToolCallback implements ToolCallback {
      * @param remainingCalls 同一请求内共享的剩余调用次数
      * @param timeoutSeconds 单次调用超时（秒）
      * @param meterRegistry  指标注册表
+     * @param executor       工具执行线程池
      */
     public GuardedToolCallback(ToolCallback delegate, AtomicInteger remainingCalls, int timeoutSeconds,
-                               MeterRegistry meterRegistry) {
+                               MeterRegistry meterRegistry, ExecutorService executor) {
         this(delegate, remainingCalls,
-                Duration.ofSeconds(timeoutSeconds > 0 ? timeoutSeconds : 1), meterRegistry);
+                Duration.ofSeconds(timeoutSeconds > 0 ? timeoutSeconds : 1), meterRegistry, executor);
     }
 
     /**
@@ -113,14 +98,16 @@ public class GuardedToolCallback implements ToolCallback {
      * @param remainingCalls 同一请求内共享的剩余调用次数
      * @param timeout        单次调用超时
      * @param meterRegistry  指标注册表
+     * @param executor       工具执行线程池
      */
     public GuardedToolCallback(ToolCallback delegate, AtomicInteger remainingCalls, Duration timeout,
-                               MeterRegistry meterRegistry) {
+                               MeterRegistry meterRegistry, ExecutorService executor) {
         this.delegate = delegate;
         this.remainingCalls = remainingCalls;
         this.timeout = timeout == null || timeout.isNegative() || timeout.isZero()
                 ? Duration.ofSeconds(1) : timeout;
         this.meterRegistry = meterRegistry;
+        this.executor = executor;
     }
 
     @Override
@@ -148,7 +135,7 @@ public class GuardedToolCallback implements ToolCallback {
             return errorJson("本次请求工具调用次数已达上限，请直接根据已获取的信息回答患者");
         }
 
-        Future<String> future = TOOL_EXECUTOR.submit(() -> delegate.call(toolInput, toolContext));
+        Future<String> future = executor.submit(() -> delegate.call(toolInput, toolContext));
         try {
             String result = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             // 底层工具正常返回但结果是错误 JSON（参数校验失败）时单独打标，避免污染 success

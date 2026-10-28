@@ -3,6 +3,7 @@ package com.aiassistant.service;
 import com.aiassistant.entity.ChatMessage;
 import com.aiassistant.repository.ChatMessageRepository;
 import com.aiassistant.repository.ChatSessionRepository;
+import com.aiassistant.service.support.CityExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Pageable;
@@ -28,10 +29,6 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 @Slf4j
 public class UserMemoryBuilder {
-
-    /** 城市提取正则（天气问句） */
-    private static final Pattern CITY_PATTERN =
-            Pattern.compile("([\\u4e00-\\u9fa5]{2,8})(?:市|地区)?的?(?:今天|现在|明天|当前)?(?:实时)?天气");
 
     /** 常住城市提取正则（在某地工作/生活等陈述） */
     private static final Pattern RESIDENCE_PATTERN =
@@ -71,18 +68,12 @@ public class UserMemoryBuilder {
                     continue;
                 }
 
-                Matcher cityMatcher = CITY_PATTERN.matcher(content);
-                while (cityMatcher.find()) {
-                    String city = cityMatcher.group(1);
-                    if (!isNoiseCity(city)) {
-                        cities.add(city);
-                    }
-                }
+                cities.addAll(CityExtractor.findWeatherCities(content));
 
                 Matcher residenceMatcher = RESIDENCE_PATTERN.matcher(content);
                 while (residenceMatcher.find()) {
                     String city = residenceMatcher.group(1);
-                    if (!isNoiseCity(city)) {
+                    if (!CityExtractor.isNoiseCity(city)) {
                         cities.add(city);
                     }
                 }
@@ -123,15 +114,5 @@ public class UserMemoryBuilder {
             log.warn("构建用户记忆失败: {}", e.getMessage());
             return "";
         }
-    }
-
-    /**
-     * 判断提取到的片段是否为疑问词/代词等伪城市
-     *
-     * @param city 提取到的候选城市
-     * @return 命中噪音词返回 true
-     */
-    private boolean isNoiseCity(String city) {
-        return city.matches("(查|问|看|找|这|那|个|的|我|你|他|她|今|明|后|白|晚)+");
     }
 }

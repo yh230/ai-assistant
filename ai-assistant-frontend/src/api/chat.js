@@ -2,13 +2,6 @@ import api, { forceToLogin, refreshAccessToken } from './index'
 import { streamSse } from './sse'
 
 /**
- * 发送聊天消息（非流式，兼容旧接口）
- */
-export function sendMessage(data) {
-  return api.post('/chat/send', data)
-}
-
-/**
  * 流式发送聊天消息（SSE Server-Sent Events）
  * 逐 token 接收回复，通过回调函数实时推送
  *

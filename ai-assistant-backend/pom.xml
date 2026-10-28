@@ -22,7 +22,7 @@
         <java.version>17</java.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
-        <spring-ai.version>1.0.9</spring-ai.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
         <spring-cloud.version>2025.0.3</spring-cloud.version>
         <spring-cloud-alibaba.version>2025.0.0.0</spring-cloud-alibaba.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>

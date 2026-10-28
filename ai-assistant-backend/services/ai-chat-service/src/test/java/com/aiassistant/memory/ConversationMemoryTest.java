@@ -246,6 +246,20 @@ class ConversationMemoryTest {
         verify(sessionRepository, times(1)).save(session);
     }
 
+    @Test
+    void reservedTokensForceSummaryWhenHistoryAloneUnderBudget() {
+        aiProperties.getChat().setContextTokenBudget(100);
+        List<ChatMessage> history = List.of(
+                message("user", "早".repeat(80)),
+                message("user", "最近一条消息"));
+
+        ConversationMemory.Context context = memory.buildContext(session("s9"), history, 60);
+
+        assertTrue(context.summary().startsWith("早".repeat(60)));
+        assertEquals(1, context.messages().size());
+        assertEquals("最近一条消息", context.messages().get(0).getText());
+    }
+
     /**
      * 构造消息实体。
      */

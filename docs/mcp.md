@@ -20,7 +20,7 @@
 | 入口 | 网关 `http://<host>:8080/mcp/sse` |
 | 认证 | `X-API-Key: <原始 Key>`，建流与每条消息都需携带 |
 
-服务端使用 Spring AI 1.0.9 的 WebMVC MCP Server（SSE），客户端语言无关；Python、TypeScript、Java 等 MCP 客户端均可接入。
+服务端使用 Spring AI 1.1.8 的 WebMVC MCP Server（SSE），客户端语言无关；Python、TypeScript、Java 等 MCP 客户端均可接入。
 
 ## 工具
 

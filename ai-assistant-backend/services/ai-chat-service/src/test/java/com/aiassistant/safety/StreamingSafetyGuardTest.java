@@ -176,4 +176,53 @@ class StreamingSafetyGuardTest {
         assertEquals("", guarded.flushPending());
         assertEquals("建议多休息", guarded.delivered().toString());
     }
+
+    @Test
+    void refusalAwarePassesRefusalPhraseAcrossTokens() {
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(
+                List.of("用药建议"), "不能提供用药建议", 0, true);
+        StreamingSafetyGuard.Guarded guarded = guard.guard(
+                Flux.just("抱歉，我不能", "提供用药", "建议，请咨询医生"));
+        assertEquals("抱歉，我不能提供用药建议，请咨询医生",
+                String.join("", guarded.tokens().collectList().block()));
+        assertFalse(guarded.blocked().get());
+    }
+
+    @Test
+    void refusalAwareStillBlocksDirectAdvice() {
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(
+                List.of("用药建议"), "不能提供用药建议", 0, true);
+        StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("可以给您", "用药建议"));
+        assertEquals(List.of("不能提供用药建议"), guarded.tokens().collectList().block());
+        assertTrue(guarded.blocked().get());
+    }
+
+    @Test
+    void refusalAwareBlocksKeywordInAnotherClause() {
+        // 拒绝语境不跨分句：前面的“不能开药”不能豁免后面的敏感词
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(
+                List.of("用药建议"), "不能提供用药建议", 0, true);
+        StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("不能开药。以下是", "用药建议"));
+        assertTrue(guarded.blocked().get());
+        assertTrue(String.join("", guarded.tokens().collectList().block()).endsWith("不能提供用药建议"));
+    }
+
+    @Test
+    void strictModeStillBlocksRefusalPhrase() {
+        // 输入侧/严格模式不做拒绝语境豁免
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(List.of("用药建议"), "不能提供用药建议");
+        StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("不能提供用药建议"));
+        assertTrue(guarded.blocked().get());
+    }
+
+    @Test
+    void refusalAwareFlushPendingRecognizesRefusalContext() {
+        // 取消冲刷时同样识别拒绝语境：滞留尾部 "不能提供用药建议" 属于正常拒答，不得按命中处理
+        StreamingSafetyGuard guard = new StreamingSafetyGuard(
+                List.of("用药建议"), "不能提供用药建议", 0, true);
+        StreamingSafetyGuard.Guarded guarded = guard.guard(Flux.just("前言我不能提供用药建议"));
+        assertEquals(List.of("前言我"), guarded.tokens().take(1).collectList().block());
+        assertEquals("不能提供用药建议", guarded.flushPending());
+        assertFalse(guarded.blocked().get());
+    }
 }

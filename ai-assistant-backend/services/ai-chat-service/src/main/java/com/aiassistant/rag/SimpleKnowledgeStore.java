@@ -26,8 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 医院级数据隔离由文件名与缓存键共同保证。文档切片使用确定性 ID（documentId:chunkIndex），
  * 更新走“先追加（覆盖同名 ID）再清理多余旧切片”，删除走“按切片数删除”，避免整库重建。
  * <p>
- * 写入、删除与检索均以实例锁串行化，检索不会观察到“追加/删除”的中间状态；null 医院 ID
- * 的写操作按 no-op 处理、检索返回空列表，避免调用方传入空值导致 NPE。
+ * 写入、删除与检索均以医院级锁串行化，不同医院读写互不阻塞；同一医院的检索不会观察到
+ * “追加/删除”的中间状态；null 医院 ID 的写操作按 no-op 处理、检索返回空列表，避免调用方传入空值导致 NPE。
  *
  * @author yh
  * @date 2026-10-19
@@ -45,6 +45,9 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
 
     /** 医院向量表缓存（key=医院 ID） */
     private final Map<Long, SimpleVectorStore> stores = new ConcurrentHashMap<>();
+
+    /** 医院级锁（key=医院 ID，不同医院读写互不阻塞） */
+    private final Map<Long, Object> hospitalLocks = new ConcurrentHashMap<>();
 
     /**
      * 构造器注入：初始化向量目录
@@ -71,26 +74,28 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
      * @param chunks             新切片列表
      */
     @Override
-    public synchronized void upsertDocument(Long hospitalId, Long documentId, String documentName,
-                                            int previousChunkCount, List<Document> chunks) {
+    public void upsertDocument(Long hospitalId, Long documentId, String documentName,
+                               int previousChunkCount, List<Document> chunks) {
         if (hospitalId == null || documentId == null) {
             log.warn("upsertDocument 忽略空 hospitalId/documentId: hospitalId={}, documentId={}",
                     hospitalId, documentId);
             return;
         }
-        List<Document> safeChunks = chunks == null ? List.of() : chunks;
+        synchronized (lockOf(hospitalId)) {
+            List<Document> safeChunks = chunks == null ? List.of() : chunks;
 
-        SimpleVectorStore store = storeOf(hospitalId);
-        List<Document> normalized = normalize(documentId, documentName, safeChunks);
-        if (!normalized.isEmpty()) {
-            // 先 add：同名确定性 ID 直接覆盖，且嵌入失败时旧数据仍完整保留
-            store.add(normalized);
+            SimpleVectorStore store = storeOf(hospitalId);
+            List<Document> normalized = normalize(documentId, documentName, safeChunks);
+            if (!normalized.isEmpty()) {
+                // 先 add：同名确定性 ID 直接覆盖，且嵌入失败时旧数据仍完整保留
+                store.add(normalized);
+            }
+            List<String> staleIds = staleIds(documentId, normalized.size(), previousChunkCount);
+            if (!staleIds.isEmpty()) {
+                store.delete(staleIds);
+            }
+            save(hospitalId, store);
         }
-        List<String> staleIds = staleIds(documentId, normalized.size(), previousChunkCount);
-        if (!staleIds.isEmpty()) {
-            store.delete(staleIds);
-        }
-        save(hospitalId, store);
     }
 
     /**
@@ -101,19 +106,20 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
      * @param chunkCount 该文档已写入的切片数
      */
     @Override
-    public synchronized void deleteDocument(Long hospitalId, Long documentId, int chunkCount) {
+    public void deleteDocument(Long hospitalId, Long documentId, int chunkCount) {
         if (hospitalId == null || documentId == null) {
             log.warn("deleteDocument 忽略空 hospitalId/documentId: hospitalId={}, documentId={}",
                     hospitalId, documentId);
             return;
         }
-
-        SimpleVectorStore store = storeOf(hospitalId);
-        List<String> targetIds = ids(documentId, chunkCount);
-        if (!targetIds.isEmpty()) {
-            store.delete(targetIds);
+        synchronized (lockOf(hospitalId)) {
+            SimpleVectorStore store = storeOf(hospitalId);
+            List<String> targetIds = ids(documentId, chunkCount);
+            if (!targetIds.isEmpty()) {
+                store.delete(targetIds);
+            }
+            save(hospitalId, store);
         }
-        save(hospitalId, store);
     }
 
     /**
@@ -126,23 +132,25 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
      * @return 命中片段（按相关度降序）；医院 ID 为空或本院无向量数据返回空列表
      */
     @Override
-    public synchronized List<ScoredChunk> search(Long hospitalId, String query, int topK, double threshold) {
+    public List<ScoredChunk> search(Long hospitalId, String query, int topK, double threshold) {
         if (hospitalId == null) {
             return List.of();
         }
-        SimpleVectorStore store = stores.get(hospitalId);
-        if (store == null) {
-            // 应用重启后尚未发生写入时，按存量文件懒加载，避免检索结果为空
-            if (!Files.exists(fileOf(hospitalId))) {
-                return List.of();
+        synchronized (lockOf(hospitalId)) {
+            SimpleVectorStore store = stores.get(hospitalId);
+            if (store == null) {
+                // 应用重启后尚未发生写入时，按存量文件懒加载，避免检索结果为空
+                if (!Files.exists(fileOf(hospitalId))) {
+                    return List.of();
+                }
+                store = storeOf(hospitalId);
             }
-            store = storeOf(hospitalId);
+            return store.similaritySearch(SearchRequest.builder()
+                            .query(query).topK(topK).similarityThreshold(threshold).build())
+                    .stream()
+                    .map(this::toScoredChunk)
+                    .toList();
         }
-        return store.similaritySearch(SearchRequest.builder()
-                        .query(query).topK(topK).similarityThreshold(threshold).build())
-                .stream()
-                .map(this::toScoredChunk)
-                .toList();
     }
 
     /**
@@ -230,6 +238,16 @@ public class SimpleKnowledgeStore implements KnowledgeStore {
      */
     private String vectorId(Long documentId, int chunkIndex) {
         return documentId + ":" + chunkIndex;
+    }
+
+    /**
+     * 取本院分段锁（不存在时创建）；不同医院持有不同锁对象，读写互不阻塞
+     *
+     * @param hospitalId 医院 ID
+     * @return 该医院的锁对象
+     */
+    private Object lockOf(Long hospitalId) {
+        return hospitalLocks.computeIfAbsent(hospitalId, id -> new Object());
     }
 
     /**

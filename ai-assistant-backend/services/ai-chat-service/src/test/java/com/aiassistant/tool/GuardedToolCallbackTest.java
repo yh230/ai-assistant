@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ToolContext;
@@ -13,6 +14,8 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,16 +34,24 @@ class GuardedToolCallbackTest {
 
     private SimpleMeterRegistry meterRegistry;
 
+    private ExecutorService executor;
+
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
+        executor = Executors.newSingleThreadExecutor();
+    }
+
+    @AfterEach
+    void tearDown() {
+        executor.shutdownNow();
     }
 
     @Test
     void passesThroughResultAndRecordsSuccess() {
         ToolCallback delegate = new StubToolCallback("demo", input -> "ok:" + input);
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
-                Duration.ofSeconds(1), meterRegistry);
+                Duration.ofSeconds(1), meterRegistry, executor);
 
         String result = guarded.call("{\"a\":1}", new ToolContext(Map.<String, Object>of("patientId", 1L)));
 
@@ -53,7 +64,7 @@ class GuardedToolCallbackTest {
     @Test
     void preservesToolDefinition() {
         ToolCallback delegate = new StubToolCallback("bookAppointment", input -> "done");
-        GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3), 5, meterRegistry);
+        GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3), 5, meterRegistry, executor);
 
         ToolDefinition definition = guarded.getToolDefinition();
 
@@ -71,7 +82,7 @@ class GuardedToolCallbackTest {
             return "ok";
         });
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, remaining,
-                Duration.ofSeconds(1), meterRegistry);
+                Duration.ofSeconds(1), meterRegistry, executor);
 
         assertEquals("ok", guarded.call("{}", null));
         assertEquals("ok", guarded.call("{}", null));
@@ -95,7 +106,7 @@ class GuardedToolCallbackTest {
             return "late";
         });
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
-                Duration.ofMillis(200), meterRegistry);
+                Duration.ofMillis(200), meterRegistry, executor);
 
         String result = guarded.call("{}", null);
 
@@ -110,7 +121,7 @@ class GuardedToolCallbackTest {
         ToolCallback delegate = new StubToolCallback("demo",
                 input -> "{\"error\":\"科室ID不合法，请先查询科室列表获取正确ID\"}");
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
-                Duration.ofSeconds(1), meterRegistry);
+                Duration.ofSeconds(1), meterRegistry, executor);
 
         String result = guarded.call("{}", null);
 
@@ -126,7 +137,7 @@ class GuardedToolCallbackTest {
             throw new IllegalStateException("号源查询服务暂时不可用，请稍后重试");
         });
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
-                Duration.ofSeconds(1), meterRegistry);
+                Duration.ofSeconds(1), meterRegistry, executor);
 
         String result = guarded.call("{}", null);
 
@@ -141,7 +152,7 @@ class GuardedToolCallbackTest {
             throw new IllegalStateException();
         });
         GuardedToolCallback guarded = new GuardedToolCallback(delegate, new AtomicInteger(3),
-                Duration.ofSeconds(1), meterRegistry);
+                Duration.ofSeconds(1), meterRegistry, executor);
 
         JsonNode error = OBJECT_MAPPER.readTree(guarded.call("{}", null));
 

@@ -22,6 +22,10 @@ class AiPropertiesTest {
         assertEquals(5, props.getChat().getToolMaxIterations());
         assertEquals(5, props.getChat().getToolTimeoutSeconds());
         assertEquals(1024, props.getChat().getMaxTokens());
+        assertEquals(10, props.getChat().getHttpConnectTimeoutSeconds());
+        assertEquals(120, props.getChat().getHttpReadTimeoutSeconds());
+        assertEquals(32, props.getChat().getToolExecutorThreads());
+        assertEquals(300, props.getChat().getToolTokenReserve());
         assertEquals("simple", props.getRag().getStore());
         assertEquals(0.15, props.getRag().getChunkOverlap());
     }
@@ -31,7 +35,6 @@ class AiPropertiesTest {
         AiProperties props = new AiProperties();
         assertEquals(384, props.getRag().getEmbeddingDimensions());
         assertEquals(0.35, props.getRag().getGroundednessThreshold());
-        assertEquals("http://localhost:9200", props.getRag().getElasticsearch().getUri());
         assertEquals("ai_knowledge_chunk_v1", props.getRag().getElasticsearch().getIndexName());
         assertEquals("cjk_ngram", props.getRag().getElasticsearch().getAnalyzer());
     }

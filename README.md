@@ -7,7 +7,7 @@
 ![Java](https://img.shields.io/badge/Java-17-orange.svg)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F.svg)
 ![Spring Cloud](https://img.shields.io/badge/Spring%20Cloud-Nacos-1677FF.svg)
-![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0-6DB33F.svg)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-1.1-6DB33F.svg)
 ![Vue](https://img.shields.io/badge/Vue-3-42B883.svg)
 ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1.svg)
 ![E2E](https://img.shields.io/badge/E2E-pytest-0A9EDC.svg)
@@ -129,7 +129,7 @@ flowchart LR
 
 | 层级 | 技术 |
 |------|------|
-| 后端 | Java 17 · Spring Boot 3.5.16 · Spring Cloud（Nacos 注册与配置）· Spring AI 1.0 |
+| 后端 | Java 17 · Spring Boot 3.5.16 · Spring Cloud（Nacos 注册与配置）· Spring AI 1.1.8 |
 | 鉴权与缓存 | Spring Security 6 + JWT（jjwt 0.12）+ Redis 撤销（登出黑名单 / 踢下线 / refresh 轮换） |
 | ORM | MyBatis-Plus 3.5（RBAC / 医院 / 挂号）· Spring Data JPA（chat 模块） |
 | 服务间调用 | OpenFeign（`api` 模块，统一内部令牌） |

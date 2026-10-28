@@ -49,6 +49,20 @@ public class KnowledgeContextBuilder {
             return history;
         }
         List<Message> result = new ArrayList<>(history);
+        result.add(insertAt(history), new UserMessage(contextText(hits)));
+        return result;
+    }
+
+    /**
+     * 构造知识上下文文本（供注入与 token 预算估算共用）。
+     *
+     * @param hits 检索命中片段
+     * @return 知识上下文文本；无命中时返回空串
+     */
+    public String contextText(List<KnowledgeStore.ScoredChunk> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return "";
+        }
         StringBuilder context = new StringBuilder(KNOWLEDGE_HEADER).append('\n').append(KNOWLEDGE_OPEN).append('\n');
         for (int i = 0; i < hits.size(); i++) {
             KnowledgeStore.ScoredChunk hit = hits.get(i);
@@ -57,8 +71,7 @@ public class KnowledgeContextBuilder {
                     .append(escape(hit.content())).append("\n\n");
         }
         context.append(KNOWLEDGE_CLOSE);
-        result.add(insertAt(history), new UserMessage(context.toString()));
-        return result;
+        return context.toString();
     }
 
     /**
