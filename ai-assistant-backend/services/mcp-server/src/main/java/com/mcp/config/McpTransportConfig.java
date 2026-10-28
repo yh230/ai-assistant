@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mcp.auth.McpPrincipalContext;
 import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.transport.WebMvcSseServerTransportProvider;
-import org.springframework.ai.mcp.server.autoconfigure.McpServerProperties;
+import org.springframework.ai.mcp.server.common.autoconfigure.properties.McpServerSseProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,13 +24,13 @@ public class McpTransportConfig {
      * 创建带调用方上下文提取的 SSE 传输提供者
      *
      * @param objectMapper MCP 专用 ObjectMapper
-     * @param properties MCP 服务端配置
+     * @param properties MCP 服务端 SSE 配置
      * @return SSE 传输提供者
      */
     @Bean
     public WebMvcSseServerTransportProvider mcpTransportProvider(
             @Qualifier("mcpServerObjectMapper") ObjectMapper objectMapper,
-            McpServerProperties properties) {
+            McpServerSseProperties properties) {
         return WebMvcSseServerTransportProvider.builder()
                 .jsonMapper(new JacksonMcpJsonMapper(objectMapper))
                 .baseUrl(properties.getBaseUrl())
