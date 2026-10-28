@@ -8,6 +8,10 @@
 
 - 开源门面与可复现基础：MIT License、Maven Wrapper、跨平台启动脚本、GitHub Actions CI（后端单测 + 前端构建/测试）。
 
+### Changed
+
+- Spring AI 升级至 1.1.8（Spring Boot 3.5 线最新稳定版），适配 MCP SSE 配置类与 Embedding Options API。
+
 ### Docs
 
 - 公开文档收敛为架构说明（含阅读路线）与 MCP 接入手册，测试说明内聚到各套件目录。
