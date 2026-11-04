@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(datasources.router, prefix="/api")
     app.include_router(metadata.router, prefix="/api")
     app.include_router(sync_tasks.router, prefix="/api")
+    app.include_router(sync_tasks.runs_router, prefix="/api")
 
     return app
 

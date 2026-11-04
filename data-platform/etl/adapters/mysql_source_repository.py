@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy import create_engine, text
 
-from etl.ports.source_repository import SourceColumn, SourceTable
+from etl.ports.source_repository import SourceColumn, SourceTable, Watermark
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _STAR_COLUMNS = ("*",)
@@ -115,7 +115,7 @@ class MySQLSourceRepository:
         columns: list[str],
         primary_key: str,
         watermark_column: str,
-        after_watermark: datetime,
+        after_watermark: Watermark,
         after_pk: int | None,
         limit: int,
     ) -> list[dict[str, Any]]:

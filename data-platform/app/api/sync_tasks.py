@@ -1,12 +1,12 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session, require_staff
 from app.core.config import get_settings
 from app.core.response import ok
-from app.models.metadata import DataSource, SyncTask
+from app.models.metadata import DataSource, SyncRun, SyncTask
 from app.schemas.sync import SyncTaskCreate, SyncTaskUpdate
 from app.services.datasource_service import DatasourceService
 from app.services.sync_service import SyncService
@@ -15,6 +15,13 @@ from etl.adapters.mysql_source_repository import MySQLSourceRepository
 router = APIRouter(
     prefix="/sync-tasks",
     tags=["sync-tasks"],
+    dependencies=[Depends(require_staff)],
+)
+
+# Run records live at ``/sync-runs`` (design §8), outside the task prefix.
+runs_router = APIRouter(
+    prefix="/sync-runs",
+    tags=["sync-runs"],
     dependencies=[Depends(require_staff)],
 )
 
@@ -57,6 +64,33 @@ def _task_view(task: SyncTask) -> dict[str, Any]:
         "running": bool(task.running),
         "locked_at": _iso(task.locked_at),
     }
+
+
+def _run_view(run: SyncRun) -> dict[str, Any]:
+    return {
+        "id": run.id,
+        "task_id": run.task_id,
+        "run_type": run.run_type,
+        "status": run.status,
+        "started_at": _iso(run.started_at),
+        "finished_at": _iso(run.finished_at),
+        "rows_read": run.rows_read,
+        "rows_written": run.rows_written,
+        "error_msg": run.error_msg,
+    }
+
+
+@runs_router.get("")
+def list_runs(
+    task_id: int | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    db: Session = Depends(get_session),
+):
+    query = db.query(SyncRun)
+    if task_id is not None:
+        query = query.filter(SyncRun.task_id == task_id)
+    rows = query.order_by(SyncRun.id.desc()).limit(limit).all()
+    return ok([_run_view(row) for row in rows])
 
 
 @router.get("")

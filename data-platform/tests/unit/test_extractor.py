@@ -11,11 +11,22 @@ class FakeSource:
     def __init__(self, batches, max_value=None):
         self.batches = list(batches)
         self.calls = 0
+        self.full_calls = []
         self.incremental_calls = []
         self.max_value = max_value if max_value is not None else datetime(2026, 11, 4, 12, 0, 0)
 
     def fetch_full_batch(self, schema, table, columns, primary_key, after_pk, limit):
         self.calls += 1
+        self.full_calls.append(
+            {
+                "schema": schema,
+                "table": table,
+                "columns": columns,
+                "primary_key": primary_key,
+                "after_pk": after_pk,
+                "limit": limit,
+            }
+        )
         return self.batches.pop(0) if self.batches else []
 
     def fetch_incremental_batch(
@@ -47,12 +58,13 @@ class FakeSource:
 class FakePublisher:
     def __init__(self):
         self.messages = []
+        self.flushes = 0
 
     def publish(self, topic, key, value):
         self.messages.append((topic, key, value))
 
     def flush(self):
-        pass
+        self.flushes += 1
 
 
 class FakeRunStore:
@@ -257,6 +269,36 @@ class ExtractorTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             Extractor(FakeSource([]), FakePublisher(), "dp.ods").run(task, "DELTA", FakeRunStore())
+
+    def test_full_load_event_contract_and_keyset_continuation(self):
+        task = SyncTaskSpec(
+            id=10,
+            source_schema="registration_db",
+            source_table="registration",
+            target_table="ods_registration",
+            primary_key="id",
+            watermark_column=None,
+            batch_size=1,
+        )
+        source = FakeSource([[{"id": 1}], [{"id": 2}]])
+        publisher = FakePublisher()
+
+        result = Extractor(source, publisher, "dp.ods").run(task, "FULL", FakeRunStore())
+
+        self.assertEqual(result.rows_read, 2)
+        # topic format: dp.ods.<schema>.<table>
+        self.assertEqual(publisher.messages[0][0], "dp.ods.registration_db.registration")
+        self.assertEqual(publisher.messages[1][0], "dp.ods.registration_db.registration")
+        envelope = Envelope.from_bytes(publisher.messages[0][2])
+        self.assertEqual(envelope.payload["source_db"], "registration_db")
+        self.assertEqual(envelope.payload["source_table"], "registration")
+        self.assertEqual(envelope.payload["row"], {"id": 1})
+        # the publisher is flushed once per published batch
+        self.assertEqual(publisher.flushes, 2)
+        # the second batch continues after the last PK of the first batch
+        self.assertEqual([call["after_pk"] for call in source.full_calls], [None, 1, 2])
+        self.assertEqual(source.full_calls[0]["primary_key"], "id")
+        self.assertEqual(source.full_calls[0]["limit"], 1)
 
 
 if __name__ == "__main__":

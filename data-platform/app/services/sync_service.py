@@ -13,6 +13,18 @@ from etl.watermark import to_decimal
 
 WATERMARK_TYPES = ("datetime", "numeric")
 
+# Re-pointing the extraction (another data source/schema/table) or the
+# watermark query makes the stored position meaningless: a watermark from the
+# old source can point past rows of the new one, so the next run must
+# full-load again instead of resuming from it.
+WATERMARK_INVALIDATING_FIELDS = (
+    "datasource_id",
+    "source_schema",
+    "source_table",
+    "watermark_column",
+    "watermark_type",
+)
+
 UPDATABLE_FIELDS = frozenset(
     {
         "datasource_id",
@@ -39,6 +51,20 @@ def _validate_watermark_type(value: str) -> str:
     if normalised not in WATERMARK_TYPES:
         raise ValueError(f"unsupported watermark type: {value}")
     return normalised
+
+
+def _require_watermark_column(watermark_type: str, watermark_column: str | None) -> None:
+    """Reject a datetime/numeric watermark without a column to track.
+
+    A full-load-only task is not expressible through the API: the design makes
+    ``watermark_column`` part of the task configuration, and an incremental
+    task without one can never resume, so the configuration is refused up
+    front (HTTP 400 through ``ValueError``).
+    """
+    if not (watermark_column or "").strip():
+        raise ValueError(
+            f"watermark_column is required when watermark_type is {watermark_type}"
+        )
 
 
 class SqlRunStore:
@@ -101,6 +127,9 @@ class SyncService:
         cron: str = "*/10 * * * *",
         enabled: bool = True,
     ) -> SyncTask:
+        watermark_type = _validate_watermark_type(watermark_type)
+        watermark_column = watermark_column.strip() if watermark_column else watermark_column
+        _require_watermark_column(watermark_type, watermark_column)
         task = SyncTask(
             datasource_id=datasource_id,
             source_schema=source_schema,
@@ -108,7 +137,7 @@ class SyncService:
             target_table=target_table,
             primary_key=primary_key,
             watermark_column=watermark_column,
-            watermark_type=_validate_watermark_type(watermark_type),
+            watermark_type=watermark_type,
             batch_size=batch_size,
             overlap_seconds=overlap_seconds,
             cron=cron,
@@ -120,6 +149,13 @@ class SyncService:
         return task
 
     def update_task(self, entity: SyncTask, **changes: Any) -> SyncTask:
+        # Reload first so the running flag is the committed one even when the
+        # caller's session still holds a pre-lock snapshot.
+        self.db.refresh(entity)
+        if entity.running:
+            raise DataPlatformError(
+                409, f"sync task {entity.id} is running; retry after the run finishes"
+            )
         unknown = set(changes) - UPDATABLE_FIELDS
         if unknown:
             raise ValueError("unsupported sync task fields: " + ", ".join(sorted(unknown)))
@@ -128,14 +164,22 @@ class SyncService:
                 raise ValueError(f"{name} cannot be null")
         if changes.get("watermark_type") is not None:
             changes["watermark_type"] = _validate_watermark_type(changes["watermark_type"])
+        if "watermark_column" in changes:
+            changes["watermark_column"] = (
+                changes["watermark_column"].strip()
+                if changes["watermark_column"]
+                else changes["watermark_column"]
+            )
+        _require_watermark_column(
+            changes.get("watermark_type", entity.watermark_type),
+            changes.get("watermark_column", entity.watermark_column),
+        )
 
-        # Re-pointing the watermark invalidates the stored position: the next
-        # run starts with a full load and rebuilds the watermark.
-        watermark_changed = (
-            changes.get("watermark_column", entity.watermark_column)
-            != entity.watermark_column
-            or changes.get("watermark_type", entity.watermark_type)
-            != entity.watermark_type
+        # Re-pointing the source or the watermark invalidates the stored
+        # position: the next run starts with a full load and rebuilds it.
+        watermark_changed = any(
+            changes.get(name, getattr(entity, name)) != getattr(entity, name)
+            for name in WATERMARK_INVALIDATING_FIELDS
         )
         for name, value in changes.items():
             setattr(entity, name, value)

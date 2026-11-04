@@ -229,6 +229,44 @@ class SyncServiceTest(unittest.TestCase):
         self.assertIsNone(updated.last_watermark)
         self.assertIsNone(updated.last_watermark_num)
 
+    def test_update_task_resets_watermark_when_source_is_repointed(self):
+        task = self._create_task(watermark_column="seq", watermark_type="numeric")
+        repoints = (
+            {"datasource_id": 2},
+            {"source_schema": "other_db"},
+            {"source_table": "other_table"},
+        )
+        for change in repoints:
+            task.full_load_done = True
+            task.last_watermark_num = Decimal("100")
+            self.db.commit()
+
+            updated = self.service.update_task(task, **change)
+
+            for field, value in change.items():
+                self.assertEqual(getattr(updated, field), value)
+            self.assertFalse(updated.full_load_done)
+            self.assertIsNone(updated.last_watermark)
+            self.assertIsNone(updated.last_watermark_num)
+
+    def test_update_task_rejects_changes_while_running(self):
+        task = self._create_task()
+        self.service.acquire_lock(task.id)
+
+        try:
+            with self.assertRaises(DataPlatformError) as ctx:
+                self.service.update_task(task, cron="0 * * * *")
+        finally:
+            self.service.release_lock(task.id)
+
+        self.assertEqual(ctx.exception.code, 409)
+        stored = self._fresh()
+        try:
+            row = stored.get(SyncTask, task.id)
+            self.assertEqual(row.cron, "*/10 * * * *")
+        finally:
+            stored.close()
+
     def test_update_task_keeps_watermark_when_configuration_is_unchanged(self):
         task = self._create_task(watermark_column="updated_at")
         task.full_load_done = True
@@ -256,6 +294,20 @@ class SyncServiceTest(unittest.TestCase):
     def test_create_task_rejects_unknown_watermark_type(self):
         with self.assertRaises(ValueError):
             self._create_task(watermark_type="timestamp")
+
+    def test_create_task_requires_watermark_column(self):
+        with self.assertRaises(ValueError):
+            self._create_task(watermark_column=None)
+        with self.assertRaises(ValueError):
+            self._create_task(watermark_column="   ")
+
+    def test_update_task_requires_watermark_column(self):
+        task = self._create_task()
+
+        with self.assertRaises(ValueError):
+            self.service.update_task(task, watermark_column=None)
+        with self.assertRaises(ValueError):
+            self.service.update_task(task, watermark_column="")
 
     def test_delete_task_removes_its_runs(self):
         task = self._create_task()
