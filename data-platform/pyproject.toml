@@ -24,5 +24,8 @@ dev = ["ruff>=0.6,<1"]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["app*", "etl*"]
+
 [tool.ruff]
 line-length = 100

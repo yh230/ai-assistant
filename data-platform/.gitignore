@@ -1,0 +1,10 @@
+# Runtime secrets and local configuration
+.env
+
+# Local SQLite metadata database
+*.db
+
+# Python / tooling caches
+__pycache__/
+.pytest_cache/
+.ruff_cache/

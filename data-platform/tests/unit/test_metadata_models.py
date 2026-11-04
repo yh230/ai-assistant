@@ -7,10 +7,31 @@ try:
 except ImportError:
     Base = None
 
+TABLE_NAMES = (
+    "dp_datasource",
+    "dp_sync_task",
+    "dp_sync_run",
+    "dp_table_meta",
+    "dp_column_meta",
+    "dp_quality_rule",
+    "dp_quality_result",
+    "dp_alert_rule",
+    "dp_alert_record",
+)
+
 
 @unittest.skipIf(Base is None, "sqlalchemy not installed")
 class MetadataModelTest(unittest.TestCase):
     def test_tables_registered(self):
         names = set(Base.metadata.tables)
-        for name in ("dp_datasource", "dp_sync_task", "dp_sync_run", "dp_quality_rule", "dp_alert_record"):
+        for name in TABLE_NAMES:
             self.assertIn(name, names)
+
+    def test_sync_task_numeric_watermark_column(self):
+        from sqlalchemy import Numeric
+
+        column = Base.metadata.tables["dp_sync_task"].c["last_watermark_num"]
+        self.assertIsInstance(column.type, Numeric)
+        self.assertTrue(column.nullable)
+        self.assertEqual(column.type.precision, 20)
+        self.assertEqual(column.type.scale, 0)

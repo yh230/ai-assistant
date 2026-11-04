@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -40,6 +41,7 @@ class SyncTask(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     full_load_done: Mapped[bool] = mapped_column(Boolean, default=False)
     last_watermark: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_watermark_num: Mapped[Decimal | None] = mapped_column(Numeric(20, 0), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
