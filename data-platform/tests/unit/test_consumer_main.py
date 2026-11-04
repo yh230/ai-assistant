@@ -1,5 +1,6 @@
 # tests/unit/test_consumer_main.py
 import json
+import signal
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -8,6 +9,7 @@ from etl.adapters.inmemory_event_bus import InMemoryEventBus
 from etl.adapters.inmemory_olap_store import InMemoryOlapStore
 from etl.consumer import BookkeepingWriteError, ConsumeResult
 from etl.envelope import Envelope
+from etl.ports.event_bus import ConsumedEvent
 from etl.realtime import REGISTRATION_EVENT_TOPIC, RegistrationEventHandler
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -68,6 +70,7 @@ class ScriptedPipeline:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
         self.calls = 0
+        self.last_events = []
 
     def run_once(self):
         self.calls += 1
@@ -77,16 +80,27 @@ class ScriptedPipeline:
         return outcome
 
 
+class NoRewindConsumer:
+    """Consumer double without the optional ``rewind`` capability."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
 class SubscribeTopicsTest(unittest.TestCase):
     def test_topics_cover_every_source_table_and_realtime(self):
         topics = consumer_main.subscribe_topics("dp.ods")
 
-        self.assertEqual(len(topics), len(consumer_main.SOURCE_TABLES) + 1)
-        self.assertIn("dp.ods.registration_db.registration", topics)
-        self.assertIn("dp.ods.registration_db.doctor_schedule", topics)
-        self.assertIn("dp.ods.chat_db.chat_message", topics)
-        self.assertIn("dp.ods.hospital_db.department", topics)
-        self.assertIn(REGISTRATION_EVENT_TOPIC, topics)
+        expected = {
+            f"dp.ods.{schema}.{table}"
+            for table, schema in consumer_main.SOURCE_SCHEMAS.items()
+        }
+        self.assertEqual(len(consumer_main.SOURCE_SCHEMAS), 7)
+        self.assertEqual(len(topics), 8)
+        self.assertEqual(set(topics), expected | {REGISTRATION_EVENT_TOPIC})
 
     def test_topics_follow_the_configured_prefix(self):
         topics = consumer_main.subscribe_topics("dp.stage")
@@ -163,6 +177,32 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(sleeps, [consumer_main.IDLE_SLEEP_SECONDS])
         self.assertTrue(bus.closed)
 
+    def test_rewinds_the_failed_batch_before_the_next_poll(self):
+        bus = InMemoryEventBus()
+        sleeps = []
+        failed_event = ConsumedEvent(topic="dp.ods", key="1", value=b"payload")
+        pipeline = ScriptedPipeline([BookkeepingWriteError("audit down"), KeyboardInterrupt()])
+        pipeline.last_events = [failed_event]
+
+        consumer_main.serve(pipeline, bus, sleep=sleeps.append)
+
+        self.assertEqual(bus.pending, [failed_event])
+        self.assertEqual(sleeps, [consumer_main.BACKOFF_SECONDS])
+        self.assertFalse(bus.committed)
+        self.assertTrue(bus.closed)
+
+    def test_bookkeeping_backoff_survives_a_consumer_without_rewind(self):
+        consumer = NoRewindConsumer()
+        sleeps = []
+        pipeline = ScriptedPipeline([BookkeepingWriteError("audit down"), KeyboardInterrupt()])
+        pipeline.last_events = [ConsumedEvent(topic="dp.ods", key="1", value=b"payload")]
+
+        consumer_main.serve(pipeline, consumer, sleep=sleeps.append)
+
+        self.assertEqual(pipeline.calls, 2)
+        self.assertEqual(sleeps, [consumer_main.BACKOFF_SECONDS])
+        self.assertTrue(consumer.closed)
+
     def test_closes_the_consumer_on_unexpected_error(self):
         bus = InMemoryEventBus()
         pipeline = ScriptedPipeline([RuntimeError("broker unavailable")])
@@ -171,6 +211,12 @@ class ServeTest(unittest.TestCase):
             consumer_main.serve(pipeline, bus, sleep=lambda _: None)
 
         self.assertTrue(bus.closed)
+
+
+class SigtermTest(unittest.TestCase):
+    def test_sigterm_raises_keyboard_interrupt_for_the_graceful_path(self):
+        with self.assertRaises(KeyboardInterrupt):
+            consumer_main.handle_sigterm(signal.SIGTERM, None)
 
 
 if __name__ == "__main__":

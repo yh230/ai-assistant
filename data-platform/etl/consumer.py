@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -10,6 +11,8 @@ from etl.envelope import Envelope
 from etl.ports.event_bus import ConsumedEvent, EventConsumer, EventPublisher
 from etl.ports.olap_store import OlapStore
 from etl.realtime import REGISTRATION_EVENT_TOPIC
+
+logger = logging.getLogger(__name__)
 
 QUARANTINE_TABLE = "ops_quarantine"
 AUDIT_TABLE = "ops_ingest_audit"
@@ -85,9 +88,13 @@ class ConsumerPipeline:
         # At least one attempt is always made before an event is dead-lettered.
         self.max_retries = max(1, max_retries)
         self.realtime_handler = realtime_handler
+        # The last polled batch, kept so the entrypoint can rewind the consumer
+        # to it when the batch has to be replayed after a bookkeeping failure.
+        self.last_events: list[ConsumedEvent] = []
 
     def run_once(self, max_records: int = 500) -> ConsumeResult:
         events = self.consumer.poll(max_records=max_records)
+        self.last_events = events
         batch_id = str(uuid4())
         inserted = 0
         quarantined = 0
@@ -98,7 +105,14 @@ class ConsumerPipeline:
         for event in events:
             try:
                 if self.realtime_handler is not None and self._is_realtime(event):
+                    event_id = self._realtime_event_id(event)
+                    if event_id is not None and event_id in seen_event_ids:
+                        # A duplicate event id is only processed once per batch,
+                        # exactly like the ODS path.
+                        continue
                     self._handle_realtime(event)
+                    if event_id is not None:
+                        seen_event_ids.add(event_id)
                     realtime += 1
                     continue
                 envelope = Envelope.from_bytes(event.value)
@@ -133,6 +147,7 @@ class ConsumerPipeline:
             except Exception:
                 if self.dlt_publisher is not None:
                     self.dlt_publisher.publish(DLT_TOPIC, event.key or "", event.value)
+                    self._flush_dlt()
                 failed += 1
         if audit:
             audit_rows = [
@@ -175,6 +190,25 @@ class ConsumerPipeline:
             return False
         return isinstance(body, dict) and body.get("eventType") not in (None, ODS_EVENT_TYPE)
 
+    @staticmethod
+    def _realtime_event_id(event: ConsumedEvent) -> str | None:
+        """The envelope ``eventId`` used to deduplicate realtime events.
+
+        The realtime payload is intentionally not decoded here (the handler
+        owns that); a value that is not a JSON object cannot be deduplicated
+        and is left to the handler to dead-letter.
+        """
+        try:
+            body = json.loads(event.value.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(body, dict):
+            return None
+        event_id = body.get("eventId")
+        if event_id is None or str(event_id) == "":
+            return None
+        return str(event_id)
+
     def _handle_realtime(self, event: ConsumedEvent) -> None:
         for attempt in range(self.max_retries):
             try:
@@ -183,6 +217,21 @@ class ConsumerPipeline:
             except Exception:
                 if attempt + 1 >= self.max_retries:
                     raise
+
+    def _flush_dlt(self) -> None:
+        """Flush the dead-letter publisher without failing the batch.
+
+        The batch is already being committed, so a flush error is logged and
+        the message stays buffered for the next flush/close instead of
+        aborting the loop.
+        """
+        flush = getattr(self.dlt_publisher, "flush", None)
+        if not callable(flush):
+            return
+        try:
+            flush()
+        except Exception:
+            logger.warning("dead letter flush failed; message may still be buffered", exc_info=True)
 
     def _write_quarantine(
         self,

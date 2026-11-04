@@ -25,7 +25,17 @@ class KafkaEventBus:
         except ImportError as exc:
             raise RuntimeError(_MISSING) from exc
         self._producer = Producer(
-            {"bootstrap.servers": bootstrap, "enable.idempotence": True, "acks": "all"}
+            {
+                "bootstrap.servers": bootstrap,
+                "enable.idempotence": True,
+                "acks": "all",
+                # Design §6.3: batch the per-event publishes and compress with
+                # lz4; a few milliseconds of linger is enough to coalesce one
+                # consumer batch without adding visible latency.
+                "compression.type": "lz4",
+                "linger.ms": 5,
+                "batch.size": 65536,
+            }
         )
         self._consumer = Consumer(
             {
@@ -69,6 +79,28 @@ class KafkaEventBus:
 
     def commit(self) -> None:
         self._consumer.commit(asynchronous=False)
+
+    def rewind(self, events: list[ConsumedEvent]) -> None:
+        """Seek each partition back to the first offset of the failed batch.
+
+        The batch stays uncommitted after a ``BookkeepingWriteError``, but the
+        in-process consumer position has already advanced past it; seeking back
+        replays the same records on the next poll instead of waiting for a
+        rebalance.
+        """
+        if not events:
+            return
+        try:
+            from confluent_kafka import TopicPartition
+        except ImportError as exc:
+            raise RuntimeError(_MISSING) from exc
+        first_offsets: dict[tuple[str, int], int] = {}
+        for event in events:
+            key = (event.topic, event.partition)
+            if key not in first_offsets or event.offset < first_offsets[key]:
+                first_offsets[key] = event.offset
+        for (topic, partition), offset in first_offsets.items():
+            self._consumer.seek(TopicPartition(topic, partition, offset))
 
     def close(self) -> None:
         # The dead-letter and ODS messages are produced asynchronously: flush

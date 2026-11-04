@@ -49,6 +49,14 @@ class FakePublisher:
         self.flushes += 1
 
 
+class FlushFailPublisher(FakePublisher):
+    """Records the flush and then fails, like a full producer buffer."""
+
+    def flush(self):
+        super().flush()
+        raise RuntimeError("flush failed")
+
+
 class FlakyOlapStore(InMemoryOlapStore):
     """Fails the first ``failures`` ODS writes, then behaves normally."""
 
@@ -83,6 +91,23 @@ class AuditFailStore(InMemoryOlapStore):
     def insert_json(self, table, rows):
         if table == "ops_ingest_audit":
             raise RuntimeError("audit unavailable")
+        super().insert_json(table, rows)
+
+
+class FlakyBookkeepingStore(InMemoryOlapStore):
+    """Fails bookkeeping writes ``failures`` times and counts ODS write calls."""
+
+    def __init__(self, failures: int = 1):
+        super().__init__()
+        self.remaining = failures
+        self.ods_writes = 0
+
+    def insert_json(self, table, rows):
+        if table.startswith("ods_"):
+            self.ods_writes += 1
+        if table in ("ops_ingest_audit", "ops_quarantine") and self.remaining > 0:
+            self.remaining -= 1
+            raise RuntimeError("bookkeeping unavailable")
         super().insert_json(table, rows)
 
 
@@ -243,6 +268,7 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(result.failed, 1)
         self.assertEqual(result.inserted, 0)
         self.assertEqual(dlt.messages, [("dp.ods.DLT", "k-1", b"{not-json")])
+        self.assertEqual(dlt.flushes, 1)
         self.assertEqual(olap.count("ops_ingest_audit"), 0)
         self.assertTrue(bus.committed)
 
@@ -298,6 +324,18 @@ class ConsumerTest(unittest.TestCase):
         self.assertFalse(bus.committed)
         self.assertEqual(olap.count("ods_registration"), 1)
 
+    def test_dlt_flush_failure_does_not_abort_the_batch(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        dlt = FlushFailPublisher()
+        bus.publish("dp.ods", "k-1", b"{not-json")
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(dlt.flushes, 1)
+        self.assertTrue(bus.committed)
+
     def test_now_shanghai_is_naive_utc_plus_eight(self):
         value = now_shanghai()
         expected = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
@@ -319,6 +357,44 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(first.consumed, 2)
         self.assertEqual(olap.count("ods_registration"), 2)
         self.assertEqual(len(bus.pending), 1)
+
+
+class BookkeepingReplayTest(unittest.TestCase):
+    def test_rewind_replays_the_failed_batch_on_the_next_run(self):
+        bus = InMemoryEventBus()
+        olap = FlakyBookkeepingStore(failures=1)
+        bus.publish(
+            "dp.ods.registration_db.registration",
+            "1",
+            make_event("registration", valid_registration(), event_id="e-replay"),
+        )
+        pipeline = ConsumerPipeline(bus, olap, max_retries=1)
+
+        with self.assertRaises(BookkeepingWriteError):
+            pipeline.run_once()
+
+        # No commit, the ODS write happened, and the failed batch is known.
+        self.assertFalse(bus.committed)
+        self.assertEqual(olap.ods_writes, 1)
+        self.assertEqual(len(pipeline.last_events), 1)
+        self.assertEqual(bus.pending, [])
+
+        bus.rewind(pipeline.last_events)
+
+        self.assertEqual(len(bus.pending), 1)
+        second = pipeline.run_once()
+
+        self.assertEqual(second.consumed, 1)
+        self.assertEqual(second.inserted, 1)
+        self.assertEqual(olap.ods_writes, 2)
+        self.assertTrue(bus.committed)
+
+    def test_rewind_of_an_empty_batch_is_a_noop(self):
+        bus = InMemoryEventBus()
+
+        bus.rewind([])
+
+        self.assertEqual(bus.pending, [])
 
 
 class FakeRealtimeHandler:
@@ -414,6 +490,27 @@ class RealtimeRoutingTest(unittest.TestCase):
         self.assertEqual(result.realtime, 0)
         self.assertEqual(len(handler.events), 2)
         self.assertEqual(dlt.messages, [("dp.ods.DLT", "evt-9", b"bad-envelope")])
+        self.assertTrue(bus.committed)
+
+    def test_duplicate_realtime_event_id_is_skipped(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        body = {
+            "eventId": "evt-dup",
+            "eventType": "APPOINTMENT_CREATED",
+            "occurredAt": 1762336800000,
+            "payload": "{}",
+        }
+        value = json.dumps(body).encode("utf-8")
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-dup", value)
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-dup", value)
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.consumed, 2)
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(len(handler.events), 1)
         self.assertTrue(bus.committed)
 
     def test_consume_result_realtime_defaults_to_zero(self):

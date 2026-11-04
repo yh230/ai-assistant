@@ -47,7 +47,9 @@ def run_task(task_id: int) -> None:
         publisher = build_event_bus(
             settings.event_bus, settings.kafka_bootstrap, settings.kafka_consumer_group
         )
-        SyncService(db).run(task_id, "INCREMENTAL", source, publisher)
+        SyncService(db, topic_prefix=settings.kafka_topic_prefix).run(
+            task_id, "INCREMENTAL", source, publisher
+        )
     finally:
         try:
             if publisher is not None:

@@ -30,6 +30,11 @@ class InMemoryEventBus:
         self.pending = self.pending[max_records:]
         return batch
 
+    def rewind(self, events: list[ConsumedEvent]) -> None:
+        """Put a failed batch back at the front of the pending queue."""
+        if events:
+            self.pending = list(events) + self.pending
+
     def commit(self) -> None:
         self.committed = True
 
