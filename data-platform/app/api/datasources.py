@@ -104,7 +104,12 @@ def delete(datasource_id: int, db: Session = Depends(get_session)):
 @router.post("/{datasource_id}/test")
 def test_connection(datasource_id: int, db: Session = Depends(get_session)):
     entity = _get_entity(db, datasource_id)
-    return ok({"connected": _service(db).test_connection(entity)})
+    try:
+        connected = _service(db).test_connection(entity)
+    except ValueError as exc:
+        # Missing DP_SECRET_KEY surfaces here when the URL is decrypted.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ok({"connected": connected})
 
 
 @router.post("/{datasource_id}/introspect")
@@ -114,5 +119,9 @@ def introspect(
     db: Session = Depends(get_session),
 ):
     entity = _get_entity(db, datasource_id)
-    count = _service(db).introspect(entity, payload.schema_name, payload.table)
+    try:
+        count = _service(db).introspect(entity, payload.schema_name, payload.table)
+    except ValueError as exc:
+        # Missing DP_SECRET_KEY surfaces here when the URL is decrypted.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ok({"columns": count})
