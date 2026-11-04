@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # Opt-in: importing app.scheduler never starts it, and no scheduler thread
     # is created unless the deployment sets DP_ENABLE_SCHEDULER=true.
     dp_enable_scheduler: bool = False
+    # Screen (dashboard) query windows.  The ClickHouse repository clamps every
+    # value to its own hard maximum, so a large request parameter can never
+    # trigger an unbounded scan.
+    screen_trend_days: int = 30
+    screen_max_trend_days: int = 365
+    screen_ranking_limit: int = 10
+    screen_max_ranking_limit: int = 100
+    screen_recent_alert_limit: int = 10
+    screen_stream_interval_seconds: float = 5.0
 
 
 def get_settings() -> Settings:

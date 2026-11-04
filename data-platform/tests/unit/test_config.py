@@ -20,6 +20,12 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(settings.alert_webhook_url, "")
         self.assertEqual(settings.event_bus, "memory")
         self.assertFalse(settings.dp_enable_scheduler)
+        self.assertEqual(settings.screen_trend_days, 30)
+        self.assertEqual(settings.screen_max_trend_days, 365)
+        self.assertEqual(settings.screen_ranking_limit, 10)
+        self.assertEqual(settings.screen_max_ranking_limit, 100)
+        self.assertEqual(settings.screen_recent_alert_limit, 10)
+        self.assertEqual(settings.screen_stream_interval_seconds, 5.0)
 
     def test_env_reads_app_env_variable(self):
         with mock.patch.dict(os.environ, {"APP_ENV": "prod"}, clear=True):

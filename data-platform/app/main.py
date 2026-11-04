@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import app.models.metadata  # noqa: F401
-from app.api import alerts, datasources, metadata, quality, sync_tasks
+from app.api import alerts, datasources, metadata, quality, screen, sync_tasks
 from app.core.config import get_settings
 from app.core.db import Base, engine
 from app.core.exceptions import DataPlatformError
@@ -65,6 +65,7 @@ def create_app() -> FastAPI:
     app.include_router(sync_tasks.runs_router, prefix="/api")
     app.include_router(quality.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
+    app.include_router(screen.router, prefix="/api")
 
     if get_settings().dp_enable_scheduler:
         # Opt-in background scheduler; the default deployment stays API-only.
