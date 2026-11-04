@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 from etl.adapters.inmemory_event_bus import InMemoryEventBus
 from etl.adapters.inmemory_olap_store import InMemoryOlapStore
-from etl.consumer import BookkeepingWriteError, ConsumerPipeline, now_shanghai
+from etl.consumer import BookkeepingWriteError, ConsumeResult, ConsumerPipeline, now_shanghai
 from etl.envelope import Envelope
+from etl.realtime import REGISTRATION_EVENT_TOPIC
 
 
 def make_event(table: str, row: dict, event_id: str = "e-1") -> bytes:
@@ -318,6 +319,107 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(first.consumed, 2)
         self.assertEqual(olap.count("ods_registration"), 2)
         self.assertEqual(len(bus.pending), 1)
+
+
+class FakeRealtimeHandler:
+    """Stand-in for RegistrationEventHandler that records routed events."""
+
+    def __init__(self, failures: int = 0):
+        self.failures = failures
+        self.events = []
+
+    def handle(self, event):
+        self.events.append(event)
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("realtime sink unavailable")
+        return {"event_id": event.key or "realtime-1"}
+
+
+class RealtimeRoutingTest(unittest.TestCase):
+    def test_registration_topic_routes_to_the_handler(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-1", b"opaque-mq-envelope")
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(result.inserted, 0)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(len(handler.events), 1)
+        self.assertEqual(handler.events[0].topic, REGISTRATION_EVENT_TOPIC)
+        self.assertEqual(olap.tables, {})
+        self.assertEqual(olap.count("ops_ingest_audit"), 0)
+        self.assertTrue(bus.committed)
+
+    def test_non_ods_event_type_routes_to_the_handler(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        body = {
+            "eventId": "evt-2",
+            "eventType": "APPOINTMENT_CREATED",
+            "occurredAt": 1762336800000,
+            "payload": "{}",
+        }
+        bus.publish("dp.ods", "evt-2", json.dumps(body).encode("utf-8"))
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(len(handler.events), 1)
+        self.assertEqual(olap.tables, {})
+
+    def test_ods_rows_still_use_the_cleaner(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        payload = make_event("registration", valid_registration())
+        bus.publish("dp.ods.registration_db.registration", "1", payload)
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.inserted, 1)
+        self.assertEqual(result.realtime, 0)
+        self.assertEqual(handler.events, [])
+        self.assertEqual(olap.count("ods_registration"), 1)
+
+    def test_realtime_transient_failure_is_retried(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler(failures=1)
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-1", b"value")
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler, max_retries=3).run_once()
+
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(len(handler.events), 2)
+        self.assertTrue(bus.committed)
+
+    def test_realtime_failure_is_retried_then_dead_lettered(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler(failures=10)
+        dlt = FakePublisher()
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-9", b"bad-envelope")
+
+        result = ConsumerPipeline(
+            bus, olap, dlt_publisher=dlt, realtime_handler=handler, max_retries=2
+        ).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.realtime, 0)
+        self.assertEqual(len(handler.events), 2)
+        self.assertEqual(dlt.messages, [("dp.ods.DLT", "evt-9", b"bad-envelope")])
+        self.assertTrue(bus.committed)
+
+    def test_consume_result_realtime_defaults_to_zero(self):
+        result = ConsumeResult(consumed=1, inserted=1, quarantined=0, failed=0)
+
+        self.assertEqual(result.realtime, 0)
 
 
 class InMemoryAdapterTest(unittest.TestCase):

@@ -18,6 +18,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(settings.kafka_topic_prefix, "dp.ods")
         self.assertEqual(settings.timezone, "Asia/Shanghai")
         self.assertEqual(settings.event_bus, "memory")
+        self.assertFalse(settings.dp_enable_scheduler)
 
     def test_env_reads_app_env_variable(self):
         with mock.patch.dict(os.environ, {"APP_ENV": "prod"}, clear=True):

@@ -1,23 +1,31 @@
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from etl.cleaning import clean_row, sanitize_sample
 from etl.envelope import Envelope
-from etl.ports.event_bus import EventConsumer, EventPublisher
+from etl.ports.event_bus import ConsumedEvent, EventConsumer, EventPublisher
 from etl.ports.olap_store import OlapStore
+from etl.realtime import REGISTRATION_EVENT_TOPIC
 
 QUARANTINE_TABLE = "ops_quarantine"
 AUDIT_TABLE = "ops_ingest_audit"
 DLT_TOPIC = "dp.ods.DLT"
+ODS_EVENT_TYPE = "ODS_ROW"
 
 try:
     _SHANGHAI_TZ: timezone | ZoneInfo = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:  # Windows without the tzdata package
     _SHANGHAI_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+class RealtimeHandler(Protocol):
+    """Sink for events that are not ODS rows (e.g. ``ai.registration.event``)."""
+
+    def handle(self, event: ConsumedEvent) -> Any: ...
 
 
 def now_shanghai() -> datetime:
@@ -40,6 +48,7 @@ class ConsumeResult:
     inserted: int
     quarantined: int
     failed: int
+    realtime: int = 0
 
 
 class ConsumerPipeline:
@@ -54,6 +63,12 @@ class ConsumerPipeline:
     A quarantine or audit write is bookkeeping: if it fails after retries the
     offsets are not committed and :class:`BookkeepingWriteError` is raised, so
     the polled batch is replayed instead of silently losing the rejection.
+
+    When a ``realtime_handler`` is supplied, events from
+    ``ai.registration.event`` and envelopes whose ``eventType`` is not
+    ``ODS_ROW`` are routed to it instead of the ODS cleaner; everything else
+    keeps the Task 4 behaviour.  Realtime handler calls get the same per-event
+    retry budget and fall through to the same dead-letter topic.
     """
 
     def __init__(
@@ -62,12 +77,14 @@ class ConsumerPipeline:
         olap: OlapStore,
         dlt_publisher: EventPublisher | None = None,
         max_retries: int = 3,
+        realtime_handler: RealtimeHandler | None = None,
     ):
         self.consumer = consumer
         self.olap = olap
         self.dlt_publisher = dlt_publisher
         # At least one attempt is always made before an event is dead-lettered.
         self.max_retries = max(1, max_retries)
+        self.realtime_handler = realtime_handler
 
     def run_once(self, max_records: int = 500) -> ConsumeResult:
         events = self.consumer.poll(max_records=max_records)
@@ -75,10 +92,15 @@ class ConsumerPipeline:
         inserted = 0
         quarantined = 0
         failed = 0
+        realtime = 0
         audit: dict[str, int] = {}
         seen_event_ids: set[str] = set()
         for event in events:
             try:
+                if self.realtime_handler is not None and self._is_realtime(event):
+                    self._handle_realtime(event)
+                    realtime += 1
+                    continue
                 envelope = Envelope.from_bytes(event.value)
                 if envelope.event_id in seen_event_ids:
                     continue
@@ -130,8 +152,37 @@ class ConsumerPipeline:
                 ) from exc
         self.consumer.commit()
         return ConsumeResult(
-            consumed=len(events), inserted=inserted, quarantined=quarantined, failed=failed
+            consumed=len(events),
+            inserted=inserted,
+            quarantined=quarantined,
+            failed=failed,
+            realtime=realtime,
         )
+
+    def _is_realtime(self, event: ConsumedEvent) -> bool:
+        """True for the registration topic and any non-ODS envelope.
+
+        ODS rows always carry ``eventType: "ODS_ROW"``.  The event-type
+        fallback covers producers that publish the registration envelope on
+        another topic (or buses that do not model topics), while a malformed
+        value stays on the ODS path so the existing handler dead-letters it.
+        """
+        if event.topic == REGISTRATION_EVENT_TOPIC:
+            return True
+        try:
+            body = json.loads(event.value.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return isinstance(body, dict) and body.get("eventType") not in (None, ODS_EVENT_TYPE)
+
+    def _handle_realtime(self, event: ConsumedEvent) -> None:
+        for attempt in range(self.max_retries):
+            try:
+                self.realtime_handler.handle(event)
+                return
+            except Exception:
+                if attempt + 1 >= self.max_retries:
+                    raise
 
     def _write_quarantine(
         self,
