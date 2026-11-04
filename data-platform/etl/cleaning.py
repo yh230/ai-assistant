@@ -7,11 +7,31 @@ from typing import Any, Callable
 # into the warehouse, and PII columns are replaced by masked values.
 # Source columns without a projection are intentionally not carried over.
 
+# Quarantine samples are diagnostic copies of rejected source rows; keys that
+# can carry personal data are stripped before the sample is stored so the
+# quarantine table never becomes a second PII store.
+SENSITIVE_SAMPLE_KEY_PARTS = ("name", "phone", "id_card", "content", "reference_json")
+
 
 @dataclass(frozen=True)
 class CleanResult:
     row: dict[str, Any] | None
     errors: tuple[str, ...] = ()
+
+
+def _text(value: Any) -> str:
+    """Render an optional source value as text; SQL NULL becomes ""."""
+    return "" if value is None else str(value)
+
+
+def _required_errors(row: dict[str, Any], required: tuple[str, ...]) -> tuple[str, ...]:
+    """Report required projection fields that are absent or SQL NULL.
+
+    The ODS tables are typed and many columns are not nullable, so a clean row
+    can only be produced when every required field carries a value; rejected
+    rows are quarantined by the consumer instead of failing the batch insert.
+    """
+    return tuple(f"{field} is required" for field in required if row.get(field) is None)
 
 
 def mask_name(value: str | None) -> str:
@@ -23,7 +43,8 @@ def mask_name(value: str | None) -> str:
 
 def mask_phone(value: str | None) -> str:
     digits = re.sub(r"\D", "", "" if value is None else str(value))
-    if len(digits) < 7:
+    if len(digits) <= 7:
+        # Seven digits used to be rendered verbatim by the 3 + 4 rule below.
         return "*" * len(digits)
     return digits[:3] + "*" * (len(digits) - 7) + digits[-4:]
 
@@ -54,7 +75,7 @@ def clean_registration(row: dict[str, Any]) -> CleanResult:
         return CleanResult(None, tuple(errors))
     cleaned = {
         "id": entity_id,
-        "registration_no": str(row.get("registration_no", "")),
+        "registration_no": _text(row.get("registration_no")),
         "hospital_id": hospital_id,
         "department_id": int(row.get("department_id") or 0),
         "doctor_user_id": int(row.get("doctor_user_id") or 0),
@@ -77,6 +98,9 @@ def clean_chat_message(row: dict[str, Any]) -> CleanResult:
     role = row.get("role")
     if role not in ("user", "assistant"):
         return CleanResult(None, (f"invalid role: {role}",))
+    errors = _required_errors(row, ("id", "session_id"))
+    if errors:
+        return CleanResult(None, errors)
     try:
         message_id = int(row["id"])
     except (KeyError, TypeError, ValueError):
@@ -84,7 +108,7 @@ def clean_chat_message(row: dict[str, Any]) -> CleanResult:
     # Chat content is PII: only the length and the reference flag are kept.
     return CleanResult({
         "id": message_id,
-        "session_id": str(row.get("session_id", "")),
+        "session_id": _text(row.get("session_id")),
         "role": role,
         "content_length": len(content),
         "has_reference": bool(row.get("reference_json")),
@@ -92,9 +116,14 @@ def clean_chat_message(row: dict[str, Any]) -> CleanResult:
     })
 
 
-def _pick(row: dict[str, Any], fields: tuple[str, ...]) -> CleanResult:
-    if "id" not in row:
-        return CleanResult(None, ("id is required",))
+def _pick(
+    row: dict[str, Any],
+    fields: tuple[str, ...],
+    required: tuple[str, ...],
+) -> CleanResult:
+    errors = _required_errors(row, required)
+    if errors:
+        return CleanResult(None, errors)
     return CleanResult({field: row.get(field) for field in fields})
 
 
@@ -112,6 +141,7 @@ def clean_chat_session(row: dict[str, Any]) -> CleanResult:
             "created_at",
             "updated_at",
         ),
+        ("id", "session_id"),
     )
 
 
@@ -130,6 +160,7 @@ def clean_doctor_schedule(row: dict[str, Any]) -> CleanResult:
             "status",
             "update_time",
         ),
+        ("id", "hospital_id", "department_id", "doctor_user_id", "schedule_date", "period"),
     )
 
 
@@ -149,17 +180,48 @@ def clean_number_source(row: dict[str, Any]) -> CleanResult:
             "status",
             "create_time",
         ),
+        ("id", "hospital_id", "schedule_id", "schedule_date", "period", "seq_no"),
     )
 
 
 def clean_hospital(row: dict[str, Any]) -> CleanResult:
-    return _pick(row, ("id", "name", "address", "phone", "status", "update_time"))
+    return _pick(
+        row,
+        ("id", "name", "address", "phone", "status", "update_time"),
+        ("id", "name"),
+    )
 
 
 def clean_department(row: dict[str, Any]) -> CleanResult:
     return _pick(
-        row, ("id", "hospital_id", "name", "director_user_id", "status", "update_time")
+        row,
+        ("id", "hospital_id", "name", "director_user_id", "status", "update_time"),
+        ("id", "hospital_id", "name"),
     )
+
+
+def _is_sensitive_sample_key(key: Any) -> bool:
+    lowered = str(key).lower()
+    return any(part in lowered for part in SENSITIVE_SAMPLE_KEY_PARTS)
+
+
+def sanitize_sample(value: Any) -> Any:
+    """Strip PII-bearing keys from a quarantined source row.
+
+    ``ops_quarantine.sample`` is a diagnostic copy of the rejected row, so any
+    key whose name contains name/phone/id_card/content/reference_json
+    (case-insensitive) is removed at every nesting level rather than stored in
+    clear text.
+    """
+    if isinstance(value, dict):
+        return {
+            key: sanitize_sample(item)
+            for key, item in value.items()
+            if not _is_sensitive_sample_key(key)
+        }
+    if isinstance(value, list):
+        return [sanitize_sample(item) for item in value]
+    return value
 
 
 _CLEANERS: dict[str, Callable[[dict[str, Any]], CleanResult]] = {

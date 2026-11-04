@@ -2,11 +2,12 @@ from typing import Any
 
 
 class InMemoryOlapStore:
-    """In-memory OLAP fake with the same idempotency contract as the ODS tables.
+    """In-memory OLAP fake with the same insert contract as the ODS tables.
 
-    Rows are deduplicated by ``_event_id`` across all tables, mirroring the
-    Kafka ``eventId`` + ClickHouse ``ReplacingMergeTree`` guarantee: replaying
-    an event never adds a second row.
+    Rows are deduplicated by ``_event_id`` across all tables.  This global
+    dedupe is a test-only convenience: ClickHouse ``ReplacingMergeTree``
+    deduplicates by the table's ``ORDER BY`` business key when parts are merged
+    in the background, not by ``_event_id``.
     """
 
     def __init__(self):

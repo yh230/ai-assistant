@@ -1,11 +1,11 @@
 # tests/unit/test_consumer.py
 import json
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from etl.adapters.inmemory_event_bus import InMemoryEventBus
 from etl.adapters.inmemory_olap_store import InMemoryOlapStore
-from etl.consumer import ConsumerPipeline
+from etl.consumer import BookkeepingWriteError, ConsumerPipeline, now_shanghai
 from etl.envelope import Envelope
 
 
@@ -59,6 +59,29 @@ class FlakyOlapStore(InMemoryOlapStore):
         if self.remaining > 0 and table.startswith("ods_"):
             self.remaining -= 1
             raise RuntimeError("transient write failure")
+        super().insert_json(table, rows)
+
+
+class QuarantineFailStore(InMemoryOlapStore):
+    """Always fails quarantine writes and counts the attempts."""
+
+    def __init__(self):
+        super().__init__()
+        self.quarantine_attempts = 0
+
+    def insert_json(self, table, rows):
+        if table == "ops_quarantine":
+            self.quarantine_attempts += 1
+            raise RuntimeError("quarantine unavailable")
+        super().insert_json(table, rows)
+
+
+class AuditFailStore(InMemoryOlapStore):
+    """Always fails audit writes."""
+
+    def insert_json(self, table, rows):
+        if table == "ops_ingest_audit":
+            raise RuntimeError("audit unavailable")
         super().insert_json(table, rows)
 
 
@@ -118,6 +141,7 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(row["_event_id"], "e-1")
         self.assertEqual(row["_source"], "registration_db")
         self.assertIsInstance(row["_ingested_at"], datetime)
+        self.assertIsNone(row["_ingested_at"].tzinfo)
 
     def test_quarantine_row_has_json_sample_and_reasons(self):
         bus = InMemoryEventBus()
@@ -136,6 +160,49 @@ class ConsumerTest(unittest.TestCase):
         self.assertIn("status", quarantine["errors"])
         self.assertEqual(quarantine["source_table"], "registration")
         self.assertEqual(quarantine["_event_id"], "e-1")
+        self.assertTrue(quarantine["batch_id"])
+        self.assertIsNone(quarantine["_ingested_at"].tzinfo)
+
+    def test_quarantine_sample_strips_pii(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        row = valid_registration(
+            status=99,
+            patient_name="张三",
+            patient_phone="13800138000",
+            patient_id_card="110101199001011234",
+        )
+        bus.publish("dp.ods", "1", make_event("registration", row))
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        sample = json.loads(olap.tables["ops_quarantine"][0]["sample"])
+        self.assertEqual(sample["status"], 99)
+        self.assertEqual(sample["id"], 1)
+        for key in ("patient_name", "patient_phone", "patient_id_card"):
+            self.assertNotIn(key, sample)
+        self.assertNotIn("张三", olap.tables["ops_quarantine"][0]["sample"])
+        self.assertNotIn("13800138000", olap.tables["ops_quarantine"][0]["sample"])
+
+    def test_quarantine_and_audit_share_batch_id(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event(
+                "registration",
+                {"id": 1, "hospital_id": 1, "status": 99},
+                event_id="e-1",
+            ),
+        )
+        bus.publish("dp.ods", "2", make_event("hospital", {"id": 5, "name": "H"}, event_id="e-2"))
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        quarantine_batch = olap.tables["ops_quarantine"][0]["batch_id"]
+        audit_batch = olap.tables["ops_ingest_audit"][0]["batch_id"]
+        self.assertEqual(quarantine_batch, audit_batch)
 
     def test_audit_row_per_table_per_batch(self):
         bus = InMemoryEventBus()
@@ -202,6 +269,39 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(olap.count("ods_registration"), 0)
         self.assertEqual(len(dlt.messages), 1)
         self.assertTrue(bus.committed)
+
+    def test_quarantine_write_failure_is_retried_and_blocks_commit(self):
+        bus = InMemoryEventBus()
+        olap = QuarantineFailStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event("registration", {"id": 1, "hospital_id": 1, "status": 99}),
+        )
+
+        with self.assertRaises(BookkeepingWriteError):
+            ConsumerPipeline(bus, olap, max_retries=2).run_once()
+
+        self.assertFalse(bus.committed)
+        self.assertEqual(olap.quarantine_attempts, 2)
+        self.assertEqual(olap.count("ops_quarantine"), 0)
+
+    def test_audit_write_failure_blocks_commit(self):
+        bus = InMemoryEventBus()
+        olap = AuditFailStore()
+        bus.publish("dp.ods", "1", make_event("registration", valid_registration()))
+
+        with self.assertRaises(BookkeepingWriteError):
+            ConsumerPipeline(bus, olap).run_once()
+
+        self.assertFalse(bus.committed)
+        self.assertEqual(olap.count("ods_registration"), 1)
+
+    def test_now_shanghai_is_naive_utc_plus_eight(self):
+        value = now_shanghai()
+        expected = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+        self.assertIsNone(value.tzinfo)
+        self.assertLess(abs((value - expected).total_seconds()), 5)
 
     def test_poll_respects_max_records(self):
         bus = InMemoryEventBus()
