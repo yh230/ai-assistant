@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     clickhouse_url: str = "http://127.0.0.1:8123"
     clickhouse_database: str = "data_platform"
     timezone: str = "Asia/Shanghai"
+    # Generic webhook (DingTalk/WeCom-compatible text payload). Empty disables
+    # delivery; the alert record is still persisted.
+    alert_webhook_url: str = ""
     # Opt-in: importing app.scheduler never starts it, and no scheduler thread
     # is created unless the deployment sets DP_ENABLE_SCHEDULER=true.
     dp_enable_scheduler: bool = False

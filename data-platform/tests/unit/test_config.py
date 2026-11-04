@@ -17,6 +17,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(settings.kafka_consumer_group, "dp-ods-loader")
         self.assertEqual(settings.kafka_topic_prefix, "dp.ods")
         self.assertEqual(settings.timezone, "Asia/Shanghai")
+        self.assertEqual(settings.alert_webhook_url, "")
         self.assertEqual(settings.event_bus, "memory")
         self.assertFalse(settings.dp_enable_scheduler)
 
