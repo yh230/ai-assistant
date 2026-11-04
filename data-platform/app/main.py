@@ -64,8 +64,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(title="data-platform")
     Base.metadata.create_all(bind=engine)
+
+    if settings.demo_mode:
+        from app.core.db import SessionLocal
+        from app.demo import seed_demo_metadata
+
+        with SessionLocal() as db:
+            seeded = seed_demo_metadata(db)
+        if seeded:
+            logger.info("demo mode: seeded metadata %s", seeded)
 
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -85,8 +95,9 @@ def create_app() -> FastAPI:
     app.include_router(alerts.router, prefix="/api")
     app.include_router(screen.router, prefix="/api")
 
-    if get_settings().dp_enable_scheduler:
+    if settings.dp_enable_scheduler and not settings.demo_mode:
         # Opt-in background scheduler; the default deployment stays API-only.
+        # Demo mode never schedules real extraction against the fixture source.
         from app.scheduler import start_scheduler
 
         start_scheduler()

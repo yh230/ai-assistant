@@ -1,6 +1,6 @@
 # 医院数据治理与运营大屏平台（data-platform）
 
-> 状态：**代码级交付**。Kafka、ClickHouse、Flink 未下载、未部署、未启动；集成测试、E2E 与前端构建均未执行。
+> 状态：**代码级交付 + DEMO_MODE 本机验收**。`DEMO_MODE=true` 已用 SQLite 种子数据跑通后端 API、Vue 大屏与治理页面；Kafka、ClickHouse、Flink 仍未下载、未部署、未启动，真实链路、集成测试与 E2E 未执行。
 > 本仓库任何内容都不代表端到端已通过，详见 [验证报告](docs/verification-2026-11-04.md)。
 
 ## 1. 项目定位
@@ -110,7 +110,8 @@ data-platform/
 | 质量规则（6 类 + 自定义 SQL）、评分 | 是 | 规则生成 / 评分单测执行；服务层 / API 测试 SKIP | 在 ClickHouse 执行 |
 | 告警规则、去重、冷却、Webhook | 是 | 判定 / 指纹 / 冷却 / Webhook 发送逻辑单测执行 | 指标采集、自动评估、Webhook 实际投递 |
 | 大屏 API 与 SSE | 是 | 大屏服务层与仓库单测执行；路由 / SSE 测试 SKIP | 真实查询与 SSE 推送 |
-| Vue 3 大屏与治理后台 | 是 | `node --test` 工具函数测试执行 | `npm install` / `npm run build` / 浏览器验收 |
+| Vue 3 大屏与治理后台 | 是 | `node --test` 工具函数测试执行；`npm run build` 通过 | 真实浏览器交互回归 |
+| DEMO_MODE 零基础设施演示 | 是 | SQLite 种子 + 演示大屏仓库单测执行；本机后端 API、大屏与治理页面人工验收 | 仅演示数据，不代表真实链路 |
 | Flink 实时聚合 | 是（代码展示） | `py_compile` 退出码 0 | 镜像构建、作业提交、结果查询 |
 | APScheduler 调度 | 是 | 仅 Python 编译；构建与 cron 测试 SKIP | 真实定时触发 |
 
@@ -123,6 +124,7 @@ data-platform/
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APP_ENV` | `dev` | 运行环境 |
+| `DEMO_MODE` | `false` | `true` 时使用 SQLite 种子与演示大屏夹具，不连接 Kafka / ClickHouse / MySQL；禁止在生产开启 |
 | `METADATA_DB_URL` | `sqlite:///./data-platform.db` | 元数据库（部署切 MySQL） |
 | `JWT_SECRET` | 空 | 校验 ai-assistant 签发的 HS256 Token |
 | `DP_SECRET_KEY` | 空 | 数据源密码加密的 Fernet key |
@@ -152,7 +154,39 @@ data-platform/
 
 ## 6. 运行入口
 
-本轮未启动任何进程，以下命令仅作为部署参考：
+### 6.1 零基础设施演示（DEMO_MODE）
+
+只需 Python 与 Node，不启动 Kafka、ClickHouse 或业务库：
+
+```bash
+# data-platform/ 目录
+python -m venv .venv
+.venv/Scripts/pip install -e .        # Windows
+# .venv/bin/pip install -e .          # macOS / Linux
+
+# .env（已被 .gitignore 忽略）
+DEMO_MODE=true
+
+.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# 另一个终端
+cd web
+npm install
+npm run dev
+```
+
+浏览器打开 `http://127.0.0.1:5173/screen`。`DEMO_MODE` 的行为边界：
+
+- 首次启动时，仅当元数据库完全为空才写入种子：1 个演示数据源、7 个同步任务、运行记录、5 条质量规则与结果、4 条告警规则与 4 条告警记录、3 张表元数据。已有任何元数据时不写入，避免与真实数据混用。
+- 大屏使用按平台日期生成的确定性夹具，同一天重复刷新结果稳定；不查询 ClickHouse。
+- 手工运行同步任务返回 `published=false`、`rows_written=0` 和演示提示，不推进水位；手工执行质量规则写入 SQLite 模拟结果，返回 `olap_written=false`、`store_kind=demo`。
+- 连接测试与元数据采集直接返回演示提示，不拨号真实数据源。
+- 治理接口在演示模式下跳过 JWT 校验，仅用于本机展示；生产环境必须保持 `DEMO_MODE=false`，并由 ai-assistant 签发 `identity=staff` 的 Token。
+- 演示数据仅用于界面与流程展示，**不得作为数据准确性或链路可用性的证据**。
+
+### 6.2 真实链路入口
+
+Kafka、ClickHouse、Flink 仍未下载或部署，以下命令仅作为部署参考：
 
 ```bash
 # 后端 API（在 data-platform/ 目录）
@@ -177,7 +211,7 @@ VITE_USE_MOCK=true npm run dev
 
 ## 7. API 一览
 
-统一前缀 `/api`，响应 `{code, message, data}`；管理接口要求 `Authorization: Bearer <JWT>` 且 `identity=staff`，大屏接口只读。未捕获异常统一返回 `{code: 500, message: "internal error", data: null}`，堆栈只写入服务端日志。
+统一前缀 `/api`，响应 `{code, message, data}`；管理接口要求 `Authorization: Bearer <JWT>` 且 `identity=staff`，大屏接口只读。`DEMO_MODE=true` 时管理接口跳过 JWT 校验并使用模拟执行结果。未捕获异常统一返回 `{code: 500, message: "internal error", data: null}`，堆栈只写入服务端日志。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -188,13 +222,13 @@ VITE_USE_MOCK=true npm run dev
 | POST | `/datasources/{id}/introspect` | 元数据采集 |
 | GET/POST | `/sync-tasks` | 同步任务列表 / 新建（仅 7 张注册源表） |
 | PUT/DELETE | `/sync-tasks/{id}` | 更新 / 删除 |
-| POST | `/sync-tasks/{id}/run` | 手工触发；`EVENT_BUS=memory` 时 `published=false`、`rows_written=0` |
+| POST | `/sync-tasks/{id}/run` | 手工触发；`EVENT_BUS=memory` 时 `published=false`、`rows_written=0`；`DEMO_MODE` 时返回模拟结果 |
 | GET | `/sync-runs` | 运行记录 |
 | GET | `/metadata/tables` | 表元数据 |
 | GET | `/metadata/tables/{id}/columns` | 字段元数据 |
 | GET/POST | `/quality/rules` | 质量规则 |
 | PUT/DELETE | `/quality/rules/{id}` | 更新 / 删除 |
-| POST | `/quality/rules/{id}/run` | 手工执行；`OLAP_STORE=memory` 时 `olap_written=false` |
+| POST | `/quality/rules/{id}/run` | 手工执行；`OLAP_STORE=memory` 时 `olap_written=false`；`DEMO_MODE` 时返回模拟结果 |
 | GET | `/quality/results` | 质量结果 |
 | GET/POST | `/alerts/rules` | 告警规则 |
 | PUT/DELETE | `/alerts/rules/{id}` | 更新 / 删除 |
@@ -228,7 +262,7 @@ VITE_USE_MOCK=true npm run dev
 
 **已知风险：**
 
-- ClickHouse 不可用时，消费管线仍会把事件写入 DLT 并提交位点，而不是对上游施加背压；ClickHouse 故障期间的数据需要从 DLT 重放。
+- ClickHouse 不可用时，消费管线仍会把事件写入 DLT 并提交位点，而不是对上游施加背压；DLT 只保留脱敏后的小信封（含错误摘要与样本类型），**不能用于重放原始数据**。ClickHouse 故障期间的数据需要重新从 MySQL 全量同步或按水位补跑。
 - 同步任务的 `running` 锁只有正常路径会释放；进程崩溃后需要人工把 `dp_sync_task.running` 置 0 并清空 `locked_at`。
 - 增量运行在启动时用源表当前 `MAX(watermark)` 作为上界，运行期间新写入的行留给下一次运行；源库补写旧水位的数据只能依赖 overlap 窗口或全量重跑。
 - ODS 可空源列在 DDL 中给了默认值，并启用 `input_format_null_as_default=1`，但列类型与源库不完全匹配时仍可能被隔离或进入 DLT。

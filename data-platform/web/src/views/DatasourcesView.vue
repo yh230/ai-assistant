@@ -149,6 +149,13 @@ async function submit() {
 async function testConnection(row) {
   try {
     const data = await postJson(`/datasources/${row.id}/test`);
+    if (data?.demo) {
+      // Demo mode never dials a real database; show the backend's explanation
+      // instead of a misleading connection success or failure.
+      ElMessage.info(data.message || '演示模式不连接真实数据源');
+      await load();
+      return;
+    }
     if (data?.connected) {
       ElMessage.success(`${row.name} 连接成功`);
     } else {

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session, require_staff
 from app.core.config import get_settings
 from app.core.response import fail, ok
+from app.demo import simulate_quality_run
 from app.models.metadata import DpQualityResult, DpQualityRule
 from app.schemas.quality import QualityRuleCreate, QualityRuleUpdate
 from app.services.quality_service import QualityRunOutcome, QualityService
@@ -141,6 +142,9 @@ def delete_rule(rule_id: int, db: Session = Depends(get_session)):
 def run_rule(rule_id: int, db: Session = Depends(get_session)):
     rule = _get_rule(db, rule_id)
     settings = get_settings()
+    if settings.demo_mode:
+        # Deterministic simulated result; no ClickHouse evaluation or write.
+        return ok(simulate_quality_run(db, rule))
     outcome = QualityService(db, _build_store(), store_kind=settings.olap_store).run_rule(rule)
     payload = _run_view(outcome)
     if not outcome.olap_written and outcome.olap_error:

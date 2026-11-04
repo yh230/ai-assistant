@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.config import get_settings
 from app.core.response import ok
+from app.demo_screen import DemoScreenRepository
 from app.services.screen_service import (
     ClickHouseScreenRepository,
     ScreenService,
@@ -40,6 +41,10 @@ _FALLBACK_STREAM_INTERVAL = 5.0
 
 def _service() -> ScreenService:
     settings = get_settings()
+    if settings.demo_mode:
+        return ScreenService(
+            DemoScreenRepository(), alert_limit=settings.screen_recent_alert_limit
+        )
     olap = build_olap_store(
         settings.olap_store, settings.clickhouse_url, settings.clickhouse_database
     )

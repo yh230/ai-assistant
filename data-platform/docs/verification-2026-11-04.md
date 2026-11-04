@@ -3,10 +3,10 @@
 | 项 | 内容 |
 | --- | --- |
 | 验证日期 | 2026-11-04 |
-| 验证范围 | Python 静态编译、纯逻辑单元测试、前端图表配置单测、Flink 作业语法编译 |
+| 验证范围 | Python 静态编译、纯逻辑单元测试、前端图表配置单测、Flink 作业语法编译；追加 DEMO_MODE 运行时验收 |
 | 运行环境 | Python 3.12.10；Node.js v24.18.0；Windows |
 | 基础设施 | Kafka、ClickHouse、Flink 均未下载、未部署、未启动 |
-| 结论 | 代码级交付；只有静态检查与纯逻辑单测结果，**没有任何集成、E2E 或运行时证据** |
+| 结论 | 真实链路未验证；DEMO_MODE 已用 SQLite 种子完成 API、大屏与治理页面运行时验收（见 §1.3） |
 
 所有命令均在 `data-platform/` 目录下执行，下文路径均为相对路径。
 
@@ -43,6 +43,26 @@
 ### 1.2 静态编译
 
 `compileall` 只验证语法与可编译性，不导入模块，也不验证运行时行为。`py_compile` 对 Flink 作业同理：它证明文件语法正确，不证明作业能提交或运行。
+
+### 1.3 DEMO_MODE 追加验收（2026-11-04）
+
+真实 Kafka / ClickHouse / Flink 仍未安装或启动。本节只覆盖 `DEMO_MODE=true` 的零基础设施演示路径：
+
+| # | 命令 / 操作 | 结果 |
+| --- | --- | --- |
+| 1 | 创建 `.venv` 并 `pip install -e .`（仅核心依赖，不含 kafka / clickhouse 可选组） | 成功；FastAPI 0.162.0、SQLAlchemy 2.1.8 |
+| 2 | `.venv/Scripts/python -m unittest discover -s tests/unit` | `Ran 491 tests` / `OK` / 0 skipped |
+| 3 | `npm install`（官方 registry）与 `npm test` | 7 个 node 测试全部通过 |
+| 4 | `npm run build` | `✓ built in 9.80s` |
+| 5 | `DEMO_MODE=true` 启动 `uvicorn app.main:app` | `/api/health` 返回 `code=0` |
+| 6 | `GET /api/screen/overview` | 6 个 KPI 均为非零演示值（挂号 1056、AI 会话 503、质量分 0.988、延迟 12s、告警 2、取消率 4.40%） |
+| 7 | `GET /api/screen/trend?days=3` / `GET /api/screen/quality` | 趋势与质量/告警卡片返回种子数据 |
+| 8 | `POST /api/sync-tasks/1/run?mode=INCREMENTAL` | `published=false`、`rows_written=0`、`demo=true`、带演示提示 |
+| 9 | `POST /api/quality/rules/2/run` | 写入模拟结果，`olap_written=false`、`store_kind=demo` |
+| 10 | 无 JWT 访问 `/api/datasources`、`/api/sync-tasks`、`/api/quality/rules`、`/api/alerts` | 演示模式放行，返回种子数据 |
+| 11 | 浏览器打开 `http://127.0.0.1:5173/screen` 及治理四页 | 大屏 SSE 显示“实时流已连接”，KPI/趋势/排行/告警均有数据；治理页表格与操作按钮正常渲染 |
+
+**边界：** 上述结果只证明演示路径可启动、可渲染、可交互；种子数据和演示大屏值均为展示夹具，不是业务数据正确性证据。真实 MySQL 抽取、Kafka 收发、ClickHouse 写入与 Flink 作业仍未验证。
 
 ## 2. 未执行项（不得描述为已验证）
 

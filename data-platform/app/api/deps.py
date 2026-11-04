@@ -10,9 +10,13 @@ def get_session(db: Session = Depends(get_db)) -> Session:
 
 
 def require_staff(authorization: str | None = Header(default=None)) -> dict:
+    settings = get_settings()
+    if settings.demo_mode:
+        # Demo mode is anonymous by design: the seeded governance pages have to
+        # be reachable without an ai-assistant JWT.  Never enable it in prod.
+        return {"sub": "demo", "identity": "staff", "demo": True}
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing token")
-    settings = get_settings()
     if not settings.jwt_secret:
         raise HTTPException(status_code=500, detail="JWT secret not configured")
     token = authorization.removeprefix("Bearer ").strip()

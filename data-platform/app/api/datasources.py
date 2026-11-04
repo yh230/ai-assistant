@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session, require_staff
 from app.core.config import get_settings
 from app.core.response import ok
+from app.demo import DEMO_CONNECTION_MESSAGE
 from app.models.metadata import DataSource
 from app.schemas.datasource import DatasourceCreate, DatasourceUpdate, IntrospectRequest
 from app.services.datasource_service import DatasourceService
@@ -104,6 +105,8 @@ def delete(datasource_id: int, db: Session = Depends(get_session)):
 @router.post("/{datasource_id}/test")
 def test_connection(datasource_id: int, db: Session = Depends(get_session)):
     entity = _get_entity(db, datasource_id)
+    if get_settings().demo_mode:
+        return ok({"connected": False, "demo": True, "message": DEMO_CONNECTION_MESSAGE})
     try:
         connected = _service(db).test_connection(entity)
     except ValueError as exc:
@@ -119,6 +122,8 @@ def introspect(
     db: Session = Depends(get_session),
 ):
     entity = _get_entity(db, datasource_id)
+    if get_settings().demo_mode:
+        return ok({"columns": 0, "demo": True, "message": DEMO_CONNECTION_MESSAGE})
     try:
         count = _service(db).introspect(entity, payload.schema_name, payload.table)
     except ValueError as exc:

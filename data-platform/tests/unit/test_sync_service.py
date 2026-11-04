@@ -241,7 +241,11 @@ class SyncServiceTest(unittest.TestCase):
                 "source_table": "registration",
                 "target_table": "ods_registration",
             },
-            {"source_table": "chat_message", "target_table": "ods_chat_message"},
+            {
+                "source_schema": "chat_db",
+                "source_table": "chat_message",
+                "target_table": "ods_chat_message",
+            },
         )
         for change in repoints:
             task.full_load_done = True

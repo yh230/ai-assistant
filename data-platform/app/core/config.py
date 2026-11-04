@@ -12,6 +12,9 @@ class Settings(BaseSettings):
 
     app_name: str = "data-platform"
     env: str = Field(default="dev", validation_alias=AliasChoices("APP_ENV", "ENV"))
+    # Zero-infrastructure demo: seed SQLite metadata and serve screen fixtures.
+    # No Kafka, ClickHouse or MySQL connection is made in this mode.
+    demo_mode: bool = False
     metadata_db_url: str = "sqlite:///./data-platform.db"
     source_db_url: str = ""
     jwt_secret: str = ""

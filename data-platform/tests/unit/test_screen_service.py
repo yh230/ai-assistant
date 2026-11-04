@@ -535,6 +535,7 @@ class ScreenApiTest(unittest.TestCase):
         from app.api import screen
 
         settings = SimpleNamespace(
+            demo_mode=False,
             olap_store="memory",
             clickhouse_url="http://127.0.0.1:8123",
             clickhouse_database="data_platform",

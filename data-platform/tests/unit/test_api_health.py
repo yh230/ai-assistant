@@ -27,9 +27,13 @@ class HealthApiTest(unittest.TestCase):
         # module yet (it is the first module in discovery order).
         cls._tmpdir = tempfile.TemporaryDirectory()
         cls._previous_db_url = os.environ.get("METADATA_DB_URL")
+        cls._previous_demo_mode = os.environ.get("DEMO_MODE")
         os.environ["METADATA_DB_URL"] = _sqlite_url(
             os.path.join(cls._tmpdir.name, "health-test.db")
         )
+        # The developer .env may enable the demo seed; these tests assert the
+        # normal (empty metadata, JWT-protected) behaviour.
+        os.environ["DEMO_MODE"] = "false"
 
         from app.main import create_app
 
@@ -44,6 +48,10 @@ class HealthApiTest(unittest.TestCase):
             os.environ.pop("METADATA_DB_URL", None)
         else:
             os.environ["METADATA_DB_URL"] = cls._previous_db_url
+        if cls._previous_demo_mode is None:
+            os.environ.pop("DEMO_MODE", None)
+        else:
+            os.environ["DEMO_MODE"] = cls._previous_demo_mode
         cls._tmpdir.cleanup()
 
     def test_health(self):
@@ -94,7 +102,9 @@ class HealthApiTest(unittest.TestCase):
         self.assertNotIn("secret internal detail", response.text)
 
     def test_screen_routes_are_registered(self):
-        paths = {route.path for route in self._create_app().routes}
+        # FastAPI 0.162 includes routers lazily; the OpenAPI schema is the
+        # stable surface that resolves every included route.
+        paths = set(self._create_app().openapi()["paths"])
         for path in (
             "/api/screen/overview",
             "/api/screen/trend",

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session, require_staff
 from app.core.config import get_settings
 from app.core.response import ok
+from app.demo import simulate_sync_run
 from app.models.metadata import DataSource, SyncRun, SyncTask
 from app.schemas.sync import SyncTaskCreate, SyncTaskUpdate
 from app.services.datasource_service import DatasourceService
@@ -166,10 +167,17 @@ def run_task(
     db: Session = Depends(get_session),
 ):
     task = _get_task(db, task_id)
+    settings = get_settings()
+    if settings.demo_mode:
+        # Demo mode never opens a source connection, publishes to Kafka or
+        # writes a warehouse; the response is labelled as simulated.
+        try:
+            return ok(simulate_sync_run(db, task, mode))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     datasource = db.get(DataSource, task.datasource_id)
     if datasource is None:
         raise HTTPException(status_code=404, detail="datasource not found")
-    settings = get_settings()
     try:
         from etl.adapters.factory import build_event_bus
     except ImportError as exc:

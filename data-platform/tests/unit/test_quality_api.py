@@ -206,7 +206,10 @@ class QualityRoutesTest(unittest.TestCase):
             checked_at=datetime(2026, 11, 4, 12, 0, 0),
             olap_written=True,
         )
+        settings = SimpleNamespace(demo_mode=False, olap_store="clickhouse")
         with mock.patch.object(quality, "_build_store", return_value=object()), mock.patch.object(
+            quality, "get_settings", return_value=settings
+        ), mock.patch.object(
             quality, "QualityService"
         ) as service:
             service.return_value.run_rule.return_value = outcome
@@ -232,6 +235,7 @@ class QualityRoutesTest(unittest.TestCase):
             warning="memory store: results were not persisted to ClickHouse",
         )
         settings = SimpleNamespace(
+            demo_mode=False,
             olap_store="memory",
             clickhouse_url="http://127.0.0.1:8123",
             clickhouse_database="data_platform",
@@ -263,7 +267,10 @@ class QualityRoutesTest(unittest.TestCase):
             olap_written=False,
             olap_error="quality result 11 saved but ads_quality_daily write failed: boom",
         )
+        settings = SimpleNamespace(demo_mode=False, olap_store="clickhouse")
         with mock.patch.object(quality, "_build_store", return_value=object()), mock.patch.object(
+            quality, "get_settings", return_value=settings
+        ), mock.patch.object(
             quality, "QualityService"
         ) as service:
             service.return_value.run_rule.return_value = outcome

@@ -47,4 +47,7 @@ class MetadataModelTest(unittest.TestCase):
         for table, column_name in pairs:
             with self.subTest(table=table, column=column_name):
                 column = Base.metadata.tables[table].c[column_name]
-                self.assertIs(column.default.arg, now_shanghai)
+                # SQLAlchemy 2.1 wraps zero-argument defaults; the original
+                # callable is exposed through __wrapped__.
+                default = column.default.arg
+                self.assertIs(getattr(default, "__wrapped__", default), now_shanghai)
