@@ -8,3 +8,9 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+
+# Front-end dependencies, build output and local env overrides
+web/node_modules/
+web/dist/
+web/.env.local
+web/.env.*.local
