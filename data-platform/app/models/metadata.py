@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, Numeric, String,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from etl.alerting import now_shanghai
 
 
 class DataSource(Base):
@@ -148,6 +149,9 @@ class DpAlertRecord(Base):
     title: Mapped[str] = mapped_column(String(200))
     content: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="OPEN")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Alert timestamps follow the Asia/Shanghai wall-clock convention used by
+    # the cooldown comparison.  ``AlertService`` always passes ``created_at``
+    # explicitly; the default covers direct inserts.
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
     ack_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

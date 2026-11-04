@@ -107,9 +107,20 @@ def to_local_naive(value: datetime) -> datetime:
     return value.astimezone(PLATFORM_TZ).replace(tzinfo=None)
 
 
-def local_now() -> datetime:
-    """Current Asia/Shanghai wall-clock time without tzinfo."""
+def now_shanghai() -> datetime:
+    """Current Asia/Shanghai wall-clock time without tzinfo.
+
+    This is the shared platform-clock helper: ``DpAlertRecord.created_at``
+    uses it as its column default so records inserted outside
+    ``AlertService`` still follow the Asia/Shanghai convention shared with
+    ``etl.consumer.now_shanghai``.
+    """
     return datetime.now(PLATFORM_TZ).replace(tzinfo=None)
+
+
+def local_now() -> datetime:
+    """Alias of :func:`now_shanghai` kept for existing call sites."""
+    return now_shanghai()
 
 
 def fingerprint(rule_id: int, dimension: str) -> str:

@@ -200,7 +200,11 @@ class AlertService:
         self.sender = sender
         # ``None`` means "read ALERT_WEBHOOK_URL from settings"; an explicit
         # value (including "") lets callers and tests bypass the settings read.
-        self.webhook_url = webhook_url
+        # Resolve once here: evaluations may run every polling period and must
+        # not rebuild ``Settings`` (and re-read the .env file) each time.
+        if webhook_url is None:
+            webhook_url = get_settings().alert_webhook_url or ""
+        self.webhook_url = webhook_url.strip()
         self._now = now or local_now
 
     # ------------------------------------------------------------------ rules
@@ -412,9 +416,8 @@ class AlertService:
     # --------------------------------------------------------------- webhook
 
     def _effective_webhook_url(self) -> str:
-        if self.webhook_url is not None:
-            return self.webhook_url.strip()
-        return (get_settings().alert_webhook_url or "").strip()
+        # Cached at construction; see ``__init__``.
+        return self.webhook_url
 
     def _notify(self, rule: DpAlertRule, event: AlertEvent) -> tuple[bool, str | None]:
         """Send the webhook when configured; never raise.

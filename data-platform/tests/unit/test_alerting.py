@@ -1,5 +1,6 @@
 # tests/unit/test_alerting.py
 import importlib.util
+import operator
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ from etl.alerting import (
     default_webhook_sender,
     fingerprint,
     local_now,
+    now_shanghai,
     should_fire,
     to_local_naive,
 )
@@ -77,8 +79,32 @@ def _alert_row(**overrides):
     return SimpleNamespace(**values)
 
 
+_MISSING = object()
+
+
+def _criterion_matches(row, criterion):
+    """Evaluate a simple SQLAlchemy ``column <op> value`` predicate.
+
+    ``AlertService.latest_record`` builds ``DpAlertRecord.fingerprint ==
+    value``; the fake session must apply that predicate rather than merely
+    record it, otherwise a record for another hospital would satisfy the
+    cooldown check.  Criteria the fake cannot interpret keep the row.
+    """
+    left = getattr(criterion, "left", None)
+    right = getattr(criterion, "right", None)
+    key = getattr(left, "key", None)
+    compare = getattr(criterion, "operator", None)
+    value = getattr(right, "value", _MISSING)
+    if key is None or compare is None or value is _MISSING:
+        return True
+    return bool(compare(getattr(row, key), value))
+
+
 class FakeQuery:
     def __init__(self, rows):
+        # ``source`` stays aliased to the live ``FakeDb.records`` list so a
+        # later query still sees records added after an earlier filter ran.
+        self.source = rows
         self.rows = rows
         self.filters = []
         self.order_by_args = []
@@ -86,6 +112,15 @@ class FakeQuery:
 
     def filter(self, *criteria):
         self.filters.append(criteria)
+        self.rows = [
+            row
+            for row in self.source
+            if all(
+                _criterion_matches(row, criterion)
+                for group in self.filters
+                for criterion in group
+            )
+        ]
         return self
 
     def order_by(self, *criteria):
@@ -142,6 +177,42 @@ class FakeDb:
 
     def delete(self, obj):
         self.deleted.append(obj)
+
+
+class FakeQueryFilterTest(unittest.TestCase):
+    """The session double must apply the predicates real SQLAlchemy applies."""
+
+    @staticmethod
+    def _equals(column, value):
+        return SimpleNamespace(
+            left=SimpleNamespace(key=column),
+            right=SimpleNamespace(value=value),
+            operator=operator.eq,
+        )
+
+    def test_filter_keeps_only_matching_rows(self):
+        matching = SimpleNamespace(fingerprint="a")
+        other = SimpleNamespace(fingerprint="b")
+        query = FakeQuery([other, matching])
+
+        self.assertEqual(
+            query.filter(self._equals("fingerprint", "a")).all(), [matching]
+        )
+        self.assertEqual(len(query.filters), 1)
+
+    def test_chained_filters_accumulate(self):
+        row = SimpleNamespace(fingerprint="a", status="OPEN")
+        query = FakeQuery([row])
+
+        query.filter(self._equals("fingerprint", "a"))
+        query.filter(self._equals("status", "CLOSED"))
+
+        self.assertEqual(query.all(), [])
+
+    def test_unrecognised_criteria_keep_the_rows(self):
+        row = SimpleNamespace(fingerprint="a")
+
+        self.assertEqual(FakeQuery([row]).filter(SimpleNamespace()).all(), [row])
 
 
 # The four tests from the task brief.  The payload is the DingTalk-compatible
@@ -278,6 +349,11 @@ class AlertingTimezoneTest(unittest.TestCase):
         expected = datetime.now(SHANGHAI_OFFSET).replace(tzinfo=None)
         self.assertLess(abs((local_now() - expected).total_seconds()), 5)
 
+    def test_now_shanghai_is_the_shared_platform_clock(self):
+        expected = datetime.now(SHANGHAI_OFFSET).replace(tzinfo=None)
+        self.assertLess(abs((now_shanghai() - expected).total_seconds()), 5)
+        self.assertIsNone(now_shanghai().tzinfo)
+
 
 class _FakeResponse:
     def __init__(self, error=None):
@@ -396,13 +472,21 @@ class AlertServiceEvaluationTest(unittest.TestCase):
         self.assertTrue(service.evaluate_rule(rule, 600, "hospital:1", 3).fired)
 
     def test_cooldown_blocks_a_repeat_for_the_same_fingerprint(self):
-        record = SimpleNamespace(
+        matching = SimpleNamespace(
             id=90,
             fingerprint=fingerprint(1, "hospital:1"),
             created_at=datetime(2026, 11, 4, 11, 50, 0),
             status="OPEN",
         )
-        db = FakeDb([record])
+        # Newer, but for another hospital: ``latest_record`` must filter it
+        # out instead of letting it satisfy (or bypass) the cooldown.
+        other = SimpleNamespace(
+            id=91,
+            fingerprint=fingerprint(1, "hospital:2"),
+            created_at=datetime(2026, 11, 4, 11, 58, 0),
+            status="OPEN",
+        )
+        db = FakeDb([other, matching])
 
         outcome = self._service(db).evaluate_rule(
             _rule_row(), 600, "hospital:1", 1, datetime(2026, 11, 4, 12, 0, 0)
@@ -412,6 +496,8 @@ class AlertServiceEvaluationTest(unittest.TestCase):
         self.assertEqual(outcome.reason, "cooldown active for this fingerprint")
         self.assertEqual(db.added, [])
         self.assertEqual(len(db.query_obj.filters), 1)
+        # The fake applied the fingerprint predicate, not just recorded it.
+        self.assertEqual(db.query_obj.rows, [matching])
 
     def test_cooldown_applies_even_when_the_previous_alert_was_closed(self):
         record = SimpleNamespace(
@@ -452,7 +538,11 @@ class AlertServiceEvaluationTest(unittest.TestCase):
 
         outcome = self._service(db).evaluate_rule(_rule_row(), 600, "hospital:1")
 
+        # Regression: a recent record for another fingerprint must not trip
+        # the cooldown of ``hospital:1``.
         self.assertTrue(outcome.fired)
+        self.assertEqual(db.query_obj.rows, [])
+        self.assertEqual(db.added[0].fingerprint, fingerprint(1, "hospital:1"))
 
     def test_aware_now_is_stored_as_shanghai_wall_clock(self):
         db = FakeDb()
@@ -486,6 +576,27 @@ class AlertServiceEvaluationTest(unittest.TestCase):
 
         self.assertTrue(outcome.webhook_sent)
         self.assertEqual(calls[0][0], "https://hook.example.invalid/alert")
+
+    def test_webhook_url_is_resolved_once_at_construction(self):
+        from app.services import alert_service as module
+
+        settings = SimpleNamespace(alert_webhook_url="https://hook.example.invalid/first")
+        calls = []
+        with mock.patch.object(module, "get_settings", return_value=settings) as getter:
+            service = module.AlertService(
+                FakeDb(),
+                sender=lambda url, payload: calls.append(url),
+                webhook_url=None,
+                now=lambda: datetime(2026, 11, 4, 12, 0, 0),
+            )
+            # A settings change after construction must not be re-read on
+            # every evaluation.
+            settings.alert_webhook_url = "https://hook.example.invalid/second"
+            outcome = service.evaluate_rule(_rule_row(), 600, "hospital:1")
+
+        self.assertTrue(outcome.webhook_sent)
+        self.assertEqual(calls, ["https://hook.example.invalid/first"])
+        self.assertEqual(getter.call_count, 1)
 
     def test_webhook_is_sent_through_the_injected_sender(self):
         calls = []
@@ -772,6 +883,24 @@ class AlertServiceLifecycleTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_STACK, "backend dependencies not installed")
+class AlertModelDefaultsTest(unittest.TestCase):
+    def test_created_at_defaults_to_the_shanghai_clock(self):
+        from app.models.metadata import DpAlertRecord
+
+        default = DpAlertRecord.__table__.c.created_at.default
+        self.assertIsNotNone(default)
+        # SQLAlchemy either keeps the zero-argument callable or wraps it in a
+        # context-aware one; accept both shapes.
+        try:
+            value = default.arg()
+        except TypeError:
+            value = default.arg(None)
+        expected = datetime.now(SHANGHAI_OFFSET).replace(tzinfo=None)
+        self.assertIsNone(value.tzinfo)
+        self.assertLess(abs((value - expected).total_seconds()), 5)
+
+
+@unittest.skipUnless(HAS_STACK, "backend dependencies not installed")
 class AlertRoutesTest(unittest.TestCase):
     def test_routes_cover_the_design_surface(self):
         from app.api import alerts
@@ -780,7 +909,9 @@ class AlertRoutesTest(unittest.TestCase):
         for route in alerts.router.routes:
             routes.setdefault(route.path, set()).update(route.methods)
 
-        self.assertEqual(routes["/alerts"], {"GET"})
+        # Starlette adds HEAD to every GET route, so assert membership rather
+        # than equality (same fix as the quality route test).
+        self.assertIn("GET", routes["/alerts"])
         self.assertTrue({"GET", "POST"} <= routes["/alerts/rules"])
         self.assertTrue({"PUT", "DELETE"} <= routes["/alerts/rules/{rule_id}"])
         self.assertEqual(routes["/alerts/{alert_id}/ack"], {"POST"})
