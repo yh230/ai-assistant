@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 from etl.ports.source_repository import SourceColumn, SourceTable
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_STAR_COLUMNS = ("*",)
 
 
 def validate_identifier(value: str) -> str:
@@ -15,12 +16,25 @@ def validate_identifier(value: str) -> str:
     return value
 
 
+def _select_columns(columns: list[str]) -> str:
+    """Render a projection, allowing the internal ``["*"]`` sentinel.
+
+    ``["*"]`` means "select every column" and is emitted verbatim; it is not
+    an identifier and is never validated.  Any other element must be a real
+    column name and still goes through :func:`validate_identifier`.
+    """
+    if tuple(columns) == _STAR_COLUMNS:
+        return "*"
+    return ", ".join(validate_identifier(column) for column in columns)
+
+
 class MySQLSourceRepository:
     """Read-only MySQL adapter.
 
     Identifiers cannot be bound as SQL parameters, so every schema, table,
     column and primary-key name is validated against ``_IDENT`` before it is
-    interpolated into the statement; values remain bound parameters.
+    interpolated into the statement; values remain bound parameters.  Batch
+    readers accept ``columns=["*"]`` as a select-everything shorthand.
     """
 
     def __init__(self, url: str):
@@ -81,7 +95,7 @@ class MySQLSourceRepository:
         schema = validate_identifier(schema)
         table = validate_identifier(table)
         primary_key = validate_identifier(primary_key)
-        column_sql = ", ".join(validate_identifier(column) for column in columns)
+        column_sql = _select_columns(columns)
         where = f"WHERE {primary_key} > :after_pk" if after_pk is not None else ""
         sql = text(
             f"SELECT {column_sql} FROM {schema}.{table} {where} "
@@ -109,7 +123,7 @@ class MySQLSourceRepository:
         table = validate_identifier(table)
         primary_key = validate_identifier(primary_key)
         watermark_column = validate_identifier(watermark_column)
-        column_sql = ", ".join(validate_identifier(column) for column in columns)
+        column_sql = _select_columns(columns)
         if after_pk is None:
             where = f"WHERE {watermark_column} >= :after_watermark"
         else:

@@ -19,6 +19,7 @@ def list_tables(db: Session = Depends(get_session)):
         [
             {
                 "id": row.id,
+                "datasource_id": row.datasource_id,
                 "schema": row.table_schema,
                 "table": row.table_name,
                 "comment": row.table_comment,
@@ -31,7 +32,8 @@ def list_tables(db: Session = Depends(get_session)):
 @router.get("/tables/{table_id}/columns")
 def list_columns(table_id: int, db: Session = Depends(get_session)):
     rows = (
-        db.query(ColumnMeta)
+        db.query(ColumnMeta, TableMeta.datasource_id)
+        .join(TableMeta, TableMeta.id == ColumnMeta.table_meta_id)
         .filter(ColumnMeta.table_meta_id == table_id)
         .order_by(ColumnMeta.ordinal)
         .all()
@@ -39,11 +41,12 @@ def list_columns(table_id: int, db: Session = Depends(get_session)):
     return ok(
         [
             {
-                "name": row.column_name,
-                "data_type": row.data_type,
-                "nullable": row.nullable,
-                "comment": row.column_comment,
+                "datasource_id": datasource_id,
+                "name": column.column_name,
+                "data_type": column.data_type,
+                "nullable": column.nullable,
+                "comment": column.column_comment,
             }
-            for row in rows
+            for column, datasource_id in rows
         ]
     )

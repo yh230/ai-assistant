@@ -7,7 +7,7 @@ import unittest
 
 HAS_STACK = all(
     importlib.util.find_spec(name) is not None
-    for name in ("fastapi", "sqlalchemy", "pydantic_settings", "httpx")
+    for name in ("fastapi", "sqlalchemy", "pydantic_settings", "httpx", "cryptography")
 )
 
 
@@ -53,3 +53,23 @@ class HealthApiTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["code"], 0)
         self.assertEqual(body["data"]["status"], "ok")
+
+    def test_unknown_route_returns_error_envelope(self):
+        from fastapi.testclient import TestClient
+
+        response = TestClient(self._create_app()).get("/api/missing-route")
+        self.assertEqual(response.status_code, 404)
+        body = response.json()
+        self.assertEqual(body["code"], 404)
+        self.assertIn("message", body)
+        self.assertIsNone(body["data"])
+
+    def test_route_http_error_returns_error_envelope(self):
+        from fastapi.testclient import TestClient
+
+        response = TestClient(self._create_app()).get("/api/datasources")
+        self.assertEqual(response.status_code, 401)
+        body = response.json()
+        self.assertEqual(body["code"], 401)
+        self.assertEqual(body["message"], "missing token")
+        self.assertIsNone(body["data"])

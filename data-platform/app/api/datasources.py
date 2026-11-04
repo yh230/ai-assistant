@@ -17,10 +17,7 @@ router = APIRouter(
 
 
 def _service(db: Session) -> DatasourceService:
-    try:
-        return DatasourceService(db, get_settings().dp_secret_key)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return DatasourceService(db, get_settings().dp_secret_key)
 
 
 def _get_entity(db: Session, datasource_id: int) -> DataSource:
@@ -48,6 +45,9 @@ def create(payload: DatasourceCreate, db: Session = Depends(get_session)):
     except IntegrityError as exc:
         db.rollback()
         raise _duplicate_name() from exc
+    except ValueError as exc:
+        # Missing DP_SECRET_KEY surfaces here when the password is encrypted.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ok({"id": entity.id, "name": entity.name})
 
 
@@ -88,14 +88,16 @@ def update(
     except IntegrityError as exc:
         db.rollback()
         raise _duplicate_name() from exc
+    except ValueError as exc:
+        # Missing DP_SECRET_KEY surfaces here when the password is encrypted.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ok({"id": entity.id, "name": entity.name})
 
 
 @router.delete("/{datasource_id}")
 def delete(datasource_id: int, db: Session = Depends(get_session)):
     entity = _get_entity(db, datasource_id)
-    db.delete(entity)
-    db.commit()
+    _service(db).delete(entity)
     return ok({"deleted": datasource_id})
 
 
