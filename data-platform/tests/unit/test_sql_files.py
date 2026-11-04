@@ -33,6 +33,36 @@ MESSAGE_LEVEL_RAG = (
     "/ nullIf(countIf(m.role = 'assistant'), 0)"
 )
 
+# Every DWD/OPS source read by a transform must use FINAL so unmerged
+# ReplacingMergeTree versions are collapsed before aggregation.
+FINAL_SOURCES = {
+    "ads/ads_hospital_daily.sql": (
+        "dwd_registration r FINAL",
+        "dwd_ai_session s FINAL",
+        "dwd_ai_message m FINAL",
+    ),
+    "ads/ads_department_daily.sql": ("dwd_registration FINAL",),
+    "ads/ads_ai_daily.sql": (
+        "dwd_ai_session s FINAL",
+        "dwd_ai_message m FINAL",
+    ),
+    "ads/ads_pipeline_health.sql": ("ops_ingest_audit FINAL",),
+}
+
+NULL_SAFE_RAG = (
+    "ifNull(countIf(m.role = 'assistant' AND m.has_reference = 1) "
+    "/ nullIf(countIf(m.role = 'assistant'), 0), 0) AS rag_hit_rate"
+)
+
+NULL_SAFE_RATIOS = {
+    "ads/ads_hospital_daily.sql": (
+        "ifNull(countIf(r.status IN (4, 5, 6)) / nullIf(count(), 0), 0) AS cancel_rate",
+        "ifNull(countIf(r.status = 3) / nullIf(countIf(r.status IN (2, 3)), 0), 0) AS visit_rate",
+        NULL_SAFE_RAG,
+    ),
+    "ads/ads_ai_daily.sql": (NULL_SAFE_RAG,),
+}
+
 
 def read_sql(relative: str) -> str:
     return (SQL_ROOT / relative).read_text(encoding="utf-8")
@@ -151,6 +181,18 @@ class SqlFilesTest(unittest.TestCase):
     def test_rag_hit_rate_is_message_level(self):
         for relative in ("ads/ads_hospital_daily.sql", "ads/ads_ai_daily.sql"):
             self.assertIn(MESSAGE_LEVEL_RAG, normalized(read_sql(relative)), relative)
+
+    def test_ads_transforms_read_every_source_with_final(self):
+        for relative, sources in FINAL_SOURCES.items():
+            sql = normalized(read_sql(relative))
+            for source in sources:
+                self.assertIn(source, sql, f"{relative}: {source}")
+
+    def test_ads_ratios_are_null_safe(self):
+        for relative, formulas in NULL_SAFE_RATIOS.items():
+            sql = normalized(read_sql(relative))
+            for formula in formulas:
+                self.assertIn(formula, sql, f"{relative}: {formula}")
 
 
 if __name__ == "__main__":

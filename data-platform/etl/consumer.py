@@ -1,9 +1,10 @@
+import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
-from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from etl.cleaning import clean_row, sanitize_sample
@@ -54,6 +55,30 @@ class ConsumeResult:
     realtime: int = 0
 
 
+def event_batch_key(event: ConsumedEvent) -> str:
+    """Stable identity of one polled event for the batch hash.
+
+    A parsable envelope contributes its ``eventId``; anything that is not an
+    envelope (realtime MQ payloads, malformed messages) falls back to the Kafka
+    position, which is also stable when a batch is rewound and replayed.
+    """
+    try:
+        return Envelope.from_bytes(event.value).event_id
+    except ValueError:
+        return f"{event.topic}:{event.partition}:{event.offset}"
+
+
+def batch_id_for(events: Sequence[ConsumedEvent]) -> str:
+    """Deterministic batch id, so a replayed batch hashes identically.
+
+    Quarantine and audit rows carry this id; replaying the same polled events
+    after a rewind therefore produces the same ``batch_id`` and
+    ``ReplacingMergeTree`` collapses the bookkeeping rows on merge.
+    """
+    parts = [event_batch_key(event) for event in events]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 class ConsumerPipeline:
     """Batch consumer that cleans ODS row events and loads them idempotently.
 
@@ -66,6 +91,9 @@ class ConsumerPipeline:
     A quarantine or audit write is bookkeeping: if it fails after retries the
     offsets are not committed and :class:`BookkeepingWriteError` is raised, so
     the polled batch is replayed instead of silently losing the rejection.
+    The ``batch_id`` on those rows is a deterministic hash of the polled events
+    (:func:`batch_id_for`), so a replayed batch reuses its id and the
+    ``ReplacingMergeTree`` bookkeeping tables collapse instead of duplicating.
 
     When a ``realtime_handler`` is supplied, events from
     ``ai.registration.event`` and envelopes whose ``eventType`` is not
@@ -95,7 +123,7 @@ class ConsumerPipeline:
     def run_once(self, max_records: int = 500) -> ConsumeResult:
         events = self.consumer.poll(max_records=max_records)
         self.last_events = events
-        batch_id = str(uuid4())
+        batch_id = batch_id_for(events)
         inserted = 0
         quarantined = 0
         failed = 0

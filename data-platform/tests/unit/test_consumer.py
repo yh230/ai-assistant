@@ -1,12 +1,20 @@
 # tests/unit/test_consumer.py
+import hashlib
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
 from etl.adapters.inmemory_event_bus import InMemoryEventBus
 from etl.adapters.inmemory_olap_store import InMemoryOlapStore
-from etl.consumer import BookkeepingWriteError, ConsumeResult, ConsumerPipeline, now_shanghai
+from etl.consumer import (
+    BookkeepingWriteError,
+    ConsumeResult,
+    ConsumerPipeline,
+    batch_id_for,
+    now_shanghai,
+)
 from etl.envelope import Envelope
+from etl.ports.event_bus import ConsumedEvent
 from etl.realtime import REGISTRATION_EVENT_TOPIC
 
 
@@ -357,6 +365,70 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(first.consumed, 2)
         self.assertEqual(olap.count("ods_registration"), 2)
         self.assertEqual(len(bus.pending), 1)
+
+
+class DeterministicBatchIdTest(unittest.TestCase):
+    def test_replaying_the_same_event_reuses_the_batch_id(self):
+        payload = make_event("registration", valid_registration(), event_id="e-stable")
+        batch_ids = []
+        for _ in range(2):
+            bus = InMemoryEventBus()
+            olap = InMemoryOlapStore()
+            bus.publish("dp.ods", "1", payload)
+            ConsumerPipeline(bus, olap).run_once()
+            batch_ids.append(olap.tables["ops_ingest_audit"][0]["batch_id"])
+
+        self.assertRegex(batch_ids[0], r"^[0-9a-f]{16}$")
+        self.assertEqual(batch_ids[0], batch_ids[1])
+
+    def test_batch_id_hashes_the_envelope_event_ids(self):
+        events = [
+            ConsumedEvent(
+                topic="dp.ods",
+                key="1",
+                value=make_event("registration", valid_registration(), event_id="e-1"),
+            ),
+            ConsumedEvent(
+                topic="dp.ods",
+                key="2",
+                value=make_event("registration", valid_registration(), event_id="e-2"),
+            ),
+        ]
+
+        self.assertEqual(
+            batch_id_for(events),
+            hashlib.sha256(b"e-1|e-2").hexdigest()[:16],
+        )
+
+    def test_batch_id_falls_back_to_the_event_position(self):
+        events = [
+            ConsumedEvent(
+                topic="dp.ods.dlt",
+                key="k-1",
+                value=b"{not-json",
+                partition=2,
+                offset=7,
+            )
+        ]
+
+        self.assertEqual(
+            batch_id_for(events),
+            hashlib.sha256(b"dp.ods.dlt:2:7").hexdigest()[:16],
+        )
+
+    def test_different_events_get_different_batch_ids(self):
+        first = ConsumedEvent(
+            topic="dp.ods",
+            key="1",
+            value=make_event("registration", valid_registration(id=1), event_id="e-1"),
+        )
+        second = ConsumedEvent(
+            topic="dp.ods",
+            key="2",
+            value=make_event("registration", valid_registration(id=2), event_id="e-2"),
+        )
+
+        self.assertNotEqual(batch_id_for([first]), batch_id_for([second]))
 
 
 class BookkeepingReplayTest(unittest.TestCase):
