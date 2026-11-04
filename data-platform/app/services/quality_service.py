@@ -7,6 +7,11 @@ database (always) and one ``ads_quality_daily`` row in the OLAP store (when
 available).  A warehouse write failure never hides the metadata result; the
 caller receives an outcome carrying the error so the API can return a clear
 failure envelope.
+
+The in-memory OLAP store is a local/test fixture: it accepts rows but does not
+persist them to ClickHouse.  Runs against it keep the metadata result and
+report ``olap_written=False`` with a warning instead of claiming a warehouse
+write that never happened.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import DataPlatformError
 from app.models.metadata import DpQualityResult, DpQualityRule
+from etl.adapters.inmemory_olap_store import InMemoryOlapStore
 from etl.ports.olap_store import OlapStore
 from etl.quality import (
     QUALITY_DAILY_TABLE,
@@ -31,6 +37,8 @@ from etl.quality import (
 )
 
 logger = logging.getLogger(__name__)
+
+MEMORY_STORE_WARNING = "memory store: results were not persisted to ClickHouse"
 
 UPDATABLE_FIELDS = frozenset(
     {
@@ -59,6 +67,8 @@ class QualityRunOutcome:
     checked_at: datetime
     olap_written: bool
     olap_error: str | None = None
+    store_kind: str = "clickhouse"
+    warning: str | None = None
 
 
 def to_rule(row: DpQualityRule) -> QualityRule:
@@ -135,10 +145,23 @@ class QualityService:
         db: Session,
         olap: OlapStore | None = None,
         now: Callable[[], datetime] | None = None,
+        store_kind: str = "clickhouse",
     ):
         self.db = db
         self.olap = olap
         self._now = now or datetime.utcnow
+        self.store_kind = store_kind or "clickhouse"
+
+    def _effective_store_kind(self) -> str:
+        """Return the persistable store kind ("clickhouse" or "memory").
+
+        The factory-built in-memory store is detected by type even when the
+        caller does not pass ``store_kind``; any kind other than
+        ``clickhouse`` is treated as a non-persistent memory store.
+        """
+        if self.store_kind != "clickhouse" or isinstance(self.olap, InMemoryOlapStore):
+            return "memory"
+        return "clickhouse"
 
     def create_rule(
         self,
@@ -219,10 +242,13 @@ class QualityService:
         no result to persist.  A warehouse append failure after evaluation is
         reported through ``olap_written``/``olap_error`` while the MySQL result
         stays committed, so the caller can return an error envelope instead of
-        silently reporting success.
+        silently reporting success.  A memory store never receives a
+        ClickHouse write, so that case reports ``olap_written=False`` with a
+        warning instead of a false success.
         """
         if self.olap is None:
             raise DataPlatformError(503, "quality olap store is not available")
+        store_kind = self._effective_store_kind()
         try:
             rule = to_rule(entity)
             result = evaluate_rule(rule, self.olap)
@@ -250,6 +276,20 @@ class QualityService:
                 500, f"failed to persist quality result: {exc}"
             ) from exc
 
+        if store_kind == "memory":
+            # The metadata result above is durable; the ADS row is not written
+            # because the in-memory store cannot persist to ClickHouse.
+            logger.warning("quality rule %s: %s", entity.id, MEMORY_STORE_WARNING)
+            return QualityRunOutcome(
+                result=result,
+                result_id=record.id,
+                checked_at=checked_at,
+                olap_written=False,
+                olap_error=None,
+                store_kind=store_kind,
+                warning=MEMORY_STORE_WARNING,
+            )
+
         olap_error = None
         try:
             self.olap.insert_json(
@@ -272,4 +312,5 @@ class QualityService:
             checked_at=checked_at,
             olap_written=olap_written,
             olap_error=olap_error,
+            store_kind=store_kind,
         )

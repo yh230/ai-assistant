@@ -215,6 +215,42 @@ class QualityRoutesTest(unittest.TestCase):
         self.assertEqual(result["code"], 0)
         self.assertEqual(result["data"]["result_id"], 11)
         self.assertEqual(result["data"]["olap_written"], True)
+        self.assertEqual(result["data"]["store_kind"], "clickhouse")
+        self.assertIsNone(result["data"]["warning"])
+
+    def test_run_rule_memory_store_returns_a_warning(self):
+        from app.api import quality
+        from etl.quality import QualityResult
+
+        outcome = quality.QualityRunOutcome(
+            result=QualityResult(3, 100, 1, 0.99, "PASS", "P0"),
+            result_id=11,
+            checked_at=datetime(2026, 11, 4, 12, 0, 0),
+            olap_written=False,
+            olap_error=None,
+            store_kind="memory",
+            warning="memory store: results were not persisted to ClickHouse",
+        )
+        settings = SimpleNamespace(
+            olap_store="memory",
+            clickhouse_url="http://127.0.0.1:8123",
+            clickhouse_database="data_platform",
+        )
+        with mock.patch.object(
+            quality, "_build_store", return_value=object()
+        ), mock.patch.object(
+            quality, "get_settings", return_value=settings
+        ), mock.patch.object(quality, "QualityService") as service:
+            service.return_value.run_rule.return_value = outcome
+            result = quality.run_rule(3, db=FakeDb(rule=_rule_row()))
+
+        # Not an HTTP error: the metadata result is durable, but the payload
+        # must not claim a ClickHouse write.
+        self.assertEqual(result["code"], 0)
+        self.assertFalse(result["data"]["olap_written"])
+        self.assertEqual(result["data"]["store_kind"], "memory")
+        self.assertIn("not persisted to ClickHouse", result["data"]["warning"])
+        self.assertEqual(service.call_args.kwargs["store_kind"], "memory")
 
     def test_run_rule_warehouse_failure_returns_502_envelope(self):
         from app.api import quality

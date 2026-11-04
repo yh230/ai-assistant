@@ -1,15 +1,16 @@
 # tests/unit/test_quality_rules.py
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from unittest import mock
 
 from etl.quality import (
-    PLATFORM_TZ,
     QUALITY_DAILY_TABLE,
     QualityResult,
     QualityRule,
     build_quality_row,
     build_rule_sql,
     evaluate_rule,
+    platform_today,
     validate_rule,
     weighted_score,
 )
@@ -46,7 +47,7 @@ def _rule(**overrides):
 
 
 def _platform_today():
-    return datetime.now(timezone.utc).astimezone(PLATFORM_TZ).date()
+    return platform_today()
 
 
 def _volume_rows(counts, end=None):
@@ -60,6 +61,10 @@ def _volume_rows(counts, end=None):
 
 
 class QualityRuleTest(unittest.TestCase):
+    def test_platform_today_matches_the_shanghai_calendar(self):
+        shanghai = timezone(timedelta(hours=8), "Asia/Shanghai")
+        self.assertEqual(platform_today(), datetime.now(shanghai).date())
+
     def test_not_null_sql(self):
         rule = QualityRule(id=1, name="phone not null", table="dwd_registration", rule_type="NOT_NULL", column="registration_no", params={}, threshold=0.99, severity="P0")
         sql = build_rule_sql(rule)
@@ -148,9 +153,16 @@ class BuildRuleSqlTest(unittest.TestCase):
         self.assertEqual(
             sql,
             "SELECT toDate(created_at) AS metric_date, count() AS total_rows "
-            "FROM dwd_registration WHERE created_at >= today() - 7 "
+            "FROM dwd_registration WHERE created_at >= "
+            "toDate(now(), 'Asia/Shanghai') - 7 "
             "GROUP BY metric_date ORDER BY metric_date",
         )
+
+    def test_volume_sql_uses_the_platform_timezone_for_today(self):
+        sql = build_rule_sql(_rule(rule_type="VOLUME", column=None))
+        # The window must not depend on the ClickHouse server time zone.
+        self.assertIn("toDate(now(), 'Asia/Shanghai') - 7", sql)
+        self.assertNotIn("today()", sql)
 
     def test_volume_sql_uses_configured_date_column(self):
         sql = build_rule_sql(
@@ -161,7 +173,7 @@ class BuildRuleSqlTest(unittest.TestCase):
             )
         )
         self.assertIn("toDate(schedule_date) AS metric_date", sql)
-        self.assertIn("schedule_date >= today() - 7", sql)
+        self.assertIn("schedule_date >= toDate(now(), 'Asia/Shanghai') - 7", sql)
 
     def test_custom_sql_is_used_verbatim(self):
         custom = (
@@ -465,6 +477,34 @@ class EvaluateRuleTest(unittest.TestCase):
             FakeOlap(_volume_rows([100] * 7 + [200])),
         )
         self.assertEqual(result.status, "PASS")
+
+    def test_volume_reference_date_comes_from_the_platform_helper(self):
+        reference = date(2026, 11, 4)
+        rows = [
+            {"metric_date": reference - timedelta(days=offset), "total_rows": 100}
+            for offset in range(0, 8)
+        ]
+        with mock.patch("etl.quality.platform_today", return_value=reference):
+            result = evaluate_rule(
+                _rule(rule_type="VOLUME", column=None, threshold=0.3),
+                FakeOlap(rows),
+            )
+        self.assertEqual(result.total_rows, 100)
+        self.assertEqual(result.status, "PASS")
+
+    def test_volume_reference_date_detects_a_missing_today(self):
+        reference = date(2026, 11, 4)
+        rows = [
+            {"metric_date": reference - timedelta(days=offset), "total_rows": 100}
+            for offset in range(1, 8)
+        ]
+        with mock.patch("etl.quality.platform_today", return_value=reference):
+            result = evaluate_rule(
+                _rule(rule_type="VOLUME", column=None, threshold=0.3),
+                FakeOlap(rows),
+            )
+        self.assertEqual(result.total_rows, 0)
+        self.assertEqual(result.status, "FAIL")
 
 
 class WeightedScoreTest(unittest.TestCase):

@@ -215,6 +215,8 @@ class QualityServiceRunTest(unittest.TestCase):
         self.assertEqual(outcome.result_id, 100)
         self.assertTrue(outcome.olap_written)
         self.assertIsNone(outcome.olap_error)
+        self.assertEqual(outcome.store_kind, "clickhouse")
+        self.assertIsNone(outcome.warning)
         self.assertEqual(len(db.added), 1)
         record = db.added[0]
         self.assertEqual(record.rule_id, 3)
@@ -258,6 +260,48 @@ class QualityServiceRunTest(unittest.TestCase):
         self.assertIn("saved but", outcome.olap_error)
         self.assertIn("clickhouse down", outcome.olap_error)
         self.assertEqual(outcome.result_id, db.added[0].id)
+
+    def test_in_memory_store_does_not_claim_a_clickhouse_write(self):
+        from app.services.quality_service import MEMORY_STORE_WARNING
+        from etl.adapters.inmemory_olap_store import InMemoryOlapStore
+
+        db = FakeDb()
+        olap = InMemoryOlapStore()
+
+        outcome = self._service(olap, db).run_rule(_entity())
+
+        # MySQL persistence and evaluation still happen for tests...
+        self.assertEqual(len(db.added), 1)
+        self.assertEqual(outcome.result.status, "PASS")
+        self.assertEqual(outcome.result_id, db.added[0].id)
+        # ...but the response does not claim a ClickHouse write.
+        self.assertFalse(outcome.olap_written)
+        self.assertEqual(outcome.store_kind, "memory")
+        self.assertEqual(outcome.warning, MEMORY_STORE_WARNING)
+        self.assertIn("not persisted to ClickHouse", outcome.warning)
+        self.assertIsNone(outcome.olap_error)
+        self.assertEqual(olap.count("ads_quality_daily"), 0)
+
+    def test_non_clickhouse_store_kind_is_treated_as_memory(self):
+        from app.services.quality_service import (
+            MEMORY_STORE_WARNING,
+            QualityService,
+        )
+
+        db = FakeDb()
+        olap = FakeOlap([{"total_rows": 5, "bad_rows": 0}])
+
+        outcome = QualityService(
+            db,
+            olap,
+            now=lambda: datetime(2026, 11, 4, 12, 0, 0),
+            store_kind="memory",
+        ).run_rule(_entity())
+
+        self.assertFalse(outcome.olap_written)
+        self.assertEqual(outcome.store_kind, "memory")
+        self.assertEqual(outcome.warning, MEMORY_STORE_WARNING)
+        self.assertEqual(olap.inserted, [])
 
     def test_evaluation_failure_raises_without_persisting(self):
         from app.core.exceptions import DataPlatformError

@@ -69,6 +69,8 @@ def _run_view(outcome: QualityRunOutcome) -> dict[str, Any]:
         "severity": outcome.result.severity,
         "checked_at": _iso(outcome.checked_at),
         "olap_written": outcome.olap_written,
+        "store_kind": outcome.store_kind,
+        "warning": outcome.warning,
     }
 
 
@@ -138,15 +140,18 @@ def delete_rule(rule_id: int, db: Session = Depends(get_session)):
 @router.post("/rules/{rule_id}/run")
 def run_rule(rule_id: int, db: Session = Depends(get_session)):
     rule = _get_rule(db, rule_id)
-    outcome = QualityService(db, _build_store()).run_rule(rule)
+    settings = get_settings()
+    outcome = QualityService(db, _build_store(), store_kind=settings.olap_store).run_rule(rule)
     payload = _run_view(outcome)
-    if not outcome.olap_written:
+    if not outcome.olap_written and outcome.olap_error:
         # The MySQL result is committed; surface the warehouse failure with the
         # payload attached instead of returning a misleading success envelope.
         return JSONResponse(
             status_code=502,
             content=fail(502, outcome.olap_error or "quality warehouse write failed", payload),
         )
+    # A memory store cannot persist to ClickHouse: the payload carries
+    # olap_written=false and a warning, but the run itself succeeded.
     return ok(payload)
 
 

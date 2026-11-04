@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from etl.ports.olap_store import OlapStore
 
@@ -32,9 +33,27 @@ SEVERITY_WEIGHTS = {"P0": 3, "P1": 2, "P2": 1}
 DEFAULT_WEIGHT = 1
 
 # Metrics are bucketed by the platform time zone (design section 9:
-# Asia/Shanghai).  A fixed UTC+8 offset avoids a tzdata dependency on hosts
-# whose zoneinfo database is incomplete; Asia/Shanghai has no DST.
-PLATFORM_TZ = timezone(timedelta(hours=8))
+# Asia/Shanghai).  Same convention as ``etl.consumer``: prefer the IANA
+# database so the Python side matches ClickHouse's ``Asia/Shanghai`` rules,
+# and fall back to a fixed UTC+8 offset on hosts without tzdata
+# (Asia/Shanghai has no DST, so the fallback is exact).
+PLATFORM_TIMEZONE = "Asia/Shanghai"
+try:
+    PLATFORM_TZ: timezone | ZoneInfo = ZoneInfo(PLATFORM_TIMEZONE)
+except ZoneInfoNotFoundError:  # Windows without the tzdata package
+    PLATFORM_TZ = timezone(timedelta(hours=8), PLATFORM_TIMEZONE)
+
+# ClickHouse evaluates ``today()`` in the server time zone, which may differ
+# from the platform time zone.  The VOLUME window therefore renders "today"
+# explicitly in Asia/Shanghai so the SQL window and the evaluator's reference
+# date cannot drift apart by a day.
+VOLUME_TODAY_SQL = f"toDate(now(), '{PLATFORM_TIMEZONE}')"
+
+
+def platform_today() -> date:
+    """Today's date in the platform time zone (Asia/Shanghai)."""
+    return datetime.now(PLATFORM_TZ).date()
+
 
 # Rule types whose threshold is a pass-rate in [0, 1]; FRESHNESS thresholds are
 # seconds and VOLUME thresholds are relative deviations, both non-negative.
@@ -226,7 +245,7 @@ def build_rule_sql(rule: QualityRule) -> str:
         date_column = rule.params.get("date_column", "created_at")
         return (
             f"SELECT toDate({date_column}) AS metric_date, count() AS total_rows "
-            f"FROM {table} WHERE {date_column} >= today() - 7 "
+            f"FROM {table} WHERE {date_column} >= {VOLUME_TODAY_SQL} - 7 "
             f"GROUP BY metric_date ORDER BY metric_date"
         )
     # CUSTOM_SQL is validated as a read-only SELECT/WITH above.
@@ -267,10 +286,13 @@ def _volume_window(rows: list[dict[str, Any]]) -> tuple[int, list[int]]:
     if not counts:
         return 0, []
     latest = max(counts)
-    today = datetime.now(timezone.utc).astimezone(PLATFORM_TZ).date()
-    reference = latest if latest > today else today
+    today = platform_today()
+    # ``reference_date`` is the platform ("Asia/Shanghai") today, or the
+    # newest data day when the warehouse clock runs ahead.
+    reference_date = latest if latest > today else today
     window = [
-        counts.get(reference - timedelta(days=offset), 0) for offset in range(7, -1, -1)
+        counts.get(reference_date - timedelta(days=offset), 0)
+        for offset in range(7, -1, -1)
     ]
     return window[-1], window[:7]
 
