@@ -519,7 +519,8 @@ class QualityDailyRowTest(unittest.TestCase):
         self.assertEqual(row["pass_rate"], 0.98)
         self.assertEqual(row["severity"], "P0")
         self.assertEqual(row["status"], "FAIL")
-        self.assertEqual(row["checked_at"], datetime(2026, 11, 4, 12, 0, 0))
+        # 12:00 UTC is 20:00 on the platform (Asia/Shanghai) wall clock.
+        self.assertEqual(row["checked_at"], datetime(2026, 11, 4, 20, 0, 0))
 
     def test_metric_date_uses_the_platform_calendar(self):
         rule = _rule()
@@ -528,12 +529,12 @@ class QualityDailyRowTest(unittest.TestCase):
         row = build_quality_row(rule, result, datetime(2026, 11, 4, 20, 0, 0))
         self.assertEqual(str(row["metric_date"]), "2026-11-05")
 
-    def test_aware_checked_at_is_normalised_to_naive_utc(self):
+    def test_checked_at_is_stored_as_platform_wall_clock(self):
         rule = _rule()
         result = QualityResult(1, 1, 0, 1.0, "PASS", "P0")
         checked_at = datetime(2026, 11, 4, 9, 0, 0, tzinfo=timezone(timedelta(hours=8)))
         row = build_quality_row(rule, result, checked_at)
-        self.assertEqual(row["checked_at"], datetime(2026, 11, 4, 1, 0, 0))
+        self.assertEqual(row["checked_at"], datetime(2026, 11, 4, 9, 0, 0))
 
     def test_table_name_matches_the_ddl(self):
         self.assertEqual(QUALITY_DAILY_TABLE, "ads_quality_daily")

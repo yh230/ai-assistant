@@ -364,15 +364,17 @@ def build_quality_row(
 ) -> dict[str, Any]:
     """Build the ``ads_quality_daily`` row for one rule run.
 
-    ``checked_at`` is treated as UTC when naive.  ``metric_date`` follows the
-    platform (Asia/Shanghai) calendar day while ``checked_at`` is stored as
-    naive UTC, matching the metadata tables and ClickHouse DateTime columns.
+    ``checked_at`` is treated as UTC when naive.  ClickHouse ``DateTime``
+    columns are naive Asia/Shanghai wall-clock values elsewhere in the ETL
+    (``now_shanghai`` in ``etl.consumer``), so both ``metric_date`` and
+    ``checked_at`` are converted to the platform time zone before insertion.
     """
     aware = checked_at if checked_at.tzinfo is not None else checked_at.replace(
         tzinfo=timezone.utc
     )
+    local = aware.astimezone(PLATFORM_TZ)
     return {
-        "metric_date": aware.astimezone(PLATFORM_TZ).date(),
+        "metric_date": local.date(),
         "rule_id": rule.id,
         "rule_name": rule.name,
         "total_rows": result.total_rows,
@@ -380,5 +382,5 @@ def build_quality_row(
         "pass_rate": result.pass_rate,
         "severity": result.severity or rule.severity,
         "status": result.status,
-        "checked_at": aware.astimezone(timezone.utc).replace(tzinfo=None),
+        "checked_at": local.replace(tzinfo=None),
     }
