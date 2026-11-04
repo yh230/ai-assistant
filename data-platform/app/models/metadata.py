@@ -43,6 +43,11 @@ class SyncTask(Base):
     last_watermark: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_watermark_num: Mapped[Decimal | None] = mapped_column(Numeric(20, 0), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Row-level mutex: a run flips ``running`` with a conditional UPDATE so two
+    # extractors can never process the same task concurrently. ``locked_at``
+    # records when the lock was taken for operators diagnosing a stuck run.
+    running: Mapped[bool] = mapped_column(Boolean, default=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

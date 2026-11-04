@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import app.models.metadata  # noqa: F401
-from app.api import datasources, metadata
+from app.api import datasources, metadata, sync_tasks
 from app.core.db import Base, engine
 from app.core.exceptions import DataPlatformError
 from app.core.response import fail, ok
@@ -60,6 +60,7 @@ def create_app() -> FastAPI:
 
     app.include_router(datasources.router, prefix="/api")
     app.include_router(metadata.router, prefix="/api")
+    app.include_router(sync_tasks.router, prefix="/api")
 
     return app
 

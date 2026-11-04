@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Protocol
+
+Watermark = datetime | Decimal | int
 
 
 @dataclass(frozen=True)
@@ -43,11 +46,11 @@ class SourceRepository(Protocol):
         columns: list[str],
         primary_key: str,
         watermark_column: str,
-        after_watermark: datetime,
+        after_watermark: Watermark,
         after_pk: int | None,
         limit: int,
     ) -> list[dict[str, Any]]: ...
 
     def max_watermark(
         self, schema: str, table: str, watermark_column: str
-    ) -> datetime | None: ...
+    ) -> Watermark | None: ...
