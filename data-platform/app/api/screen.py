@@ -59,11 +59,11 @@ def _query(call: Callable[[], Any]) -> Any:
         raise
     except Exception as exc:
         # An unreachable warehouse must not be rendered as an all-zero
-        # dashboard: report 503 so the screen can show a degraded state.
+        # dashboard: report 503 so the screen can show a degraded state.  The
+        # driver error is logged but never echoed, so connection strings or
+        # SQL fragments cannot leak to an anonymous dashboard client.
         logger.exception("screen query failed")
-        raise HTTPException(
-            status_code=503, detail=f"screen query failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=503, detail="screen query failed") from exc
 
 
 def _window(value: int | None, default: int, maximum: int) -> int:

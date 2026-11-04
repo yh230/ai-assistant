@@ -44,8 +44,11 @@ DEFAULT_RECENT_ALERT_LIMIT = 10
 MAX_RECENT_ALERT_LIMIT = 50
 DEFAULT_ALERT_LOOKBACK_DAYS = 7
 MAX_ALERT_LOOKBACK_DAYS = 90
-DEFAULT_HEALTH_WINDOW_HOURS = 24
-MAX_HEALTH_WINDOW_HOURS = 168
+
+# Day boundaries are rendered explicitly in the platform time zone: a bare
+# ``today()`` uses the ClickHouse server time zone and could shift the window
+# by a day relative to the rest of the platform.
+PLATFORM_TODAY_SQL = "today('Asia/Shanghai')"
 
 _DATABASE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -149,7 +152,6 @@ class ClickHouseScreenRepository:
         max_trend_days: int = MAX_TREND_DAYS,
         max_ranking_limit: int = MAX_RANKING_LIMIT,
         max_alert_limit: int = MAX_RECENT_ALERT_LIMIT,
-        health_window_hours: int = DEFAULT_HEALTH_WINDOW_HOURS,
         alert_lookback_days: int = DEFAULT_ALERT_LOOKBACK_DAYS,
     ):
         if not isinstance(database, str) or not _DATABASE_PATTERN.fullmatch(database):
@@ -161,21 +163,25 @@ class ClickHouseScreenRepository:
         self.max_trend_days = _bound(max_trend_days, 1, MAX_TREND_DAYS)
         self.max_ranking_limit = _bound(max_ranking_limit, 1, MAX_RANKING_LIMIT)
         self.max_alert_limit = _bound(max_alert_limit, 1, MAX_RECENT_ALERT_LIMIT)
-        self.health_window_hours = _bound(
-            health_window_hours, 1, MAX_HEALTH_WINDOW_HOURS
-        )
         self.alert_lookback_days = _bound(
             alert_lookback_days, 1, MAX_ALERT_LOOKBACK_DAYS
         )
 
     def overview(self) -> dict[str, Any]:
+        # AI sessions come from ads_ai_daily rather than the hospital roll-up:
+        # a hospital with AI activity but no registrations that day has no row
+        # in ads_hospital_daily, so summing its ai_sessions would undercount
+        # AI-only hospitals.  Registration volume and the weighted cancel rate
+        # still come from ads_hospital_daily.
         rows = self.olap.query(
             "SELECT sum(reg_count) AS reg_count, "
-            "sum(ai_sessions) AS ai_sessions, "
             "ifNull(sum(reg_count * cancel_rate) / nullIf(sum(reg_count), 0), 0) "
-            "AS cancel_rate "
+            "AS cancel_rate, "
+            "(SELECT sum(session_count) "
+            f"FROM {self.database}.ads_ai_daily FINAL "
+            f"WHERE metric_date = {PLATFORM_TODAY_SQL}) AS ai_sessions "
             f"FROM {self.database}.ads_hospital_daily FINAL "
-            "WHERE metric_date = today()"
+            f"WHERE metric_date = {PLATFORM_TODAY_SQL}"
         )
         return rows[0] if rows else {}
 
@@ -186,7 +192,8 @@ class ClickHouseScreenRepository:
         return self.olap.query(
             "SELECT metric_date AS date, sum(reg_count) AS value "
             f"FROM {self.database}.ads_hospital_daily FINAL "
-            f"WHERE metric_date >= today() - INTERVAL {window - 1} DAY "
+            f"WHERE metric_date >= {PLATFORM_TODAY_SQL} "
+            f"- INTERVAL {window - 1} DAY "
             "GROUP BY metric_date ORDER BY metric_date"
         )
 
@@ -198,7 +205,7 @@ class ClickHouseScreenRepository:
             "FROM ("
             "SELECT hospital_id, sum(reg_count) AS value "
             f"FROM {self.database}.ads_hospital_daily FINAL "
-            "WHERE metric_date = today() GROUP BY hospital_id"
+            f"WHERE metric_date = {PLATFORM_TODAY_SQL} GROUP BY hospital_id"
             ") AS r "
             f"LEFT JOIN {self.database}.dwd_hospital AS h ON h.id = r.hospital_id "
             f"ORDER BY r.value DESC LIMIT {top}"
@@ -213,7 +220,8 @@ class ClickHouseScreenRepository:
             "FROM ("
             "SELECT hospital_id, department_id, sum(reg_count) AS value "
             f"FROM {self.database}.ads_department_daily FINAL "
-            "WHERE metric_date = today() GROUP BY hospital_id, department_id"
+            f"WHERE metric_date = {PLATFORM_TODAY_SQL} "
+            "GROUP BY hospital_id, department_id"
             ") AS r "
             f"LEFT JOIN {self.database}.dwd_department AS d ON d.id = r.department_id "
             f"ORDER BY r.value DESC LIMIT {top}"
@@ -221,34 +229,44 @@ class ClickHouseScreenRepository:
 
     def quality_health(self) -> dict[str, Any]:
         # Quality score follows the design weighting: P0=3, P1=2, P2=1.
-        # lag_seconds is bounded to the most recent window so it stays a cheap
-        # lookup on ads_pipeline_health.  open_alerts counts today's failed
-        # quality rules; the alert lifecycle itself lives in the MySQL alert
-        # center, not in ClickHouse.
+        # open_alerts counts today's failed quality rules; the alert lifecycle
+        # itself lives in the MySQL alert center, not in ClickHouse.
         rows = self.olap.query(
             "SELECT "
             "ifNull(sum(pass_rate * multiIf(severity = 'P0', 3, "
             "severity = 'P1', 2, 1)) "
             "/ nullIf(sum(multiIf(severity = 'P0', 3, severity = 'P1', 2, 1)), 0), "
             "0) AS quality_score, "
-            "(SELECT max(lag_seconds) "
-            f"FROM {self.database}.ads_pipeline_health FINAL "
-            f"WHERE metric_time >= now() - INTERVAL {self.health_window_hours} HOUR) "
-            "AS lag_seconds, "
             "(SELECT count() "
             f"FROM {self.database}.ads_quality_daily FINAL "
-            "WHERE metric_date = today() AND status = 'FAIL') AS open_alerts "
+            f"WHERE metric_date = {PLATFORM_TODAY_SQL} AND status = 'FAIL') "
+            "AS open_alerts "
             f"FROM {self.database}.ads_quality_daily FINAL "
-            "WHERE metric_date = today()"
+            f"WHERE metric_date = {PLATFORM_TODAY_SQL}"
         )
-        if not rows:
-            return {"quality_score": 0, "lag_seconds": 0, "open_alerts": 0}
-        row = rows[0]
-        return {
-            "quality_score": _number(row.get("quality_score")),
-            "lag_seconds": _number(row.get("lag_seconds")),
-            "open_alerts": _number(row.get("open_alerts")),
+        # The KPI reports the freshness of the latest pipeline-health snapshot.
+        # A max over a window would hide a pipeline that stalled hours ago
+        # behind an older peak.  There is no day filter: the newest snapshot
+        # wins even if it is from yesterday.  A missing snapshot stays ``None``
+        # in the raw payload so callers can tell "unknown" from a measured 0;
+        # the service turns it into the 0 KPI default.
+        lag_rows = self.olap.query(
+            "SELECT lag_seconds "
+            f"FROM {self.database}.ads_pipeline_health FINAL "
+            "ORDER BY metric_time DESC LIMIT 1"
+        )
+        health: dict[str, Any] = {
+            "quality_score": 0,
+            "lag_seconds": None,
+            "open_alerts": 0,
         }
+        if rows:
+            row = rows[0]
+            health["quality_score"] = _number(row.get("quality_score"))
+            health["open_alerts"] = _number(row.get("open_alerts"))
+        if lag_rows:
+            health["lag_seconds"] = lag_rows[0].get("lag_seconds")
+        return health
 
     def recent_alerts(self, limit: int) -> list[dict[str, Any]]:
         top = _bound(limit, 1, self.max_alert_limit)
@@ -258,6 +276,7 @@ class ClickHouseScreenRepository:
             "SELECT rule_id, severity, rule_name AS title, pass_rate, checked_at "
             f"FROM {self.database}.ads_quality_daily FINAL "
             "WHERE status = 'FAIL' "
-            f"AND metric_date >= today() - INTERVAL {self.alert_lookback_days - 1} DAY "
+            f"AND metric_date >= {PLATFORM_TODAY_SQL} "
+            f"- INTERVAL {self.alert_lookback_days - 1} DAY "
             f"ORDER BY checked_at DESC LIMIT {top}"
         )

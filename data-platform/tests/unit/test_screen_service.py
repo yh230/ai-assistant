@@ -91,12 +91,17 @@ class FakeScreenRepository:
 
 
 class RecordingOlap:
-    def __init__(self, rows=None):
+    def __init__(self, rows=None, responses=None):
         self.rows = [] if rows is None else rows
+        # Optional per-call payloads consumed in order; once exhausted the
+        # fixed ``rows`` payload is returned for every further query.
+        self.responses = None if responses is None else list(responses)
         self.queries = []
 
     def query(self, sql):
         self.queries.append(sql)
+        if self.responses:
+            return self.responses.pop(0)
         return self.rows
 
 
@@ -144,6 +149,19 @@ class ScreenServiceTest(unittest.TestCase):
         self.assertEqual(
             _kpi_values(ScreenService(repository).overview()),
             {key: 0 for key in KPI_KEYS},
+        )
+
+    def test_overview_defaults_a_missing_lag_snapshot_to_zero(self):
+        # The repository keeps a missing pipeline snapshot as None; the KPI
+        # and the quality card must still expose the 0 default.
+        repository = FakeScreenRepository(
+            overview={"reg_count": 4},
+            health={"quality_score": 0.9, "lag_seconds": None, "open_alerts": 0},
+        )
+        values = _kpi_values(ScreenService(repository).overview())
+        self.assertEqual(values["lag_seconds"], 0)
+        self.assertEqual(
+            ScreenService(repository).quality()["health"]["lag_seconds"], 0
         )
 
     def test_overview_keeps_the_raw_repository_dict(self):
@@ -240,20 +258,24 @@ class ScreenServiceTest(unittest.TestCase):
 
 
 class ClickHouseScreenRepositoryTest(unittest.TestCase):
-    def _repo(self, rows=None, **kwargs):
-        olap = RecordingOlap(rows)
+    def _repo(self, rows=None, responses=None, **kwargs):
+        olap = RecordingOlap(rows, responses=responses)
         return ClickHouseScreenRepository(olap, **kwargs), olap
 
-    def test_overview_query_uses_final_and_today(self):
+    def test_overview_reads_ai_sessions_from_ads_ai_daily(self):
         row = {"reg_count": 10, "ai_sessions": 3, "cancel_rate": 0.1}
         repository, olap = self._repo([row])
         self.assertEqual(repository.overview(), row)
         sql = olap.queries[0]
         self.assertIn("data_platform.ads_hospital_daily FINAL", sql)
-        self.assertIn("metric_date = today()", sql)
+        self.assertIn("data_platform.ads_ai_daily FINAL", sql)
+        self.assertIn("sum(session_count)", sql)
+        self.assertIn("metric_date = today('Asia/Shanghai')", sql)
         self.assertIn("sum(reg_count)", sql)
-        self.assertIn("sum(ai_sessions)", sql)
         self.assertIn("cancel_rate", sql)
+        # AI sessions must no longer come from the hospital roll-up: that
+        # table has no row for an AI-only hospital.
+        self.assertNotIn("sum(ai_sessions)", sql)
 
     def test_overview_empty_result_is_an_empty_dict(self):
         repository, _ = self._repo([])
@@ -311,37 +333,60 @@ class ClickHouseScreenRepositoryTest(unittest.TestCase):
         self.assertIn("dwd_department AS d", sql)
         self.assertIn("LIMIT 10", sql)
 
-    def test_quality_health_query_uses_final_today_and_failures(self):
-        row = {"quality_score": 0.97, "lag_seconds": 12, "open_alerts": 2}
-        repository, olap = self._repo([row])
-        self.assertEqual(repository.quality_health(), row)
-        sql = olap.queries[0]
-        self.assertEqual(sql.count("ads_quality_daily FINAL"), 2)
-        self.assertIn("ads_pipeline_health FINAL", sql)
-        self.assertIn("metric_date = today()", sql)
-        self.assertIn("status = 'FAIL'", sql)
-        self.assertIn("INTERVAL 24 HOUR", sql)
-        self.assertIn("multiIf(severity = 'P0', 3, severity = 'P1', 2, 1)", sql)
+    def test_quality_health_uses_the_latest_pipeline_snapshot(self):
+        quality = {"quality_score": 0.97, "open_alerts": 2}
+        snapshot = {"lag_seconds": 45}
+        repository, olap = self._repo(responses=[[quality], [snapshot]])
+        self.assertEqual(
+            repository.quality_health(),
+            {"quality_score": 0.97, "lag_seconds": 45, "open_alerts": 2},
+        )
+        quality_sql = olap.queries[0]
+        self.assertEqual(quality_sql.count("ads_quality_daily FINAL"), 2)
+        self.assertIn("metric_date = today('Asia/Shanghai')", quality_sql)
+        self.assertIn("status = 'FAIL'", quality_sql)
+        self.assertIn("multiIf(severity = 'P0', 3, severity = 'P1', 2, 1)", quality_sql)
+        self.assertNotIn("ads_pipeline_health", quality_sql)
+        lag_sql = olap.queries[1]
+        self.assertIn("ads_pipeline_health FINAL", lag_sql)
+        self.assertIn("ORDER BY metric_time DESC", lag_sql)
+        self.assertIn("LIMIT 1", lag_sql)
+        # The newest snapshot wins even if it is older than a day; neither a
+        # 24h window nor a max() may mask a stalled pipeline.
+        self.assertNotIn("INTERVAL", lag_sql)
+        self.assertNotIn("max(", lag_sql.lower())
+        self.assertNotIn("today(", lag_sql)
 
-    def test_quality_health_honours_the_health_window(self):
-        repository, olap = self._repo([], health_window_hours=48)
-        repository.quality_health()
-        self.assertIn("INTERVAL 48 HOUR", olap.queries[0])
+    def test_quality_health_keeps_a_missing_lag_snapshot_honest(self):
+        repository, _ = self._repo(
+            responses=[[{"quality_score": 0.5, "open_alerts": 0}], []]
+        )
+        health = repository.quality_health()
+        self.assertEqual(
+            health, {"quality_score": 0.5, "lag_seconds": None, "open_alerts": 0}
+        )
+
+    def test_quality_health_keeps_a_measured_zero_lag(self):
+        repository, _ = self._repo(responses=[[], [{"lag_seconds": 0}]])
+        self.assertEqual(repository.quality_health()["lag_seconds"], 0)
 
     def test_quality_health_defaults_missing_values(self):
         repository, _ = self._repo([])
         self.assertEqual(
             repository.quality_health(),
-            {"quality_score": 0, "lag_seconds": 0, "open_alerts": 0},
+            {"quality_score": 0, "lag_seconds": None, "open_alerts": 0},
         )
 
-    def test_quality_health_normalizes_null_values(self):
+    def test_quality_health_normalizes_null_aggregate_values(self):
         repository, _ = self._repo(
-            [{"quality_score": None, "lag_seconds": None, "open_alerts": None}]
+            responses=[
+                [{"quality_score": None, "open_alerts": None}],
+                [{"lag_seconds": None}],
+            ]
         )
         self.assertEqual(
             repository.quality_health(),
-            {"quality_score": 0, "lag_seconds": 0, "open_alerts": 0},
+            {"quality_score": 0, "lag_seconds": None, "open_alerts": 0},
         )
 
     def test_recent_alerts_queries_failed_quality_rows(self):
@@ -351,7 +396,7 @@ class ClickHouseScreenRepositoryTest(unittest.TestCase):
         sql = olap.queries[0]
         self.assertIn("ads_quality_daily FINAL", sql)
         self.assertIn("status = 'FAIL'", sql)
-        self.assertIn("metric_date >= today() - INTERVAL 6 DAY", sql)
+        self.assertIn("metric_date >= today('Asia/Shanghai') - INTERVAL 6 DAY", sql)
         self.assertIn("rule_name AS title", sql)
         self.assertIn("ORDER BY checked_at DESC", sql)
         self.assertIn("LIMIT 10", sql)
@@ -388,9 +433,32 @@ class ClickHouseScreenRepositoryTest(unittest.TestCase):
         repository.department_ranking(10)
         repository.quality_health()
         repository.recent_alerts(10)
-        self.assertEqual(len(olap.queries), 6)
+        # quality_health runs two queries: the quality aggregates and the
+        # latest pipeline-health snapshot.
+        self.assertEqual(len(olap.queries), 7)
         for sql in olap.queries:
             self.assertIn("FINAL", sql)
+
+    def test_all_day_boundaries_use_the_platform_timezone(self):
+        repository, olap = self._repo([])
+        repository.overview()
+        repository.trend(30)
+        repository.hospital_ranking(10)
+        repository.department_ranking(10)
+        repository.quality_health()
+        repository.recent_alerts(10)
+        self.assertEqual(len(olap.queries), 7)
+        for sql in olap.queries:
+            # A bare today() follows the ClickHouse server time zone, which
+            # may not be Asia/Shanghai.
+            self.assertNotIn("today()", sql)
+        # queries[5] is the pipeline-health snapshot; it has no day boundary
+        # so it can expose yesterday's stall.  Every other query must render
+        # "today" explicitly in the platform time zone.
+        lag_sql = olap.queries[5]
+        self.assertNotIn("today(", lag_sql)
+        for sql in olap.queries[:5] + olap.queries[6:]:
+            self.assertIn("today('Asia/Shanghai')", sql)
 
 
 @unittest.skipUnless(HAS_API, "backend dependencies not installed")
@@ -498,6 +566,9 @@ class ScreenApiTest(unittest.TestCase):
             with self.assertRaises(HTTPException) as context:
                 screen.overview()
         self.assertEqual(context.exception.status_code, 503)
+        # The driver error is logged, not echoed: anonymous dashboard clients
+        # must not receive connection strings or SQL fragments.
+        self.assertEqual(context.exception.detail, "screen query failed")
 
 
 @unittest.skipUnless(HAS_API, "backend dependencies not installed")
