@@ -281,6 +281,27 @@ class DatasourceServiceTest(unittest.TestCase):
         service = FakeRepoService(self.db, self.secret_key)
         self.assertFalse(service.test_connection(entity))
         self.assertIsNotNone(entity.last_test_at)
+        self.assertEqual(entity.status, 0)
+
+    def test_test_connection_marks_a_reachable_datasource(self):
+        from app.services.datasource_service import DatasourceService
+
+        class ReachableRepository:
+            def test_connection(self):
+                return True
+
+        class FakeRepoService(DatasourceService):
+            def _repo(self, datasource):
+                return ReachableRepository()
+
+        entity = self._create()
+        entity.status = 0
+        self.db.commit()
+        service = FakeRepoService(self.db, self.secret_key)
+
+        self.assertTrue(service.test_connection(entity))
+        self.assertEqual(entity.status, 1)
+        self.assertIsNotNone(entity.last_test_at)
 
     def test_test_connection_does_not_swallow_programming_errors(self):
         from app.services.datasource_service import DatasourceService

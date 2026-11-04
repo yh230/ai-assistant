@@ -15,30 +15,30 @@
 | # | 命令 | 退出码 | 真实输出摘要 |
 | --- | --- | --- | --- |
 | 1 | `python -m compileall -q app etl tests` | 0 | 无输出 |
-| 2 | `python -m unittest discover -s tests/unit -v` | 0 | `Ran 407 tests in 0.039s` / `OK (skipped=155)` |
-| 3 | `node --test web/tests/chartOptions.test.mjs` | 0 | `tests 6` / `pass 6` / `fail 0` / `skipped 0` |
+| 2 | `python -m unittest discover -s tests/unit -v` | 0 | `Ran 468 tests in 0.050s` / `OK (skipped=166)` |
+| 3 | `node --test web/tests/chartOptions.test.mjs` | 0 | `tests 7` / `pass 7` / `fail 0` / `skipped 0` |
 | 4 | `python -m py_compile flink/jobs/realtime_registration_agg.py` | 0 | 无输出（仅字节码编译，不导入 PyFlink） |
 
 ### 1.1 单元测试计数
 
-- 总计：407 个测试。
-- 执行并通过：252 个（407 − 155）。
-- 跳过：155 个，均为第三方依赖缺失，不构成失败。
+- 总计：468 个测试。
+- 执行并通过：302 个（468 − 166）。
+- 跳过：166 个，均为第三方依赖缺失，不构成失败。
 - 失败：0 个。
 
 跳过原因分布（实际输出统计）：
 
 | 跳过原因 | 数量 |
 | --- | --- |
-| `backend dependencies not installed` | 96 |
-| `sqlalchemy not installed` | 27 |
+| `backend dependencies not installed` | 100 |
+| `sqlalchemy not installed` | 34 |
 | `sqlalchemy/pydantic_settings not installed` | 26 |
 | `cryptography not installed` | 3 |
 | `pydantic-settings not installed` | 2 |
 | `missing optional dependencies: apscheduler, sqlalchemy, pydantic_settings` | 1 |
-| 合计 | 155 |
+| 合计 | 166 |
 
-依赖探测结果：`fastapi`、`httpx`、`sqlalchemy`、`pydantic_settings`、`apscheduler`、`cryptography`、`jwt`、`confluent_kafka`、`clickhouse_connect`、`pyflink` 全部缺失。因此通过的 252 个测试只覆盖清洗、水位、事件信封、Extractor、消费管线（内存 Fake）、质量规则生成、告警判定、大屏服务层、实时事件与 SQL 文件结构等纯逻辑，**不代表 FastAPI 路由、SQLAlchemy 模型、加解密或任何外部系统可用**。
+依赖探测结果：`fastapi`、`httpx`、`sqlalchemy`、`pydantic_settings`、`apscheduler`、`cryptography`、`jwt`、`confluent_kafka`、`clickhouse_connect`、`pyflink` 全部缺失。因此通过的 302 个测试只覆盖清洗、脱敏、源表契约、水位、事件信封、Extractor、消费管线（内存 Fake）、DDL 拆分、质量规则生成、告警判定、大屏服务层、实时事件与 SQL 文件结构等纯逻辑，**不代表 FastAPI 路由、SQLAlchemy 模型、加解密或任何外部系统可用**。
 
 ### 1.2 静态编译
 

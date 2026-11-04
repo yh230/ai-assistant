@@ -5,7 +5,7 @@ from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, Numeric, String,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
-from etl.alerting import now_shanghai
+from app.core.time import now_shanghai
 
 
 class DataSource(Base):
@@ -21,8 +21,8 @@ class DataSource(Base):
     password_cipher: Mapped[str] = mapped_column(Text)
     status: Mapped[int] = mapped_column(Integer, default=1)
     last_test_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    update_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
+    update_time: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai, onupdate=now_shanghai)
 
 
 class SyncTask(Base):
@@ -49,7 +49,7 @@ class SyncTask(Base):
     # records when the lock was taken for operators diagnosing a stuck run.
     running: Mapped[bool] = mapped_column(Boolean, default=False)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
 
 
 class SyncRun(Base):
@@ -59,7 +59,7 @@ class SyncRun(Base):
     task_id: Mapped[int] = mapped_column(Integer, index=True)
     run_type: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20))
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     rows_read: Mapped[int] = mapped_column(Integer, default=0)
     rows_written: Mapped[int] = mapped_column(Integer, default=0)
@@ -77,7 +77,7 @@ class TableMeta(Base):
     table_name: Mapped[str] = mapped_column(String(100))
     table_comment: Mapped[str] = mapped_column(String(255), default="")
     row_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_introspected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_introspected_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
 
 
 class ColumnMeta(Base):
@@ -106,7 +106,7 @@ class DpQualityRule(Base):
     severity: Mapped[str] = mapped_column(String(10), default="P1")
     cron: Mapped[str] = mapped_column(String(50), default="0 * * * *")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
 
 
 class DpQualityResult(Base):
@@ -120,7 +120,7 @@ class DpQualityResult(Base):
     pass_rate: Mapped[float] = mapped_column(Float, default=1.0)
     status: Mapped[str] = mapped_column(String(20), default="PASS")
     sample_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai)
 
 
 class DpAlertRule(Base):

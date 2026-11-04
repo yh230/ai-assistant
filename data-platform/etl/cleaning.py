@@ -1,6 +1,9 @@
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
+
+from etl.source_registry import source_by_table
 
 # Per-table projections.  The ODS tables are typed, so each cleaner returns an
 # explicit field list: unknown source columns are dropped instead of leaking
@@ -60,19 +63,33 @@ def clean_registration(row: dict[str, Any]) -> CleanResult:
         errors.append("schedule_date is required")
     status = int(row.get("status") or 0)
     if status not in (1, 2, 3, 4, 5, 6):
-        errors.append(f"status out of range: {status}")
+        # Error strings are stored in ops_quarantine and DLT; never echo the
+        # offending source value.
+        errors.append("status out of range")
     period = int(row.get("period") or 0)
     if period not in (1, 2):
-        errors.append(f"period invalid: {period}")
+        errors.append("period invalid")
     try:
-        pay_amount = float(row.get("pay_amount") or 0)
-    except (TypeError, ValueError):
+        # Money is kept as an exact decimal, never converted through a binary
+        # float, so pay_amount reaches ClickHouse without rounding drift.
+        pay_amount = Decimal(str(row.get("pay_amount") or 0))
+    except (InvalidOperation, TypeError, ValueError):
         errors.append("pay_amount must be a number")
-        pay_amount = 0.0
-    if pay_amount < 0:
+        pay_amount = Decimal("0")
+    if not pay_amount.is_finite():
+        errors.append("pay_amount must be a finite number")
+    elif pay_amount < 0:
         errors.append("pay_amount must be >= 0")
     if errors:
         return CleanResult(None, tuple(errors))
+    # The extractor already removed the direct PII and precomputed the masks;
+    # accept those values so re-cleaning a redacted row keeps the mask intact.
+    name_masked = row.get("patient_name_masked")
+    if name_masked is None:
+        name_masked = mask_name(row.get("patient_name"))
+    phone_masked = row.get("patient_phone_masked")
+    if phone_masked is None:
+        phone_masked = mask_phone(row.get("patient_phone"))
     cleaned = {
         "id": entity_id,
         "registration_no": _text(row.get("registration_no")),
@@ -81,8 +98,8 @@ def clean_registration(row: dict[str, Any]) -> CleanResult:
         "doctor_user_id": int(row.get("doctor_user_id") or 0),
         "schedule_date": row["schedule_date"],
         "period": period,
-        "patient_name_masked": mask_name(row.get("patient_name")),
-        "patient_phone_masked": mask_phone(row.get("patient_phone")),
+        "patient_name_masked": name_masked,
+        "patient_phone_masked": phone_masked,
         "source_type": int(row.get("source_type") or 0),
         "pay_status": int(row.get("pay_status") or 0),
         "pay_amount": pay_amount,
@@ -94,10 +111,9 @@ def clean_registration(row: dict[str, Any]) -> CleanResult:
 
 
 def clean_chat_message(row: dict[str, Any]) -> CleanResult:
-    content = row.get("content") or ""
     role = row.get("role")
     if role not in ("user", "assistant"):
-        return CleanResult(None, (f"invalid role: {role}",))
+        return CleanResult(None, ("role must be user or assistant",))
     errors = _required_errors(row, ("id", "session_id"))
     if errors:
         return CleanResult(None, errors)
@@ -106,12 +122,20 @@ def clean_chat_message(row: dict[str, Any]) -> CleanResult:
     except (KeyError, TypeError, ValueError):
         return CleanResult(None, ("id is required",))
     # Chat content is PII: only the length and the reference flag are kept.
+    # A redacted row carries those fields precomputed; the fallback covers an
+    # unredacted row (older envelopes and direct cleaner tests).
+    content_length = row.get("content_length")
+    if content_length is None:
+        content_length = len(row.get("content") or "")
+    has_reference = row.get("has_reference")
+    if has_reference is None:
+        has_reference = bool(row.get("reference_json"))
     return CleanResult({
         "id": message_id,
         "session_id": _text(row.get("session_id")),
         "role": role,
-        "content_length": len(content),
-        "has_reference": bool(row.get("reference_json")),
+        "content_length": int(content_length),
+        "has_reference": bool(has_reference),
         "created_at": row.get("created_at"),
     })
 
@@ -206,21 +230,28 @@ def _is_sensitive_sample_key(key: Any) -> bool:
 
 
 def sanitize_sample(value: Any) -> Any:
-    """Strip PII-bearing keys from a quarantined source row.
+    """Return a PII-free quarantine sample for a rejected row.
 
     ``ops_quarantine.sample`` is a diagnostic copy of the rejected row, so any
     key whose name contains name/phone/id_card/content/reference_json
     (case-insensitive) is removed at every nesting level rather than stored in
-    clear text.
+    clear text.  A row that is not a JSON object (a list, a scalar, raw bytes)
+    is never copied: only its type name is kept.
     """
+    if not isinstance(value, dict):
+        return {"type": type(value).__name__}
+    return _sanitize_value(value)
+
+
+def _sanitize_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            key: sanitize_sample(item)
+            key: _sanitize_value(item)
             for key, item in value.items()
             if not _is_sensitive_sample_key(key)
         }
     if isinstance(value, list):
-        return [sanitize_sample(item) for item in value]
+        return [_sanitize_value(item) for item in value]
     return value
 
 
@@ -236,14 +267,20 @@ _CLEANERS: dict[str, Callable[[dict[str, Any]], CleanResult]] = {
 
 
 def clean_row(table: str, row: dict[str, Any]) -> CleanResult:
-    cleaner = _CLEANERS.get(table)
+    # The registry is the single supported-source contract; a table without a
+    # registered ODS target is rejected here as well as at task creation.
+    spec = source_by_table(table)
+    if spec is None:
+        return CleanResult(None, (f"unknown source table: {table}",))
+    cleaner = _CLEANERS.get(spec.cleaner)
     if cleaner is None:
         return CleanResult(None, (f"unknown source table: {table}",))
     if not isinstance(row, dict):
         return CleanResult(None, ("row must be a JSON object",))
     try:
         return cleaner(row)
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError):
         # Conversion failures are data problems, not pipeline failures: they
-        # belong in ops_quarantine rather than the dead-letter topic.
-        return CleanResult(None, (f"invalid {table} row: {exc}",))
+        # belong in ops_quarantine rather than the dead-letter topic.  The
+        # exception text is not copied because it can quote the source value.
+        return CleanResult(None, (f"invalid {table} row",))

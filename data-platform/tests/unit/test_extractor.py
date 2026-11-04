@@ -39,6 +39,7 @@ class FakeSource:
         after_watermark,
         after_pk,
         limit,
+        upper_watermark=None,
     ):
         self.calls += 1
         self.incremental_calls.append(
@@ -47,6 +48,7 @@ class FakeSource:
                 "after_watermark": after_watermark,
                 "after_pk": after_pk,
                 "limit": limit,
+                "upper_watermark": upper_watermark,
             }
         )
         return self.batches.pop(0) if self.batches else []
@@ -157,6 +159,11 @@ class ExtractorTest(unittest.TestCase):
         # overlap window still applies to datetime watermarks
         self.assertEqual(
             source.incremental_calls[0]["after_watermark"], datetime(2026, 11, 4, 9, 59, 0)
+        )
+        # the run is bounded by the source maximum observed at run start
+        self.assertEqual(
+            source.incremental_calls[0]["upper_watermark"],
+            datetime(2026, 11, 4, 12, 0, 0),
         )
         self.assertEqual(result.last_watermark, datetime(2026, 11, 4, 10, 1, 0))
         self.assertIsNone(result.last_watermark_num)
@@ -292,13 +299,87 @@ class ExtractorTest(unittest.TestCase):
         envelope = Envelope.from_bytes(publisher.messages[0][2])
         self.assertEqual(envelope.payload["source_db"], "registration_db")
         self.assertEqual(envelope.payload["source_table"], "registration")
-        self.assertEqual(envelope.payload["row"], {"id": 1})
+        self.assertEqual(envelope.payload["target_table"], "ods_registration")
+        self.assertEqual(
+            envelope.payload["row"],
+            {"id": 1, "patient_name_masked": "", "patient_phone_masked": ""},
+        )
         # the publisher is flushed once per published batch
         self.assertEqual(publisher.flushes, 2)
         # the second batch continues after the last PK of the first batch
         self.assertEqual([call["after_pk"] for call in source.full_calls], [None, 1, 2])
         self.assertEqual(source.full_calls[0]["primary_key"], "id")
         self.assertEqual(source.full_calls[0]["limit"], 1)
+
+
+    def test_registration_transport_never_contains_raw_pii(self):
+        task = SyncTaskSpec(
+            id=11,
+            source_schema="registration_db",
+            source_table="registration",
+            target_table="ods_registration",
+            primary_key="id",
+            watermark_column=None,
+        )
+        row = {
+            "id": 1,
+            "hospital_id": 2,
+            "patient_name": "张三",
+            "patient_phone": "13800138000",
+            "patient_id_card": "110101199001011234",
+        }
+        publisher = FakePublisher()
+
+        Extractor(FakeSource([[row]]), publisher, "dp.ods").run(
+            task, "FULL", FakeRunStore()
+        )
+
+        envelope = Envelope.from_bytes(publisher.messages[0][2])
+        payload = envelope.payload
+        self.assertEqual(payload["target_table"], "ods_registration")
+        self.assertNotIn("patient_name", payload["row"])
+        self.assertNotIn("patient_phone", payload["row"])
+        self.assertNotIn("patient_id_card", payload["row"])
+        self.assertEqual(payload["row"]["patient_name_masked"], "张*")
+        self.assertEqual(payload["row"]["patient_phone_masked"], "138****8000")
+        raw = publisher.messages[0][2].decode("utf-8")
+        self.assertNotIn("张三", raw)
+        self.assertNotIn("13800138000", raw)
+        self.assertNotIn("110101199001011234", raw)
+
+    def test_chat_transport_never_contains_content_or_reference(self):
+        task = SyncTaskSpec(
+            id=12,
+            source_schema="chat_db",
+            source_table="chat_message",
+            target_table="ods_chat_message",
+            primary_key="id",
+            watermark_column=None,
+        )
+        publisher = FakePublisher()
+
+        Extractor(
+            FakeSource(
+                [[{
+                    "id": 7,
+                    "session_id": "s-1",
+                    "role": "user",
+                    "content": "你好，我是张三",
+                    "reference_json": {"doc": "secret"},
+                }]]
+            ),
+            publisher,
+            "dp.ods",
+        ).run(task, "FULL", FakeRunStore())
+
+        raw = publisher.messages[0][2].decode("utf-8")
+        envelope = Envelope.from_bytes(publisher.messages[0][2])
+        self.assertNotIn("你好", raw)
+        self.assertNotIn("secret", raw)
+        self.assertNotIn("content", envelope.payload["row"])
+        self.assertNotIn("reference_json", envelope.payload["row"])
+        self.assertEqual(envelope.payload["row"]["content_length"], len("你好，我是张三"))
+        self.assertTrue(envelope.payload["row"]["has_reference"])
 
 
 if __name__ == "__main__":

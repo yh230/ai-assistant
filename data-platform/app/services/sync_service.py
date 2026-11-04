@@ -1,14 +1,15 @@
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import DataPlatformError
+from app.core.time import now_shanghai
 from app.models.metadata import SyncRun, SyncTask
 from etl.extractor import RUN_MODES, ExtractResult, Extractor, SyncTaskSpec
 from etl.ports.event_bus import EventPublisher
 from etl.ports.source_repository import SourceRepository
+from etl.source_registry import validate_source_target
 from etl.watermark import to_decimal
 
 WATERMARK_TYPES = ("datetime", "numeric")
@@ -104,7 +105,7 @@ class SqlRunStore:
         run.rows_read = rows_read
         run.rows_written = rows_written
         run.error_msg = error
-        run.finished_at = datetime.utcnow()
+        run.finished_at = now_shanghai()
         self.db.commit()
 
 
@@ -130,6 +131,9 @@ class SyncService:
         watermark_type = _validate_watermark_type(watermark_type)
         watermark_column = watermark_column.strip() if watermark_column else watermark_column
         _require_watermark_column(watermark_type, watermark_column)
+        # Only the seven registered sources have a cleaner and an ODS table;
+        # the target must be the registry target for that source.
+        validate_source_target(source_schema, source_table, target_table)
         task = SyncTask(
             datasource_id=datasource_id,
             source_schema=source_schema,
@@ -162,6 +166,11 @@ class SyncService:
         for name in REQUIRED_FIELDS:
             if name in changes and changes[name] is None:
                 raise ValueError(f"{name} cannot be null")
+        validate_source_target(
+            changes.get("source_schema", entity.source_schema),
+            changes.get("source_table", entity.source_table),
+            changes.get("target_table", entity.target_table),
+        )
         if changes.get("watermark_type") is not None:
             changes["watermark_type"] = _validate_watermark_type(changes["watermark_type"])
         if "watermark_column" in changes:
@@ -223,7 +232,7 @@ class SyncService:
                 spec, mode, SqlRunStore(self.db)
             )
             task.full_load_done = True
-            task.last_run_at = datetime.utcnow()
+            task.last_run_at = now_shanghai()
             if spec.watermark_type == "numeric":
                 task.last_watermark_num = result.last_watermark_num
             else:
@@ -243,7 +252,7 @@ class SyncService:
         result = self.db.execute(
             update(SyncTask)
             .where(SyncTask.id == task_id, SyncTask.running.is_(False))
-            .values(running=True, locked_at=datetime.utcnow())
+            .values(running=True, locked_at=now_shanghai())
             .execution_options(synchronize_session=False)
         )
         self.db.commit()

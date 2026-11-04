@@ -12,6 +12,7 @@ from etl.envelope import Envelope
 from etl.ports.event_bus import ConsumedEvent, EventConsumer, EventPublisher
 from etl.ports.olap_store import OlapStore
 from etl.realtime import REGISTRATION_EVENT_TOPIC
+from etl.source_registry import target_table_for
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ QUARANTINE_TABLE = "ops_quarantine"
 AUDIT_TABLE = "ops_ingest_audit"
 DLT_TOPIC = "dp.ods.DLT"
 ODS_EVENT_TYPE = "ODS_ROW"
+DLT_EVENT_TYPE = "ODS_DLT"
+MAX_DLT_ERROR_LENGTH = 500
 
 try:
     _SHANGHAI_TZ: timezone | ZoneInfo = ZoneInfo("Asia/Shanghai")
@@ -73,10 +76,23 @@ def batch_id_for(events: Sequence[ConsumedEvent]) -> str:
 
     Quarantine and audit rows carry this id; replaying the same polled events
     after a rewind therefore produces the same ``batch_id`` and
-    ``ReplacingMergeTree`` collapses the bookkeeping rows on merge.
+    ``ReplacingMergeTree`` collapses the bookkeeping rows on merge.  The keys
+    are sorted first so a reordered replay of the same set hashes the same.
     """
-    parts = [event_batch_key(event) for event in events]
+    parts = sorted(event_batch_key(event) for event in events)
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _error_summary(exc: Exception) -> str:
+    """Short exception description for the DLT error field.
+
+    Row samples go through :func:`sanitize_sample`; the error text itself is
+    capped so a driver error cannot bloat the message, and cleaner errors are
+    written without source values.
+    """
+    text = str(exc).strip()
+    summary = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+    return summary[:MAX_DLT_ERROR_LENGTH]
 
 
 class ConsumerPipeline:
@@ -160,11 +176,16 @@ class ConsumerPipeline:
                     seen_event_ids.add(envelope.event_id)
                     quarantined += 1
                     continue
+                # The registry decides the ODS table; a producer that declared
+                # a different target is a contract error and is dead-lettered.
+                target_table = target_table_for(
+                    table, envelope.payload.get("target_table")
+                )
                 cleaned = dict(result.row)
                 cleaned["_event_id"] = envelope.event_id
                 cleaned["_source"] = envelope.payload["source_db"]
                 cleaned["_ingested_at"] = now_shanghai()
-                self._insert_with_retry(f"ods_{table}", [cleaned])
+                self._insert_with_retry(target_table, [cleaned])
                 seen_event_ids.add(envelope.event_id)
                 inserted += 1
                 audit[table] = audit.get(table, 0) + 1
@@ -172,10 +193,8 @@ class ConsumerPipeline:
                 # The event would be lost without its quarantine/audit record,
                 # so no offset is committed and the batch is replayed.
                 raise
-            except Exception:
-                if self.dlt_publisher is not None:
-                    self.dlt_publisher.publish(DLT_TOPIC, event.key or "", event.value)
-                    self._flush_dlt()
+            except Exception as exc:
+                self._dead_letter(event, exc)
                 failed += 1
         if audit:
             audit_rows = [
@@ -245,6 +264,45 @@ class ConsumerPipeline:
             except Exception:
                 if attempt + 1 >= self.max_retries:
                     raise
+
+    def _dead_letter(self, event: ConsumedEvent, exc: Exception) -> None:
+        """Publish a small redacted envelope instead of the raw event value.
+
+        The raw value may contain PII (or an opaque MQ payload); the DLT keeps
+        only the event identity, the source coordinates, a short error summary
+        and the sanitized sample.
+        """
+        if self.dlt_publisher is None:
+            return
+        fallback_id = f"dlt:{event.topic}:{event.partition}:{event.offset}"
+        payload: dict[str, Any] = {
+            "event_id": fallback_id,
+            "source_db": None,
+            "source_table": None,
+            "error": _error_summary(exc),
+            "sample": {"type": type(event.value).__name__},
+        }
+        try:
+            envelope = Envelope.from_bytes(event.value)
+        except ValueError:
+            pass
+        else:
+            payload.update(
+                {
+                    "event_id": envelope.event_id,
+                    "source_db": envelope.payload.get("source_db"),
+                    "source_table": envelope.payload.get("source_table"),
+                    "sample": sanitize_sample(envelope.payload.get("row")),
+                }
+            )
+        dlt_envelope = Envelope(
+            event_id=str(payload["event_id"]),
+            event_type=DLT_EVENT_TYPE,
+            occurred_at=int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+            payload=payload,
+        )
+        self.dlt_publisher.publish(DLT_TOPIC, event.key or "", dlt_envelope.to_bytes())
+        self._flush_dlt()
 
     def _flush_dlt(self) -> None:
         """Flush the dead-letter publisher without failing the batch.

@@ -91,7 +91,7 @@ class BuildRuleSqlTest(unittest.TestCase):
         self.assertEqual(
             build_rule_sql(_rule()),
             "SELECT count() AS total_rows, countIf(registration_no IS NULL) "
-            "AS bad_rows FROM dwd_registration",
+            "AS bad_rows FROM dwd_registration FINAL",
         )
 
     def test_unique_sql(self):
@@ -99,7 +99,7 @@ class BuildRuleSqlTest(unittest.TestCase):
         self.assertEqual(
             sql,
             "SELECT count() AS total_rows, count() - uniqExact(registration_no) "
-            "AS bad_rows FROM dwd_registration",
+            "AS bad_rows FROM dwd_registration FINAL",
         )
 
     def test_range_sql(self):
@@ -114,7 +114,7 @@ class BuildRuleSqlTest(unittest.TestCase):
         self.assertEqual(
             sql,
             "SELECT count() AS total_rows, "
-            "countIf(age < 0 OR age > 150) AS bad_rows FROM dwd_patient",
+            "countIf(age < 0 OR age > 150) AS bad_rows FROM dwd_patient FINAL",
         )
 
     def test_range_accepts_float_and_numeric_string_bounds(self):
@@ -144,19 +144,38 @@ class BuildRuleSqlTest(unittest.TestCase):
         self.assertEqual(
             sql,
             "SELECT count() AS total_rows, "
-            "dateDiff('second', max(update_time), now()) AS lag_seconds "
-            "FROM dwd_registration",
+            "dateDiff('second', max(update_time), now('Asia/Shanghai')) "
+            "AS lag_seconds FROM dwd_registration FINAL",
         )
 
     def test_volume_sql_defaults_to_created_at(self):
         sql = build_rule_sql(_rule(rule_type="VOLUME", column=None))
         self.assertEqual(
             sql,
-            "SELECT toDate(created_at) AS metric_date, count() AS total_rows "
-            "FROM dwd_registration WHERE created_at >= "
-            "toDate(now(), 'Asia/Shanghai') - 7 "
+            "SELECT toDate(created_at, 'Asia/Shanghai') AS metric_date, "
+            "count() AS total_rows FROM dwd_registration FINAL "
+            "WHERE created_at >= toDate(now(), 'Asia/Shanghai') - 7 "
             "GROUP BY metric_date ORDER BY metric_date",
         )
+
+    def test_enum_sql_reads_final(self):
+        sql = build_rule_sql(
+            _rule(rule_type="ENUM", column="status", params={"values": [1, 2]})
+        )
+        self.assertIn("FROM dwd_registration FINAL", sql)
+
+    def test_every_standard_rule_reads_final(self):
+        rules = (
+            _rule(),
+            _rule(rule_type="UNIQUE", column="registration_no"),
+            _rule(rule_type="RANGE", column="age", params={"min": 0, "max": 150}),
+            _rule(rule_type="ENUM", column="status", params={"values": [1, 2]}),
+            _rule(rule_type="FRESHNESS", column="update_time"),
+            _rule(rule_type="VOLUME", column=None),
+        )
+        for rule in rules:
+            with self.subTest(rule=rule.rule_type):
+                self.assertIn("FROM dwd_registration FINAL", build_rule_sql(rule))
 
     def test_volume_sql_uses_the_platform_timezone_for_today(self):
         sql = build_rule_sql(_rule(rule_type="VOLUME", column=None))
@@ -172,7 +191,7 @@ class BuildRuleSqlTest(unittest.TestCase):
                 params={"date_column": "schedule_date"},
             )
         )
-        self.assertIn("toDate(schedule_date) AS metric_date", sql)
+        self.assertIn("toDate(schedule_date, 'Asia/Shanghai') AS metric_date", sql)
         self.assertIn("schedule_date >= toDate(now(), 'Asia/Shanghai') - 7", sql)
 
     def test_custom_sql_is_used_verbatim(self):
@@ -443,6 +462,26 @@ class EvaluateRuleTest(unittest.TestCase):
         self.assertEqual(result.total_rows, 0)
         self.assertEqual(result.status, "FAIL")
 
+    def test_volume_missing_today_fails_even_with_a_permissive_threshold(self):
+        today = _platform_today()
+        rows = _volume_rows([100] * 7, end=today - timedelta(days=1))
+        result = evaluate_rule(
+            _rule(rule_type="VOLUME", column=None, threshold=10.0),
+            FakeOlap(rows),
+        )
+        self.assertEqual(result.total_rows, 0)
+        self.assertEqual(result.bad_rows, 1)
+        self.assertEqual(result.pass_rate, 0.0)
+        self.assertEqual(result.status, "FAIL")
+
+    def test_volume_with_no_rows_fails(self):
+        result = evaluate_rule(
+            _rule(rule_type="VOLUME", column=None, threshold=10.0),
+            FakeOlap([]),
+        )
+        self.assertEqual(result.total_rows, 0)
+        self.assertEqual(result.status, "FAIL")
+
     def test_volume_rows_may_arrive_unsorted(self):
         rows = list(reversed(_volume_rows([100] * 7 + [100])))
         result = evaluate_rule(
@@ -462,14 +501,14 @@ class EvaluateRuleTest(unittest.TestCase):
         )
         self.assertEqual(result.status, "FAIL")
 
-    def test_volume_stale_data_is_zero_vs_zero(self):
+    def test_volume_stale_data_fails(self):
         old = _platform_today() - timedelta(days=10)
         result = evaluate_rule(
-            _rule(rule_type="VOLUME", column=None, threshold=0.3),
+            _rule(rule_type="VOLUME", column=None, threshold=10.0),
             FakeOlap([{"metric_date": old, "total_rows": 100}]),
         )
         self.assertEqual(result.total_rows, 0)
-        self.assertEqual(result.status, "PASS")
+        self.assertEqual(result.status, "FAIL")
 
     def test_volume_deviation_boundary_passes(self):
         result = evaluate_rule(
@@ -559,15 +598,25 @@ class QualityDailyRowTest(unittest.TestCase):
         self.assertEqual(row["pass_rate"], 0.98)
         self.assertEqual(row["severity"], "P0")
         self.assertEqual(row["status"], "FAIL")
-        # 12:00 UTC is 20:00 on the platform (Asia/Shanghai) wall clock.
-        self.assertEqual(row["checked_at"], datetime(2026, 11, 4, 20, 0, 0))
+        # The service supplies platform-local (Asia/Shanghai) naive values.
+        self.assertEqual(row["checked_at"], datetime(2026, 11, 4, 12, 0, 0))
 
     def test_metric_date_uses_the_platform_calendar(self):
         rule = _rule()
         result = QualityResult(1, 1, 0, 1.0, "PASS", "P0")
-        # 20:00 UTC is already the next day in Asia/Shanghai (UTC+8).
+        # A naive value is already platform-local: 20:00 stays on 11-04.
         row = build_quality_row(rule, result, datetime(2026, 11, 4, 20, 0, 0))
+        self.assertEqual(str(row["metric_date"]), "2026-11-04")
+
+    def test_aware_checked_at_is_converted_once(self):
+        rule = _rule()
+        result = QualityResult(1, 1, 0, 1.0, "PASS", "P0")
+        # 20:00 UTC is already the next day in Asia/Shanghai (UTC+8).
+        row = build_quality_row(
+            rule, result, datetime(2026, 11, 4, 20, 0, 0, tzinfo=timezone.utc)
+        )
         self.assertEqual(str(row["metric_date"]), "2026-11-05")
+        self.assertEqual(row["checked_at"], datetime(2026, 11, 5, 4, 0, 0))
 
     def test_checked_at_is_stored_as_platform_wall_clock(self):
         rule = _rule()

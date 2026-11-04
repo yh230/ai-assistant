@@ -13,6 +13,7 @@
     </header>
     <p class="page-hint">
       任务运行由 ETL Extractor 按水位续跑；手工运行会立即执行一次并按结果推进水位。
+      当后端 EVENT_BUS=memory 时事件不会进入 Kafka，接口会返回 published=false 且写入行数为 0。
     </p>
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
@@ -237,9 +238,18 @@ async function runTask(row) {
     const data = await postJson(
       `/sync-tasks/${row.id}/run?mode=${encodeURIComponent(mode.value)}`,
     );
-    ElMessage.success(
-      `任务 #${row.id} 执行完成：读取 ${formatMetric(data?.rows_read)} 行，写入 ${formatMetric(data?.rows_written)} 行`,
-    );
+    if (data?.published === false) {
+      // A memory event bus accepts the events and drops them: the API reports
+      // published=false / rows_written=0 and this warning must be visible
+      // instead of a false success toast.
+      ElMessage.warning(
+        `任务 #${row.id} 已读取 ${formatMetric(data?.rows_read)} 行，但${data?.warning || '事件未发布'}，写入行数按 0 计`,
+      );
+    } else {
+      ElMessage.success(
+        `任务 #${row.id} 执行完成：读取 ${formatMetric(data?.rows_read)} 行，写入 ${formatMetric(data?.rows_written)} 行`,
+      );
+    }
     await loadAll();
   } catch (err) {
     ElMessage.error(`运行失败：${err.message}`);

@@ -275,10 +275,116 @@ class ConsumerTest(unittest.TestCase):
 
         self.assertEqual(result.failed, 1)
         self.assertEqual(result.inserted, 0)
-        self.assertEqual(dlt.messages, [("dp.ods.DLT", "k-1", b"{not-json")])
+        self.assertEqual(len(dlt.messages), 1)
+        topic, key, raw = dlt.messages[0]
+        self.assertEqual(topic, "dp.ods.DLT")
+        self.assertEqual(key, "k-1")
+        envelope = Envelope.from_bytes(raw)
+        self.assertEqual(envelope.event_type, "ODS_DLT")
+        self.assertEqual(envelope.payload["sample"], {"type": "bytes"})
+        self.assertNotIn(b"{not-json", raw)
         self.assertEqual(dlt.flushes, 1)
         self.assertEqual(olap.count("ops_ingest_audit"), 0)
         self.assertTrue(bus.committed)
+
+    def test_dlt_payload_is_redacted_for_a_parseable_event(self):
+        bus = InMemoryEventBus()
+        olap = FlakyOlapStore(failures=10)
+        dlt = FakePublisher()
+        row = valid_registration(
+            patient_name="张三",
+            patient_phone="13800138000",
+            patient_id_card="110101199001011234",
+        )
+        bus.publish("dp.ods", "1", make_event("registration", row))
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt, max_retries=1).run_once()
+
+        self.assertEqual(result.failed, 1)
+        topic, key, raw = dlt.messages[0]
+        self.assertEqual(topic, "dp.ods.DLT")
+        envelope = Envelope.from_bytes(raw)
+        payload = envelope.payload
+        self.assertEqual(payload["event_id"], "e-1")
+        self.assertEqual(payload["source_db"], "registration_db")
+        self.assertEqual(payload["source_table"], "registration")
+        self.assertIn("transient write failure", payload["error"])
+        self.assertEqual(payload["sample"]["id"], 1)
+        for key_name in ("patient_name", "patient_phone", "patient_id_card"):
+            self.assertNotIn(key_name, payload["sample"])
+        text = raw.decode("utf-8")
+        self.assertNotIn("张三", text)
+        self.assertNotIn("13800138000", text)
+        self.assertNotIn("110101199001011234", text)
+
+    def test_declared_target_table_mismatch_is_dead_lettered(self):
+        from etl.envelope import Envelope as EnvelopeClass
+
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        dlt = FakePublisher()
+        event = EnvelopeClass(
+            event_id="e-target",
+            event_type="ODS_ROW",
+            occurred_at=0,
+            payload={
+                "source_db": "hospital_db",
+                "source_table": "hospital",
+                "target_table": "ods_registration",
+                "row": {"id": 5, "name": "H"},
+            },
+        )
+        bus.publish("dp.ods", "1", event.to_bytes())
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.inserted, 0)
+        self.assertEqual(olap.tables, {})
+        payload = Envelope.from_bytes(dlt.messages[0][2]).payload
+        self.assertIn("does not match", payload["error"])
+        self.assertTrue(bus.committed)
+
+    def test_redacted_chat_row_keeps_precomputed_metadata(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event(
+                "chat_message",
+                {
+                    "id": 7,
+                    "session_id": "s-1",
+                    "role": "user",
+                    "content_length": 9,
+                    "has_reference": True,
+                },
+            ),
+        )
+
+        result = ConsumerPipeline(bus, olap).run_once()
+
+        self.assertEqual(result.inserted, 1)
+        row = olap.tables["ods_chat_message"][0]
+        self.assertEqual(row["content_length"], 9)
+        self.assertTrue(row["has_reference"])
+
+    def test_quarantine_sample_of_a_non_object_row_is_a_type_marker(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event("registration", ["raw-patient-name"]),
+        )
+
+        result = ConsumerPipeline(bus, olap).run_once()
+
+        self.assertEqual(result.quarantined, 1)
+        sample = olap.tables["ops_quarantine"][0]["sample"]
+        self.assertEqual(json.loads(sample), {"type": "list"})
+        self.assertNotIn("raw-patient-name", sample)
 
     def test_transient_insert_failure_is_retried(self):
         bus = InMemoryEventBus()
@@ -430,6 +536,18 @@ class DeterministicBatchIdTest(unittest.TestCase):
 
         self.assertNotEqual(batch_id_for([first]), batch_id_for([second]))
 
+    def test_batch_id_ignores_the_poll_order(self):
+        events = [
+            ConsumedEvent(
+                topic="dp.ods",
+                key=str(index),
+                value=make_event("registration", valid_registration(), event_id=f"e-{index}"),
+            )
+            for index in range(3)
+        ]
+
+        self.assertEqual(batch_id_for(events), batch_id_for(list(reversed(events))))
+
 
 class BookkeepingReplayTest(unittest.TestCase):
     def test_rewind_replays_the_failed_batch_on_the_next_run(self):
@@ -561,7 +679,11 @@ class RealtimeRoutingTest(unittest.TestCase):
         self.assertEqual(result.failed, 1)
         self.assertEqual(result.realtime, 0)
         self.assertEqual(len(handler.events), 2)
-        self.assertEqual(dlt.messages, [("dp.ods.DLT", "evt-9", b"bad-envelope")])
+        self.assertEqual(len(dlt.messages), 1)
+        dlt_payload = Envelope.from_bytes(dlt.messages[0][2]).payload
+        self.assertEqual(dlt.messages[0][0], "dp.ods.DLT")
+        self.assertEqual(dlt_payload["sample"], {"type": "bytes"})
+        self.assertNotIn(b"bad-envelope", dlt.messages[0][2])
         self.assertTrue(bus.committed)
 
     def test_duplicate_realtime_event_id_is_skipped(self):

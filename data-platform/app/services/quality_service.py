@@ -24,6 +24,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import DataPlatformError
+from app.core.time import now_shanghai
 from app.models.metadata import DpQualityResult, DpQualityRule
 from etl.adapters.inmemory_olap_store import InMemoryOlapStore
 from etl.ports.olap_store import OlapStore
@@ -149,7 +150,7 @@ class QualityService:
     ):
         self.db = db
         self.olap = olap
-        self._now = now or datetime.utcnow
+        self._now = now or now_shanghai
         self.store_kind = store_kind or "clickhouse"
 
     def _effective_store_kind(self) -> str:

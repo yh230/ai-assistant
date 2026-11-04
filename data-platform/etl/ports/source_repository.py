@@ -49,6 +49,7 @@ class SourceRepository(Protocol):
         after_watermark: Watermark,
         after_pk: int | None,
         limit: int,
+        upper_watermark: Watermark | None = None,
     ) -> list[dict[str, Any]]: ...
 
     def max_watermark(

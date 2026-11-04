@@ -145,8 +145,8 @@ class SqlFilesTest(unittest.TestCase):
                 ("hospital_id", "Nullable(UInt64)"),
                 ("visit_date", "Nullable(Date)"),
                 ("period", "Nullable(UInt8)"),
-                ("occurred_at", "DateTime"),
-                ("_ingested_at", "DateTime"),
+                ("occurred_at", "DateTime('Asia/Shanghai')"),
+                ("_ingested_at", "DateTime('Asia/Shanghai')"),
             ],
         )
         self.assertIn("ENGINE = ReplacingMergeTree(_ingested_at)", statement)
@@ -164,6 +164,51 @@ class SqlFilesTest(unittest.TestCase):
             statement = table_statement(ddl, table)
             self.assertIn("Nullable(", statement, table)
             self.assertIn("SETTINGS allow_nullable_key = 1", normalized(statement), table)
+
+    def test_every_datetime_column_is_pinned_to_shanghai(self):
+        ddl = read_sql("ddl/clickhouse.sql")
+        code = "\n".join(
+            line for line in ddl.splitlines() if not line.strip().startswith("--")
+        )
+        # No bare DateTime type survives (DateTime'(' is required), and the
+        # toDateTime() TTL helper is not a column type.
+        self.assertNotRegex(code, r"(?<!to)DateTime(?!\()")
+        for match in re.finditer(r"(?<!to)DateTime\(([^)]*)\)", code):
+            self.assertEqual(match.group(1), "'Asia/Shanghai'")
+
+    def test_transform_sql_uses_the_shanghai_clock(self):
+        for relative in TRANSFORM_TARGETS:
+            sql = read_sql(relative)
+            self.assertNotRegex(sql, r"now\(\)", relative)
+            self.assertNotIn("today()", sql, relative)
+            # A bare toDate(identifier) has no time-zone argument.
+            self.assertNotRegex(sql, r"toDate\([\w.]+\)", relative)
+
+    def test_ops_tables_expire(self):
+        ddl = read_sql("ddl/clickhouse.sql")
+        for table in (
+            "ops_quarantine",
+            "ops_ingest_audit",
+            "ops_registration_event",
+        ):
+            statement = normalized(table_statement(ddl, table))
+            self.assertIn("TTL _ingested_at + INTERVAL 90 DAY", statement, table)
+
+    def test_optional_non_nullable_columns_have_defaults(self):
+        ddl = read_sql("ddl/clickhouse.sql")
+        expectations = {
+            "ods_registration": ("registration_no String DEFAULT ''",),
+            "ods_hospital": ("address String DEFAULT ''", "phone String DEFAULT ''"),
+            "ods_doctor_schedule": ("total_limit UInt32 DEFAULT 0",),
+            "ods_department": ("status UInt8 DEFAULT 0",),
+        }
+        for table, fragments in expectations.items():
+            statement = normalized(table_statement(ddl, table))
+            for fragment in fragments:
+                self.assertIn(fragment, statement, f"{table}: {fragment}")
+
+    def test_transform_cli_exists(self):
+        self.assertTrue((SQL_ROOT.parent / "transform_main.py").exists())
 
     def test_transform_sql_targets_are_explicit_and_templated(self):
         for relative, target in TRANSFORM_TARGETS.items():

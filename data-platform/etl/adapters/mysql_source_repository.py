@@ -1,5 +1,4 @@
 import re
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -118,6 +117,7 @@ class MySQLSourceRepository:
         after_watermark: Watermark,
         after_pk: int | None,
         limit: int,
+        upper_watermark: Watermark | None = None,
     ) -> list[dict[str, Any]]:
         schema = validate_identifier(schema)
         table = validate_identifier(table)
@@ -131,20 +131,26 @@ class MySQLSourceRepository:
                 f"WHERE ({watermark_column}, {primary_key}) "
                 "> (:after_watermark, :after_pk)"
             )
+        params: dict[str, Any] = {"after_watermark": after_watermark, "limit": limit}
+        if after_pk is not None:
+            params["after_pk"] = after_pk
+        if upper_watermark is not None:
+            # Bound the run to rows that existed when it started; rows written
+            # during the run are picked up by the next run instead of extending
+            # this one indefinitely.
+            where += f" AND {watermark_column} <= :upper_watermark"
+            params["upper_watermark"] = upper_watermark
         sql = text(
             f"SELECT {column_sql} FROM {schema}.{table} {where} "
             f"ORDER BY {watermark_column}, {primary_key} LIMIT :limit"
         )
-        params: dict[str, Any] = {"after_watermark": after_watermark, "limit": limit}
-        if after_pk is not None:
-            params["after_pk"] = after_pk
         with self._engine.connect() as conn:
             rows = conn.execute(sql, params).mappings().all()
         return [dict(row) for row in rows]
 
     def max_watermark(
         self, schema: str, table: str, watermark_column: str
-    ) -> datetime | None:
+    ) -> Watermark | None:
         schema = validate_identifier(schema)
         table = validate_identifier(table)
         watermark_column = validate_identifier(watermark_column)

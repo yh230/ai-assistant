@@ -8,32 +8,37 @@
 -- OPS tables are replay-safe as well: quarantine is keyed by
 -- (source_table, _event_id, batch_id) and audit by (batch_id, source_table),
 -- so a replayed batch replaces its rows on merge instead of duplicating them.
+-- OPS tables expire after 90 days; they are diagnostics, not history.
+--
+-- Time convention: every DateTime column is pinned to Asia/Shanghai and the
+-- client session sets session_timezone=Asia/Shanghai, so now()/today() in a
+-- statement agree with the Python platform clock (app.core.time).
 
 CREATE DATABASE IF NOT EXISTS data_platform;
 
 CREATE TABLE IF NOT EXISTS data_platform.ods_registration (
   id UInt64,
-  registration_no String,
+  registration_no String DEFAULT '',
   hospital_id UInt64,
-  department_id UInt64,
-  doctor_user_id UInt64,
+  department_id UInt64 DEFAULT 0,
+  doctor_user_id UInt64 DEFAULT 0,
   schedule_date Date,
   period UInt8,
-  patient_name_masked String,
-  patient_phone_masked String,
-  source_type UInt8,
-  pay_status UInt8,
-  pay_amount Decimal(10,2),
-  status UInt8,
-  create_time DateTime,
-  update_time DateTime,
+  patient_name_masked String DEFAULT '',
+  patient_phone_masked String DEFAULT '',
+  source_type UInt8 DEFAULT 0,
+  pay_status UInt8 DEFAULT 0,
+  pay_amount Decimal(10,2) DEFAULT 0,
+  status UInt8 DEFAULT 0,
+  create_time DateTime('Asia/Shanghai') DEFAULT now('Asia/Shanghai'),
+  update_time DateTime('Asia/Shanghai') DEFAULT now('Asia/Shanghai'),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(schedule_date)
 ORDER BY (hospital_id, schedule_date, id)
-TTL toDateTime(schedule_date) + INTERVAL 2 YEAR;
+TTL toDateTime(schedule_date, 'Asia/Shanghai') + INTERVAL 2 YEAR;
 
 CREATE TABLE IF NOT EXISTS data_platform.ods_chat_session (
   id UInt64,
@@ -43,11 +48,11 @@ CREATE TABLE IF NOT EXISTS data_platform.ods_chat_session (
   session_type Nullable(String),
   hospital_id Nullable(UInt64),
   role_id Nullable(String),
-  created_at Nullable(DateTime),
-  updated_at Nullable(DateTime),
+  created_at Nullable(DateTime('Asia/Shanghai')),
+  updated_at Nullable(DateTime('Asia/Shanghai')),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(_ingested_at)
 ORDER BY (hospital_id, id)
@@ -59,10 +64,10 @@ CREATE TABLE IF NOT EXISTS data_platform.ods_chat_message (
   role String,
   content_length UInt32,
   has_reference UInt8,
-  created_at Nullable(DateTime),
+  created_at Nullable(DateTime('Asia/Shanghai')),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(_ingested_at)
 ORDER BY (session_id, id);
@@ -74,13 +79,13 @@ CREATE TABLE IF NOT EXISTS data_platform.ods_doctor_schedule (
   doctor_user_id UInt64,
   schedule_date Date,
   period UInt8,
-  total_limit UInt32,
-  registered_count UInt32,
-  status UInt8,
-  update_time DateTime,
+  total_limit UInt32 DEFAULT 0,
+  registered_count UInt32 DEFAULT 0,
+  status UInt8 DEFAULT 0,
+  update_time DateTime('Asia/Shanghai') DEFAULT now('Asia/Shanghai'),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(schedule_date)
 ORDER BY (hospital_id, schedule_date, id);
@@ -88,18 +93,18 @@ ORDER BY (hospital_id, schedule_date, id);
 CREATE TABLE IF NOT EXISTS data_platform.ods_number_source (
   id UInt64,
   hospital_id UInt64,
-  department_id UInt64,
-  doctor_user_id UInt64,
+  department_id UInt64 DEFAULT 0,
+  doctor_user_id UInt64 DEFAULT 0,
   schedule_id UInt64,
   schedule_date Date,
   period UInt8,
   seq_no UInt32,
   registration_id Nullable(UInt64),
-  status UInt8,
-  create_time DateTime,
+  status UInt8 DEFAULT 0,
+  create_time DateTime('Asia/Shanghai') DEFAULT now('Asia/Shanghai'),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(schedule_date)
 ORDER BY (hospital_id, schedule_date, id);
@@ -107,13 +112,13 @@ ORDER BY (hospital_id, schedule_date, id);
 CREATE TABLE IF NOT EXISTS data_platform.ods_hospital (
   id UInt64,
   name String,
-  address String,
-  phone String,
-  status UInt8,
-  update_time DateTime,
+  address String DEFAULT '',
+  phone String DEFAULT '',
+  status UInt8 DEFAULT 0,
+  update_time DateTime('Asia/Shanghai') DEFAULT now('Asia/Shanghai'),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 ORDER BY (id);
 
@@ -122,11 +127,11 @@ CREATE TABLE IF NOT EXISTS data_platform.ods_department (
   hospital_id UInt64,
   name String,
   director_user_id Nullable(UInt64),
-  status UInt8,
-  update_time DateTime,
+  status UInt8 DEFAULT 0,
+  update_time DateTime('Asia/Shanghai') DEFAULT now('Asia/Shanghai'),
   _event_id String,
   _source String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 ORDER BY (hospital_id, id);
 
@@ -142,10 +147,10 @@ CREATE TABLE IF NOT EXISTS data_platform.dwd_registration (
   pay_status UInt8,
   pay_amount Decimal(10,2),
   status UInt8,
-  create_time DateTime,
-  update_time DateTime,
+  create_time DateTime('Asia/Shanghai'),
+  update_time DateTime('Asia/Shanghai'),
   _event_id String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(schedule_date)
 ORDER BY (hospital_id, schedule_date, id);
@@ -156,10 +161,10 @@ CREATE TABLE IF NOT EXISTS data_platform.dwd_ai_session (
   hospital_id Nullable(UInt64),
   session_type Nullable(String),
   identity Nullable(String),
-  created_at Nullable(DateTime),
-  updated_at Nullable(DateTime),
+  created_at Nullable(DateTime('Asia/Shanghai')),
+  updated_at Nullable(DateTime('Asia/Shanghai')),
   _event_id String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(_ingested_at)
 ORDER BY (hospital_id, id)
@@ -171,9 +176,9 @@ CREATE TABLE IF NOT EXISTS data_platform.dwd_ai_message (
   role String,
   content_length UInt32,
   has_reference UInt8,
-  created_at Nullable(DateTime),
+  created_at Nullable(DateTime('Asia/Shanghai')),
   _event_id String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(_ingested_at)
 ORDER BY (session_id, id);
@@ -200,7 +205,7 @@ CREATE TABLE IF NOT EXISTS data_platform.ads_hospital_daily (
   visit_rate Float64,
   ai_sessions UInt64,
   rag_hit_rate Float64,
-  updated_at DateTime
+  updated_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(metric_date)
 ORDER BY (metric_date, hospital_id);
@@ -212,7 +217,7 @@ CREATE TABLE IF NOT EXISTS data_platform.ads_department_daily (
   reg_count UInt64,
   visit_count UInt64,
   cancel_count UInt64,
-  updated_at DateTime
+  updated_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(metric_date)
 ORDER BY (metric_date, hospital_id, department_id);
@@ -223,18 +228,18 @@ CREATE TABLE IF NOT EXISTS data_platform.ads_ai_daily (
   session_count UInt64,
   message_count UInt64,
   rag_hit_rate Float64,
-  updated_at DateTime
+  updated_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(metric_date)
 ORDER BY (metric_date, hospital_id)
 SETTINGS allow_nullable_key = 1;
 
 CREATE TABLE IF NOT EXISTS data_platform.ads_pipeline_health (
-  metric_time DateTime,
+  metric_time DateTime('Asia/Shanghai'),
   source_table String,
   rows_ingested UInt64,
   lag_seconds Int64,
-  updated_at DateTime
+  updated_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(metric_time)
 ORDER BY (metric_time, source_table);
@@ -249,7 +254,7 @@ CREATE TABLE IF NOT EXISTS data_platform.ads_quality_daily (
   pass_rate Float64,
   severity String,
   status String,
-  checked_at DateTime
+  checked_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(checked_at)
 PARTITION BY toYYYYMM(metric_date)
 ORDER BY (metric_date, rule_id);
@@ -263,19 +268,21 @@ CREATE TABLE IF NOT EXISTS data_platform.ops_quarantine (
   source_table String,
   errors String,
   sample String,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(_ingested_at)
-ORDER BY (source_table, _event_id, batch_id);
+ORDER BY (source_table, _event_id, batch_id)
+TTL _ingested_at + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS data_platform.ops_ingest_audit (
   batch_id String,
   source_table String,
   rows_ingested UInt64,
-  _ingested_at DateTime
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
 PARTITION BY toYYYYMM(_ingested_at)
-ORDER BY (batch_id, source_table);
+ORDER BY (batch_id, source_table)
+TTL _ingested_at + INTERVAL 90 DAY;
 
 -- Written by the Task 5 realtime handler for ai.registration.event.  Columns
 -- match etl.realtime.RegistrationEventHandler row for row.
@@ -286,15 +293,16 @@ CREATE TABLE IF NOT EXISTS data_platform.ops_registration_event (
   hospital_id Nullable(UInt64),
   visit_date Nullable(Date),
   period Nullable(UInt8),
-  occurred_at DateTime,
-  _ingested_at DateTime
+  occurred_at DateTime('Asia/Shanghai'),
+  _ingested_at DateTime('Asia/Shanghai')
 ) ENGINE = ReplacingMergeTree(_ingested_at)
-ORDER BY (_event_id);
+ORDER BY (_event_id)
+TTL _ingested_at + INTERVAL 90 DAY;
 
 -- Written only by the Flink realtime aggregation job (see flink/).
 CREATE TABLE IF NOT EXISTS data_platform.ads_realtime_registration_5m (
-  window_start DateTime,
-  window_end DateTime,
+  window_start DateTime('Asia/Shanghai'),
+  window_end DateTime('Asia/Shanghai'),
   hospital_id UInt64,
   event_type String,
   cnt UInt64

@@ -1,11 +1,10 @@
-from datetime import datetime
-
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.crypto import SecretBox
 from app.core.exceptions import DataPlatformError
+from app.core.time import now_shanghai
 from app.models.metadata import ColumnMeta, DataSource, TableMeta
 from etl.adapters.mysql_source_repository import MySQLSourceRepository
 
@@ -97,7 +96,10 @@ class DatasourceService:
             connected = False
         except ValueError as exc:
             raise DataPlatformError(400, str(exc)) from exc
-        entity.last_test_at = datetime.utcnow()
+        # The last connection test is the source of truth for the status the
+        # governance UI displays (1 = reachable, 0 = unreachable).
+        entity.status = 1 if connected else 0
+        entity.last_test_at = now_shanghai()
         self.db.commit()
         return connected
 
@@ -138,7 +140,7 @@ class DatasourceService:
                 ColumnMeta.table_meta_id == table_meta.id
             ).delete()
             table_meta.table_comment = table_comment
-            table_meta.last_introspected_at = datetime.utcnow()
+            table_meta.last_introspected_at = now_shanghai()
         for column in columns:
             self.db.add(
                 ColumnMeta(

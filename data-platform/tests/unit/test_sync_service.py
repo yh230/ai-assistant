@@ -38,8 +38,11 @@ class FakeSource:
         after_watermark,
         after_pk,
         limit,
+        upper_watermark=None,
     ):
-        self.incremental_calls.append((watermark_column, after_watermark, after_pk, limit))
+        self.incremental_calls.append(
+            (watermark_column, after_watermark, after_pk, limit)
+        )
         if self.error is not None:
             raise self.error
         return self.batches.pop(0) if self.batches else []
@@ -233,8 +236,12 @@ class SyncServiceTest(unittest.TestCase):
         task = self._create_task(watermark_column="seq", watermark_type="numeric")
         repoints = (
             {"datasource_id": 2},
-            {"source_schema": "other_db"},
-            {"source_table": "other_table"},
+            {
+                "source_schema": "registration_db",
+                "source_table": "registration",
+                "target_table": "ods_registration",
+            },
+            {"source_table": "chat_message", "target_table": "ods_chat_message"},
         )
         for change in repoints:
             task.full_load_done = True
@@ -248,6 +255,43 @@ class SyncServiceTest(unittest.TestCase):
             self.assertFalse(updated.full_load_done)
             self.assertIsNone(updated.last_watermark)
             self.assertIsNone(updated.last_watermark_num)
+
+    def test_create_task_rejects_an_unsupported_source(self):
+        with self.assertRaises(ValueError) as context:
+            self._create_task(
+                source_schema="system_db",
+                source_table="sys_oper_log",
+                target_table="ods_sys_oper_log",
+            )
+        self.assertIn("unsupported source table", str(context.exception))
+
+    def test_create_task_rejects_a_target_mismatch(self):
+        with self.assertRaises(ValueError) as context:
+            self._create_task(target_table="ods_hospital")
+        self.assertIn("target_table must be ods_chat_session", str(context.exception))
+
+    def test_update_task_rejects_an_unsupported_source(self):
+        task = self._create_task()
+
+        with self.assertRaises(ValueError):
+            self.service.update_task(
+                task,
+                source_schema="system_db",
+                source_table="sys_oper_log",
+                target_table="ods_sys_oper_log",
+            )
+
+    def test_update_task_rejects_a_target_mismatch(self):
+        task = self._create_task()
+
+        with self.assertRaises(ValueError):
+            self.service.update_task(task, target_table="ods_hospital")
+
+    def test_update_task_requires_a_matching_target_for_a_new_source(self):
+        task = self._create_task()
+
+        with self.assertRaises(ValueError):
+            self.service.update_task(task, source_table="chat_message")
 
     def test_update_task_rejects_changes_while_running(self):
         task = self._create_task()

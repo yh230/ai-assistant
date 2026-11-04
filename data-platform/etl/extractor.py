@@ -8,6 +8,7 @@ from etl.envelope import Envelope
 from etl.ports.event_bus import EventPublisher
 from etl.ports.run_store import RunStore
 from etl.ports.source_repository import SourceRepository
+from etl.privacy import redact_source_row
 from etl.watermark import advance_numeric, advance_watermark, lower_bound, to_decimal
 
 RUN_MODES = ("FULL", "INCREMENTAL")
@@ -130,6 +131,12 @@ class Extractor:
                         lower_bound(task.last_watermark, task.overlap_seconds)
                         or task.last_watermark
                     )
+                # Freeze the run at the source's current maximum watermark:
+                # rows written while this run is in progress are left for the
+                # next run instead of extending it without a bound.
+                upper_watermark = self.source.max_watermark(
+                    task.source_schema, task.source_table, task.watermark_column
+                )
                 cursor_pk = None
                 while True:
                     rows = self.source.fetch_incremental_batch(
@@ -141,6 +148,7 @@ class Extractor:
                         cursor_watermark,
                         cursor_pk,
                         task.batch_size,
+                        upper_watermark=upper_watermark,
                     )
                     if not rows:
                         break
@@ -182,7 +190,13 @@ class Extractor:
                 payload={
                     "source_db": task.source_schema,
                     "source_table": task.source_table,
-                    "row": row,
+                    # The consumer validates this against the source registry;
+                    # carrying it makes the target explicit in the event
+                    # contract instead of deriving it from the cleaner name.
+                    "target_table": task.target_table,
+                    # Direct PII (patient name/phone/id-card, chat body and
+                    # references) never reaches Kafka or the DLT.
+                    "row": redact_source_row(task.source_table, row),
                 },
             )
             self.publisher.publish(topic, self._partition_key(task, row), envelope.to_bytes())

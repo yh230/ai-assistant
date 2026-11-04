@@ -75,6 +75,24 @@ class HealthApiTest(unittest.TestCase):
         self.assertEqual(body["message"], "missing token")
         self.assertIsNone(body["data"])
 
+    def test_unhandled_error_returns_a_generic_500_envelope(self):
+        from fastapi.testclient import TestClient
+
+        app = self._create_app()
+
+        @app.get("/api/_boom")
+        def boom():
+            raise RuntimeError("secret internal detail")
+
+        response = TestClient(app, raise_server_exceptions=False).get("/api/_boom")
+
+        self.assertEqual(response.status_code, 500)
+        body = response.json()
+        self.assertEqual(body["code"], 500)
+        self.assertEqual(body["message"], "internal error")
+        self.assertIsNone(body["data"])
+        self.assertNotIn("secret internal detail", response.text)
+
     def test_screen_routes_are_registered(self):
         paths = {route.path for route in self._create_app().routes}
         for path in (

@@ -128,3 +128,20 @@ class StarColumnsTest(unittest.TestCase):
                 100,
             )
         self.assertEqual(repo._engine.statements, [])
+
+    def test_incremental_batch_applies_the_run_upper_bound(self):
+        repo = _repository_with_fake_engine()
+        repo.fetch_incremental_batch(
+            "hospital_db",
+            "hospital",
+            ["*"],
+            "id",
+            "updated_at",
+            datetime(2026, 1, 1),
+            None,
+            100,
+            upper_watermark=datetime(2026, 1, 2),
+        )
+        statement, params = repo._engine.statements[0]
+        self.assertIn("updated_at <= :upper_watermark", statement)
+        self.assertEqual(params["upper_watermark"], datetime(2026, 1, 2))

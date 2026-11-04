@@ -44,6 +44,12 @@ class FactoryTest(unittest.TestCase):
 
         self.assertTrue(hasattr(clickhouse_olap_store, "ClickHouseOlapStore"))
 
+    def test_clickhouse_session_settings_pin_the_platform_clock(self):
+        from etl.adapters.clickhouse_olap_store import SESSION_SETTINGS
+
+        self.assertEqual(SESSION_SETTINGS["session_timezone"], "Asia/Shanghai")
+        self.assertEqual(SESSION_SETTINGS["input_format_null_as_default"], 1)
+
     def test_unknown_event_bus_kind_is_rejected(self):
         with self.assertRaises(ValueError):
             build_event_bus("redis", "127.0.0.1:6379", "g")

@@ -211,16 +211,20 @@ def build_rule_sql(rule: QualityRule) -> str:
     rule_type = _normalized_type(rule)
     table = rule.table
     column = rule.column or ""
+    # ReplacingMergeTree tables can hold several versions of a key until parts
+    # merge; every standard rule reads FINAL so a duplicate version cannot
+    # inflate total_rows or hide a bad value.
+    source = f"{table} FINAL"
 
     if rule_type == "NOT_NULL":
         return (
             f"SELECT count() AS total_rows, countIf({column} IS NULL) AS bad_rows "
-            f"FROM {table}"
+            f"FROM {source}"
         )
     if rule_type == "UNIQUE":
         return (
             f"SELECT count() AS total_rows, count() - uniqExact({column}) AS bad_rows "
-            f"FROM {table}"
+            f"FROM {source}"
         )
     if rule_type == "RANGE":
         minimum = _number_text(rule.params["min"], "params.min")
@@ -228,24 +232,26 @@ def build_rule_sql(rule: QualityRule) -> str:
         return (
             f"SELECT count() AS total_rows, "
             f"countIf({column} < {minimum} OR {column} > {maximum}) AS bad_rows "
-            f"FROM {table}"
+            f"FROM {source}"
         )
     if rule_type == "ENUM":
         values = ", ".join(_enum_literal(value) for value in rule.params["values"])
         return (
             f"SELECT count() AS total_rows, countIf({column} NOT IN ({values})) AS bad_rows "
-            f"FROM {table}"
+            f"FROM {source}"
         )
     if rule_type == "FRESHNESS":
         return (
             f"SELECT count() AS total_rows, "
-            f"dateDiff('second', max({column}), now()) AS lag_seconds FROM {table}"
+            f"dateDiff('second', max({column}), now('{PLATFORM_TIMEZONE}')) AS lag_seconds "
+            f"FROM {source}"
         )
     if rule_type == "VOLUME":
         date_column = rule.params.get("date_column", "created_at")
         return (
-            f"SELECT toDate({date_column}) AS metric_date, count() AS total_rows "
-            f"FROM {table} WHERE {date_column} >= {VOLUME_TODAY_SQL} - 7 "
+            f"SELECT toDate({date_column}, '{PLATFORM_TIMEZONE}') AS metric_date, "
+            f"count() AS total_rows "
+            f"FROM {source} WHERE {date_column} >= {VOLUME_TODAY_SQL} - 7 "
             f"GROUP BY metric_date ORDER BY metric_date"
         )
     # CUSTOM_SQL is validated as a read-only SELECT/WITH above.
@@ -265,14 +271,16 @@ def _as_date(value: Any) -> date | None:
     return None
 
 
-def _volume_window(rows: list[dict[str, Any]]) -> tuple[int, list[int]]:
-    """Return (today's count, counts of the preceding seven days).
+def _volume_window(rows: list[dict[str, Any]]) -> tuple[int, list[int], bool]:
+    """Return (today's count, preceding seven counts, today is present).
 
     The query filters an 8-day window, but days without rows are absent from
     the result.  Rebuilding the calendar from the returned dates keeps missing
     days at zero, so a pipeline that produced nothing today cannot borrow
     yesterday's row as "today".  If the newest row is in the future (clock
-    skew), the newest date becomes the reference day.
+    skew), the newest date becomes the reference day.  The presence flag is
+    False when the result has no rows at all or the reference day is missing:
+    VOLUME cannot pass without a row for the day it is measuring.
     """
     counts: dict[date, int] = {}
     for row in rows:
@@ -284,7 +292,7 @@ def _volume_window(rows: list[dict[str, Any]]) -> tuple[int, list[int]]:
         except (TypeError, ValueError) as exc:
             raise ValueError("VOLUME rows must expose an integer total_rows") from exc
     if not counts:
-        return 0, []
+        return 0, [], False
     latest = max(counts)
     today = platform_today()
     # ``reference_date`` is the platform ("Asia/Shanghai") today, or the
@@ -294,7 +302,7 @@ def _volume_window(rows: list[dict[str, Any]]) -> tuple[int, list[int]]:
         counts.get(reference_date - timedelta(days=offset), 0)
         for offset in range(7, -1, -1)
     ]
-    return window[-1], window[:7]
+    return window[-1], window[:7], reference_date in counts
 
 
 def evaluate_rule(rule: QualityRule, olap: OlapStore) -> QualityResult:
@@ -319,7 +327,12 @@ def evaluate_rule(rule: QualityRule, olap: OlapStore) -> QualityResult:
         )
 
     if rule_type == "VOLUME":
-        today_count, baseline_counts = _volume_window(rows)
+        today_count, baseline_counts, today_present = _volume_window(rows)
+        if not today_present:
+            # No rows at all, or no row for the reference day: the pipeline
+            # produced nothing today, which is a volume failure regardless of
+            # how permissive the threshold is.
+            return QualityResult(rule.id, 0, 1, 0.0, "FAIL", rule.severity)
         baseline = (
             sum(baseline_counts) / len(baseline_counts)
             if baseline_counts
@@ -386,15 +399,16 @@ def build_quality_row(
 ) -> dict[str, Any]:
     """Build the ``ads_quality_daily`` row for one rule run.
 
-    ``checked_at`` is treated as UTC when naive.  ClickHouse ``DateTime``
-    columns are naive Asia/Shanghai wall-clock values elsewhere in the ETL
-    (``now_shanghai`` in ``etl.consumer``), so both ``metric_date`` and
-    ``checked_at`` are converted to the platform time zone before insertion.
+    Metadata timestamps follow the Asia/Shanghai wall-clock convention, so a
+    naive ``checked_at`` is treated as already platform-local (``app.core.time``
+    supplies such values); an aware value is converted to the platform time
+    zone and its tzinfo dropped.  Both ``metric_date`` and ``checked_at`` are
+    therefore written in the same calendar as the ClickHouse column types.
     """
-    aware = checked_at if checked_at.tzinfo is not None else checked_at.replace(
-        tzinfo=timezone.utc
-    )
-    local = aware.astimezone(PLATFORM_TZ)
+    if checked_at.tzinfo is None:
+        local = checked_at
+    else:
+        local = checked_at.astimezone(PLATFORM_TZ).replace(tzinfo=None)
     return {
         "metric_date": local.date(),
         "rule_id": rule.id,
@@ -404,5 +418,5 @@ def build_quality_row(
         "pass_rate": result.pass_rate,
         "severity": result.severity or rule.severity,
         "status": result.status,
-        "checked_at": local.replace(tzinfo=None),
+        "checked_at": local,
     }

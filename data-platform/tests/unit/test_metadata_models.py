@@ -35,3 +35,16 @@ class MetadataModelTest(unittest.TestCase):
         self.assertTrue(column.nullable)
         self.assertEqual(column.type.precision, 20)
         self.assertEqual(column.type.scale, 0)
+
+    def test_timestamp_defaults_use_the_platform_clock(self):
+        from app.core.time import now_shanghai
+
+        pairs = (
+            ("dp_datasource", "create_time"),
+            ("dp_sync_run", "started_at"),
+            ("dp_quality_result", "checked_at"),
+        )
+        for table, column_name in pairs:
+            with self.subTest(table=table, column=column_name):
+                column = Base.metadata.tables[table].c[column_name]
+                self.assertIs(column.default.arg, now_shanghai)

@@ -7,10 +7,10 @@
 
 `data-platform` 是 ai-assistant 的**下游数据平台**，不修改 ai-assistant 现有服务，只读接入其业务库：
 
-- 对 `system_db`、`hospital_db`、`registration_db`、`chat_db` 做全量 + 增量抽取，按水位断点续跑。
+- 对设计文档 §7.3 的 7 张源表（`hospital_db`、`registration_db`、`chat_db`）做全量 + 增量抽取，按水位断点续跑；`system_db` 与 `hospital_db.attendance` 按设计延后，V1 不支持。
 - 消费 ai-assistant 现有 `ai.registration.event` 实时事件，与历史回补数据统一入仓。
 - 在 ClickHouse 内完成 ODS / DWD / ADS 分层建模与去重。
-- 提供元数据浏览、6 类标准质量规则（另支持自定义 SQL）、质量评分、告警闭环与 Webhook。
+- 提供元数据浏览、6 类标准质量规则（另支持自定义 SQL）、质量评分、告警记录与 Webhook 投递接口；V1 未接入指标采集器与自动评估调度。
 - 提供 1920×1080 运营大屏与治理后台，前端可用 `VITE_USE_MOCK=true` 无后端预览。
 - 交付 PyFlink 实时聚合作业代码与 Flink SQL：**代码已实现，未部署、未运行验证**。
 
@@ -20,19 +20,19 @@
 
 ```text
 ai-assistant MySQL（只读）
-  system_db / hospital_db / registration_db / chat_db
+  hospital_db / registration_db / chat_db（7 张注册源表）
         │  全量 keyset 分页 + update_time 增量（水位 / 断点）
         ▼
-   Extractor ──────────────────────────────► Kafka `dp.ods.<db>.<table>`
+   Extractor（发布前脱敏）───────────────► Kafka `dp.ods.<db>.<table>`
                                                    │
    ai.registration.event ──┬──────────────────────┤
                            │                      ▼
-                           │              Consumer（批量 / 清洗 / 幂等 / 隔离）
+                           │              Consumer（批量 / 清洗 / 幂等 / 隔离 / DLT）
                            │                      │
                            │                      ▼
                            │              ClickHouse ODS ──► DWD ──► ADS
                            │                      │
-                           │                      ├──► 质量规则 / 告警引擎 ──► 站内告警 + Webhook
+                           │                      ├──► 质量规则手工执行 ──► 告警记录 + Webhook
                            │                      └──► FastAPI `/api/screen`（SSE 5s）
                            │                                   │
                            └──► Flink（代码展示，未部署）        ▼
@@ -41,13 +41,15 @@ ai-assistant MySQL（只读）
 
 端口与适配器：`EventPublisher` / `EventConsumer`、`OlapStore`、`SourceRepository` 均以接口隔离，业务层只依赖端口；生产实现为 Kafka / ClickHouse / MySQL，单元测试使用内存 Fake，因此缺少外部依赖时仍可完成静态检查与纯逻辑单测。
 
+源表契约集中在 `etl/source_registry.py`：只有注册表中的 `(schema, table) -> (target_table, cleaner)` 组合可以创建同步任务、生成消费 Topic 或写入 ODS。
+
 ## 3. 目录说明
 
 ```text
 data-platform/
 ├── app/                      # FastAPI 应用
 │   ├── main.py               # 应用入口、异常处理、路由注册
-│   ├── core/                 # 配置、数据库、加解密、统一响应、异常
+│   ├── core/                 # 配置、数据库、加解密、响应、异常、平台时钟
 │   ├── api/                  # 数据源、元数据、同步、质量、告警、大屏路由
 │   ├── models/               # SQLAlchemy 元数据模型
 │   ├── schemas/              # Pydantic 请求/响应模型
@@ -56,11 +58,14 @@ data-platform/
 ├── etl/                      # 数据工程核心
 │   ├── ports/                # EventBus / OlapStore / SourceRepository / RunStore 接口
 │   ├── adapters/             # Kafka、ClickHouse、MySQL 与内存 Fake 实现
+│   ├── source_registry.py    # 7 张受支持源表与 ODS 目标表契约
+│   ├── privacy.py            # 发布前 PII 脱敏
 │   ├── extractor.py          # 全量 + 增量抽取
-│   ├── consumer.py           # 批量消费、清洗、隔离（由 consumer_main 驱动）
+│   ├── consumer.py           # 批量消费、清洗、隔离、脱敏 DLT
 │   ├── consumer_main.py      # 常驻消费进程入口
-│   ├── cleaning.py           # 清洗与脱敏
-│   ├── transform.py          # DWD / ADS SQL 执行
+│   ├── cleaning.py           # 清洗与脱敏（接受预计算掩码）
+│   ├── transform.py          # DDL 拆分与 DWD / ADS SQL 执行
+│   ├── transform_main.py     # 手工转换 CLI：--stage ddl|dwd|ads --ds YYYY-MM-DD
 │   ├── quality.py            # 质量规则 SQL 生成与评分
 │   ├── alerting.py           # 告警判定、去重、冷却、Webhook
 │   ├── realtime.py           # ai.registration.event 处理
@@ -96,15 +101,16 @@ data-platform/
 
 | 模块 | 已实现 | 已静态验证 | 未验证 |
 | --- | --- | --- | --- |
-| 数据源 CRUD、连接测试、元数据采集、密码 Fernet 加密 | 是 | Python 编译；加解密 / 服务层测试因依赖缺失 SKIP | MySQL 连接与采集 |
-| 同步任务、运行记录、全量 / 增量抽取、水位断点 | 是 | 水位 / Extractor 共 14 项单测执行；服务层 / API 测试 SKIP | 真实 MySQL 抽取 |
-| Kafka 事件信封、Producer / Consumer 适配器 | 是 | 信封、消费管线（内存 Fake）单测执行；适配器仅编译 | 真实 Kafka 收发、位点提交、DLT |
-| 清洗、脱敏、隔离、实时预约事件 | 是 | 清洗 / 消费 / 实时事件单测执行 | 真实数据与 ClickHouse 写入 |
-| ClickHouse ODS / DWD / ADS / OPS DDL 与转换 SQL | 是 | SQL 文件结构 13 项单测执行 | DDL 执行、`ReplacingMergeTree` 去重 |
+| 数据源 CRUD、连接测试（回写状态）、元数据采集、密码 Fernet 加密 | 是 | Python 编译；服务层测试依赖缺失时 SKIP | MySQL 连接与采集 |
+| 同步任务、运行记录、全量 / 增量抽取、水位断点 | 是 | 水位 / Extractor / 服务层单测（依赖缺失时 SKIP） | 真实 MySQL 抽取 |
+| 源表契约、发布前 PII 脱敏 | 是 | 注册表 / 脱敏 / Extractor 单测执行 | 真实数据流 |
+| Kafka 事件信封、Producer / Consumer 适配器 | 是 | 信封、消费管线（内存 Fake）单测执行；适配器仅编译 | 真实 Kafka 收发、位点提交 |
+| 清洗、隔离、脱敏 DLT、实时预约事件 | 是 | 清洗 / 消费 / 实时事件单测执行 | 真实数据与 ClickHouse 写入 |
+| ClickHouse ODS / DWD / ADS / OPS DDL 与转换 SQL | 是 | SQL 文件结构与时区单测执行；DDL 拆分单测执行 | DDL 执行、`ReplacingMergeTree` 去重 |
 | 质量规则（6 类 + 自定义 SQL）、评分 | 是 | 规则生成 / 评分单测执行；服务层 / API 测试 SKIP | 在 ClickHouse 执行 |
-| 告警规则、去重、冷却、Webhook | 是 | 判定 / 指纹 / 冷却 / Webhook 发送逻辑单测执行；服务层 / API 测试 SKIP | Webhook 实际投递 |
+| 告警规则、去重、冷却、Webhook | 是 | 判定 / 指纹 / 冷却 / Webhook 发送逻辑单测执行 | 指标采集、自动评估、Webhook 实际投递 |
 | 大屏 API 与 SSE | 是 | 大屏服务层与仓库单测执行；路由 / SSE 测试 SKIP | 真实查询与 SSE 推送 |
-| Vue 3 大屏与治理后台 | 是 | `node --test` 图表配置 6 项执行 | `npm install` / `npm run build` / 浏览器验收 |
+| Vue 3 大屏与治理后台 | 是 | `node --test` 工具函数测试执行 | `npm install` / `npm run build` / 浏览器验收 |
 | Flink 实时聚合 | 是（代码展示） | `py_compile` 退出码 0 | 镜像构建、作业提交、结果查询 |
 | APScheduler 调度 | 是 | 仅 Python 编译；构建与 cron 测试 SKIP | 真实定时触发 |
 
@@ -118,10 +124,9 @@ data-platform/
 | --- | --- | --- |
 | `APP_ENV` | `dev` | 运行环境 |
 | `METADATA_DB_URL` | `sqlite:///./data-platform.db` | 元数据库（部署切 MySQL） |
-| `SOURCE_DB_URL` | 空 | 只读业务库连接串 |
 | `JWT_SECRET` | 空 | 校验 ai-assistant 签发的 HS256 Token |
 | `DP_SECRET_KEY` | 空 | 数据源密码加密的 Fernet key |
-| `EVENT_BUS` | `memory` | `memory` / `kafka` |
+| `EVENT_BUS` | `memory` | `memory` / `kafka`；`memory` 时手工运行返回 `published=false` |
 | `OLAP_STORE` | `memory` | `memory` / `clickhouse` |
 | `KAFKA_BOOTSTRAP` | `127.0.0.1:9092` | Kafka 地址 |
 | `KAFKA_CONSUMER_GROUP` | `dp-ods-loader` | 消费组 |
@@ -129,8 +134,7 @@ data-platform/
 | `CLICKHOUSE_URL` | `http://127.0.0.1:8123` | ClickHouse HTTP 地址 |
 | `CLICKHOUSE_DATABASE` | `data_platform` | ClickHouse 库名 |
 | `ALERT_WEBHOOK_URL` | 空 | 通用 Webhook，空则不发通知 |
-| `DP_ENABLE_SCHEDULER` | `false` | 为 `true` 时 API 进程内启动调度器 |
-| `TIMEZONE` | `Asia/Shanghai` | 平台统一时间口径 |
+| `DP_ENABLE_SCHEDULER` | `false` | 为 `true` 时 API 进程内启动同步调度器 |
 | `SCREEN_TREND_DAYS` / `SCREEN_MAX_TREND_DAYS` | `30` / `365` | 趋势窗口与上限 |
 | `SCREEN_RANKING_LIMIT` / `SCREEN_MAX_RANKING_LIMIT` | `10` / `100` | 排行条数与上限 |
 | `SCREEN_RECENT_ALERT_LIMIT` | `10` | 大屏实时告警条数 |
@@ -157,6 +161,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 # 常驻消费进程（Kafka + ClickHouse 依赖需先安装并可用）
 python -m etl.consumer_main
 
+# 手工执行转换（OLAP_STORE=memory 时仅记录 SQL，不写 ClickHouse）
+python -m etl.transform_main --stage ddl
+python -m etl.transform_main --stage dwd --ds 2026-11-04
+python -m etl.transform_main --stage ads --ds 2026-11-04
+
 # 前端开发服务器（需先 npm install）
 cd web && npm run dev
 
@@ -168,24 +177,24 @@ VITE_USE_MOCK=true npm run dev
 
 ## 7. API 一览
 
-统一前缀 `/api`，响应 `{code, message, data}`；管理接口要求 `Authorization: Bearer <JWT>` 且 `identity=staff`，大屏接口只读。
+统一前缀 `/api`，响应 `{code, message, data}`；管理接口要求 `Authorization: Bearer <JWT>` 且 `identity=staff`，大屏接口只读。未捕获异常统一返回 `{code: 500, message: "internal error", data: null}`，堆栈只写入服务端日志。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/health` | 健康检查 |
 | GET/POST | `/datasources` | 数据源列表 / 新建 |
 | PUT/DELETE | `/datasources/{id}` | 更新 / 删除 |
-| POST | `/datasources/{id}/test` | 连接测试 |
+| POST | `/datasources/{id}/test` | 连接测试，并回写 `status` |
 | POST | `/datasources/{id}/introspect` | 元数据采集 |
-| GET/POST | `/sync-tasks` | 同步任务列表 / 新建 |
+| GET/POST | `/sync-tasks` | 同步任务列表 / 新建（仅 7 张注册源表） |
 | PUT/DELETE | `/sync-tasks/{id}` | 更新 / 删除 |
-| POST | `/sync-tasks/{id}/run` | 手工触发 |
+| POST | `/sync-tasks/{id}/run` | 手工触发；`EVENT_BUS=memory` 时 `published=false`、`rows_written=0` |
 | GET | `/sync-runs` | 运行记录 |
 | GET | `/metadata/tables` | 表元数据 |
 | GET | `/metadata/tables/{id}/columns` | 字段元数据 |
 | GET/POST | `/quality/rules` | 质量规则 |
 | PUT/DELETE | `/quality/rules/{id}` | 更新 / 删除 |
-| POST | `/quality/rules/{id}/run` | 手工执行 |
+| POST | `/quality/rules/{id}/run` | 手工执行；`OLAP_STORE=memory` 时 `olap_written=false` |
 | GET | `/quality/results` | 质量结果 |
 | GET/POST | `/alerts/rules` | 告警规则 |
 | PUT/DELETE | `/alerts/rules/{id}` | 更新 / 删除 |
@@ -200,20 +209,41 @@ VITE_USE_MOCK=true npm run dev
 
 ## 8. 安全与隐私
 
-- 姓名、手机号、身份证号、聊天正文不进入 ODS / DWD / ADS，也不写入日志。
+- 原始 PII（患者姓名、手机号、身份证号、聊天正文 / 引用内容）不进入 ODS / DWD / ADS / Kafka / DLT；Extractor 在发布前调用 `etl/privacy.py` 脱敏，ODS 只保留 `*_masked`、`content_length`、`has_reference` 等派生物。
+- DLT 只发布 `{event_id, source_db, source_table, error, sanitized sample}` 小信封，不转发原始事件字节；隔离样本对非对象行只记录类型名。
+- 清洗错误文本不拼接源字段值，避免通过错误信息回显 PII。
 - 数据源密码使用 Fernet 加密存储，密钥只来自 `DP_SECRET_KEY`。
-- 日志携带 `run_id` / `task_id` / `event_id`，不打印敏感字段。
 - 仓库不提交 `.env`、密钥、证书或本机绝对路径。
 
-## 9. 后续人工验收清单
+## 9. V1 未接线 / 已知风险
+
+**未接线（不要按已自动化理解）：**
+
+- DWD / ADS 转换没有调度器：`python -m etl.transform_main` 是手工入口，需按 DDL → DWD → ADS 顺序执行。
+- 质量规则没有 cron 执行器：`dp_quality_rule.cron` 只做存储，V1 仅支持 API 手工执行。
+- 告警没有指标采集器、自动评估任务和评估 API 端点：`AlertService.evaluate_rule` 只被代码级调用，Webhook 只在被调用时投递。
+- 没有登录 UI：后端只校验 ai-assistant 签发的 JWT，前端未提供登录页。
+- 大屏未提供“来源分布”与“AI 类型分布”图表（设计中的数据未建模为 ADS 指标）。
+- `EVENT_BUS=memory` / `OLAP_STORE=memory` 只是本地验证替身，不代表 Kafka / ClickHouse 可用。
+
+**已知风险：**
+
+- ClickHouse 不可用时，消费管线仍会把事件写入 DLT 并提交位点，而不是对上游施加背压；ClickHouse 故障期间的数据需要从 DLT 重放。
+- 同步任务的 `running` 锁只有正常路径会释放；进程崩溃后需要人工把 `dp_sync_task.running` 置 0 并清空 `locked_at`。
+- 增量运行在启动时用源表当前 `MAX(watermark)` 作为上界，运行期间新写入的行留给下一次运行；源库补写旧水位的数据只能依赖 overlap 窗口或全量重跑。
+- ODS 可空源列在 DDL 中给了默认值，并启用 `input_format_null_as_default=1`，但列类型与源库不完全匹配时仍可能被隔离或进入 DLT。
+- ClickHouse 时区统一为 `Asia/Shanghai`（列类型、会话设置与 SQL 函数），未在真实集群验证。
+
+## 10. 后续人工验收清单
 
 以下步骤来自设计文档 [第 11.3 节](docs/2026-11-04-design.md#113-后续人工验收清单)，**本轮全部未执行**：
 
-1. 启动 Kafka 与 ClickHouse，执行建表脚本。
+1. 启动 Kafka 与 ClickHouse；执行 `python -m etl.transform_main --stage ddl` 建表。
 2. 配置只读数据源，运行全量任务，核对 ODS 行数。
 3. 修改源表数据，运行增量任务，核对水位推进与幂等。
-4. 触发一条质量规则失败，确认告警记录与 Webhook。
-5. 打开大屏，确认 KPI、趋势、排行与 SSE 刷新。
-6. 启动 Flink 作业，核对实时聚合结果。
+4. 依次执行 `--stage dwd --ds YYYY-MM-DD` 与 `--stage ads --ds YYYY-MM-DD`，核对 DWD / ADS 结果。
+5. 手工执行一条质量规则，确认失败结果、告警记录与 Webhook。
+6. 打开大屏，确认 KPI、趋势、排行与 SSE 刷新。
+7. 启动 Flink 作业，核对实时聚合结果。
 
 任何未执行的步骤不得在简历或汇报中描述为已验证。

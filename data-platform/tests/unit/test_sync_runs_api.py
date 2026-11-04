@@ -124,5 +124,35 @@ class SyncRunsApiTest(unittest.TestCase):
         self.assertEqual(db.query_obj.limit_value, 5)
 
 
+@unittest.skipUnless(HAS_API, "backend dependencies not installed")
+class ExtractRunViewTest(unittest.TestCase):
+    def _result(self):
+        return SimpleNamespace(
+            rows_read=10,
+            rows_written=10,
+            last_watermark=None,
+            last_watermark_num=None,
+        )
+
+    def test_memory_bus_never_claims_rows_were_published(self):
+        from app.api.sync_tasks import MEMORY_BUS_WARNING, _extract_view
+
+        payload = _extract_view(self._result(), "memory")
+
+        self.assertEqual(payload["rows_read"], 10)
+        self.assertEqual(payload["rows_written"], 0)
+        self.assertFalse(payload["published"])
+        self.assertEqual(payload["warning"], MEMORY_BUS_WARNING)
+
+    def test_kafka_bus_reports_the_written_rows(self):
+        from app.api.sync_tasks import _extract_view
+
+        payload = _extract_view(self._result(), "kafka")
+
+        self.assertEqual(payload["rows_written"], 10)
+        self.assertTrue(payload["published"])
+        self.assertIsNone(payload["warning"])
+
+
 if __name__ == "__main__":
     unittest.main()

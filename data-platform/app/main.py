@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -12,6 +13,8 @@ from app.core.config import get_settings
 from app.core.db import Base, engine
 from app.core.exceptions import DataPlatformError
 from app.core.response import fail, ok
+
+logger = logging.getLogger(__name__)
 
 
 def _message(detail: Any) -> str:
@@ -46,6 +49,20 @@ async def data_platform_exception_handler(
     )
 
 
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort envelope: never leak a stack trace to the caller.
+
+    The handler runs inside Starlette's error middleware except block, so
+    ``logger.exception`` records the traceback server-side while the response
+    carries only a generic message.
+    """
+    logger.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content=fail(500, "internal error", None),
+    )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="data-platform")
     Base.metadata.create_all(bind=engine)
@@ -54,6 +71,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(DataPlatformError, data_platform_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
 
     @app.get("/api/health")
     def health():

@@ -3,6 +3,15 @@ from urllib.parse import urlparse
 
 _MISSING = "clickhouse-connect is not installed; install the optional 'clickhouse' dependency group"
 
+# Every session runs on the platform clock.  Column types are pinned to
+# DateTime('Asia/Shanghai') in the DDL; the session setting makes bare
+# now()/today() agree, and input_format_null_as_default=1 lets an absent
+# optional value fall back to the DDL default instead of rejecting the insert.
+SESSION_SETTINGS = {
+    "session_timezone": "Asia/Shanghai",
+    "input_format_null_as_default": 1,
+}
+
 
 class ClickHouseOlapStore:
     """ClickHouse implementation of ``OlapStore`` over the HTTP protocol.
@@ -25,6 +34,7 @@ class ClickHouseOlapStore:
             username=parsed.username or "default",
             password=parsed.password or "",
             database=database,
+            settings=dict(SESSION_SETTINGS),
         )
 
     def insert_json(self, table: str, rows: list[dict[str, Any]]) -> None:

@@ -1,5 +1,6 @@
 # tests/unit/test_cleaning.py
 import unittest
+from decimal import Decimal
 
 from etl.cleaning import (
     clean_chat_message,
@@ -34,7 +35,7 @@ class CleaningTest(unittest.TestCase):
         self.assertEqual(result.row["patient_name_masked"], "张*")
         self.assertEqual(result.row["patient_phone_masked"], "138****8000")
         self.assertNotIn("patient_id_card", result.row)
-        self.assertEqual(result.row["pay_amount"], 10.5)
+        self.assertEqual(result.row["pay_amount"], Decimal("10.50"))
 
     def test_rejects_invalid_status(self):
         result = clean_registration(
@@ -180,7 +181,58 @@ class CleaningTest(unittest.TestCase):
         self.assertNotIn("13800138000", repr(sample))
 
     def test_sanitize_sample_passes_scalars_through(self):
-        self.assertEqual(sanitize_sample(["a", 1, None]), ["a", 1, None])
+        # A non-object row is never copied; only its type is recorded.
+        self.assertEqual(sanitize_sample(["a", 1, None]), {"type": "list"})
+        self.assertEqual(sanitize_sample("raw-pii"), {"type": "str"})
+        self.assertEqual(sanitize_sample(b"raw"), {"type": "bytes"})
+
+    def test_sanitize_sample_keeps_nested_scalars(self):
+        self.assertEqual(
+            sanitize_sample({"items": ["a", 1, None]}),
+            {"items": ["a", 1, None]},
+        )
+
+    def test_precomputed_masks_survive_recleaning(self):
+        result = clean_registration({
+            "id": 1,
+            "hospital_id": 1,
+            "schedule_date": "2026-11-04",
+            "period": 1,
+            "status": 3,
+            "pay_amount": "10.50",
+            "patient_name_masked": "张*",
+            "patient_phone_masked": "138****8000",
+        })
+        self.assertEqual(result.errors, ())
+        self.assertEqual(result.row["patient_name_masked"], "张*")
+        self.assertEqual(result.row["patient_phone_masked"], "138****8000")
+
+    def test_precomputed_chat_length_survives_recleaning(self):
+        result = clean_chat_message({
+            "id": 7,
+            "session_id": "s-1",
+            "role": "user",
+            "content_length": 42,
+            "has_reference": True,
+        })
+        self.assertEqual(result.errors, ())
+        self.assertEqual(result.row["content_length"], 42)
+        self.assertTrue(result.row["has_reference"])
+
+    def test_error_strings_do_not_echo_source_values(self):
+        for table, row in (
+            ("registration", {"id": 1, "hospital_id": 1, "status": 999,
+                              "schedule_date": "2026-11-04", "period": 1}),
+            ("chat_message", {"id": 1, "session_id": "s-1", "role": "system-secret"}),
+            ("chat_message", {"id": "not-a-number", "session_id": "s-1", "role": "user"}),
+        ):
+            with self.subTest(table=table, row=row):
+                result = clean_row(table, row)
+                self.assertIsNone(result.row)
+                self.assertTrue(result.errors)
+                self.assertNotIn("999", " ".join(result.errors))
+                self.assertNotIn("system-secret", " ".join(result.errors))
+                self.assertNotIn("not-a-number", " ".join(result.errors))
 
 
 if __name__ == "__main__":

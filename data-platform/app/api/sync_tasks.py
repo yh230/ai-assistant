@@ -80,6 +80,31 @@ def _run_view(run: SyncRun) -> dict[str, Any]:
     }
 
 
+MEMORY_BUS_WARNING = "memory event bus: events were not published to Kafka"
+
+
+def _extract_view(result: Any, event_bus: str) -> dict[str, Any]:
+    """Response payload for a manual run.
+
+    ``EVENT_BUS=memory`` uses a throwaway in-memory bus: the extractor counted
+    the rows it handed to it, but nothing reached Kafka, so the API must not
+    report them as written.
+    """
+    memory_bus = (event_bus or "").lower() == "memory"
+    return {
+        "rows_read": result.rows_read,
+        "rows_written": 0 if memory_bus else result.rows_written,
+        "published": not memory_bus,
+        "warning": MEMORY_BUS_WARNING if memory_bus else None,
+        "last_watermark": _iso(result.last_watermark),
+        "last_watermark_num": (
+            str(result.last_watermark_num)
+            if result.last_watermark_num is not None
+            else None
+        ),
+    }
+
+
 @runs_router.get("")
 def list_runs(
     task_id: int | None = None,
@@ -165,15 +190,4 @@ def run_task(
         result = _service(db).run(task_id, mode, source, publisher)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ok(
-        {
-            "rows_read": result.rows_read,
-            "rows_written": result.rows_written,
-            "last_watermark": _iso(result.last_watermark),
-            "last_watermark_num": (
-                str(result.last_watermark_num)
-                if result.last_watermark_num is not None
-                else None
-            ),
-        }
-    )
+    return ok(_extract_view(result, settings.event_bus))

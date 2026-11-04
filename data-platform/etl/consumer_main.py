@@ -15,27 +15,9 @@ from etl.consumer import BookkeepingWriteError, ConsumerPipeline
 from etl.ports.event_bus import ConsumedEvent, EventConsumer
 from etl.ports.olap_store import OlapStore
 from etl.realtime import REGISTRATION_EVENT_TOPIC, RegistrationEventHandler
+from etl.source_registry import SOURCES, SOURCE_SCHEMAS, SOURCE_TABLES, topic_for
 
 logger = logging.getLogger(__name__)
-
-SOURCE_TABLES = (
-    "registration",
-    "chat_session",
-    "chat_message",
-    "doctor_schedule",
-    "number_source",
-    "hospital",
-    "department",
-)
-SOURCE_SCHEMAS = {
-    "registration": "registration_db",
-    "chat_session": "chat_db",
-    "chat_message": "chat_db",
-    "doctor_schedule": "registration_db",
-    "number_source": "registration_db",
-    "hospital": "hospital_db",
-    "department": "hospital_db",
-}
 
 IDLE_SLEEP_SECONDS = 1.0
 # Bookkeeping failures leave the batch uncommitted, so the same records are
@@ -44,10 +26,8 @@ BACKOFF_SECONDS = 5.0
 
 
 def subscribe_topics(topic_prefix: str) -> list[str]:
-    """ODS topics for every source table plus the real-time registration topic."""
-    topics = [
-        f"{topic_prefix}.{SOURCE_SCHEMAS[table]}.{table}" for table in SOURCE_TABLES
-    ]
+    """ODS topics for every registered source table plus the realtime topic."""
+    topics = [topic_for(topic_prefix, spec) for spec in SOURCES]
     topics.append(REGISTRATION_EVENT_TOPIC)
     return topics
 
