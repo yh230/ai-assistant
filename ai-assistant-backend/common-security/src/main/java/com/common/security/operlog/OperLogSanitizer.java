@@ -22,7 +22,8 @@ public final class OperLogSanitizer {
 
     /** 敏感字段名正则（匹配到的值替换为 ***） */
     private static final Pattern SENSITIVE = Pattern.compile(
-            "\"(password|oldPassword|newPassword|pwd|idCard|patientIdCard)\"\\s*:\\s*\"[^\"]*\"");
+            "\"(password|oldPassword|newPassword|pwd|idCard|patientIdCard|phone|patientPhone|patientName)\""
+                    + "\\s*:\\s*\"[^\"]*\"");
 
     private OperLogSanitizer() {
     }
@@ -60,7 +61,7 @@ public final class OperLogSanitizer {
     }
 
     /**
-     * 按字段名脱敏敏感值（密码/身份证）
+     * 按字段名脱敏敏感值（密码/身份证/手机号/患者姓名）
      *
      * @param json JSON 串
      * @return 脱敏后的 JSON 串

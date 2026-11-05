@@ -2,7 +2,7 @@ package com.mcp.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mcp.auth.McpPrincipalContext;
-import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.transport.WebMvcSseServerTransportProvider;
 import org.springframework.ai.mcp.server.common.autoconfigure.properties.McpServerSseProperties;
 import org.springframework.beans.factory.annotation.Qualifier;

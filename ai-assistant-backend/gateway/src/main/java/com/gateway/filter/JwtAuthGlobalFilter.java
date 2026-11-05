@@ -12,9 +12,12 @@ import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.server.PathContainer;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
@@ -40,18 +43,27 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     private final JwtTokenService jwtTokenService;
     private final TokenRevocationService tokenRevocationService;
 
-    /** 放行清单（Ant 风格前缀匹配，见 application.yml） */
+    /** 放行清单（路径模式，支持 * 与 **，见 application.yml） */
     @Value("${gateway.whitelist:}")
     private List<String> whitelist;
+
+    /** 解析后的白名单模式（首次使用时构建） */
+    private volatile List<PathPattern> parsedWhitelist;
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String path = exchange.getRequest().getURI().getPath();
+        // 原始 URI 未规范化，先拒绝目录穿越/重复分隔符/编码分隔符，防止白名单与 /inner 拦截被绕过
+        String lowerPath = path.toLowerCase();
+        if (path.contains("..") || path.contains("//") || path.contains("\\")
+                || lowerPath.contains("%2e") || lowerPath.contains("%2f") || lowerPath.contains("%5c")) {
+            return writeResult(exchange, HttpStatus.BAD_REQUEST, FORBIDDEN_MSG);
+        }
+        if (path.equals("/inner") || path.startsWith("/inner/")) {
+            return writeResult(exchange, HttpStatus.FORBIDDEN, FORBIDDEN_MSG);
+        }
         if (HttpMethod.OPTIONS.equals(exchange.getRequest().getMethod()) || matchesWhitelist(path)) {
             return chain.filter(exchange);
-        }
-        if (path.startsWith("/inner/")) {
-            return writeResult(exchange, HttpStatus.FORBIDDEN, FORBIDDEN_MSG);
         }
         String authorization = exchange.getRequest().getHeaders().getFirst("Authorization");
         if (authorization == null || !authorization.startsWith("Bearer ")) {
@@ -81,16 +93,20 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
         return path.startsWith("/api/patient/") || path.startsWith("/api/chat/patient/");
     }
 
+    /** 按路径段匹配白名单（支持 * 与 **），避免 startsWith 前缀误放行相邻路径 */
     private boolean matchesWhitelist(String path) {
-        for (String pattern : whitelist) {
-            if (pattern.endsWith("/**") && path.startsWith(pattern.substring(0, pattern.length() - 3))) {
-                return true;
-            }
-            if (pattern.equals(path)) {
-                return true;
-            }
+        PathContainer container = PathContainer.parsePath(path);
+        return whitelistPatterns().stream().anyMatch(pattern -> pattern.matches(container));
+    }
+
+    private List<PathPattern> whitelistPatterns() {
+        List<PathPattern> cached = this.parsedWhitelist;
+        if (cached == null) {
+            PathPatternParser parser = new PathPatternParser();
+            cached = whitelist.stream().map(parser::parse).toList();
+            this.parsedWhitelist = cached;
         }
-        return false;
+        return cached;
     }
 
     private Mono<Void> writeResult(ServerWebExchange exchange, HttpStatus status, String msg) {

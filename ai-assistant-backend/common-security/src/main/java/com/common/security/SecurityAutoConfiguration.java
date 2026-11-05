@@ -81,9 +81,11 @@ public class SecurityAutoConfiguration {
                 .requestMatchers("/api/patient/login", "/api/patient/register").permitAll()
                 // 医院公开列表（患者注册选院）
                 .requestMatchers("/api/hospital/public/**").permitAll()
-                // 挂号公开端点（患者免登录）
+                // 挂号公开端点（患者免登录）：精确到具体动作，避免 /** 放大暴露面
                 .requestMatchers("/api/registration/appointments",
-                        "/api/registration/appointments/**").permitAll()
+                        "/api/registration/appointments/query",
+                        "/api/registration/appointments/*/confirm-pay",
+                        "/api/registration/appointments/*/cancel").permitAll()
                 .requestMatchers("/api/registration/schedule/public/**").permitAll()
                 // 手机号验证码登录与扫码登录公开端点（/api/qr/confirm 需登录，不放行）
                 .requestMatchers("/api/login/sms/code", "/api/login/sms",

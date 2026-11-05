@@ -1,6 +1,7 @@
 package com.registration.job;
 
 import com.registration.entity.Registration;
+import com.registration.enums.PayStatus;
 import com.registration.enums.RegistrationStatus;
 import com.registration.mapper.RegistrationMapper;
 import com.registration.service.RegistrationService;
@@ -32,6 +33,8 @@ public class AppointmentExpireScheduler {
         List<Registration> overdue = registrationMapper.selectList(new LambdaQueryWrapper<Registration>()
                 .select(Registration::getId)
                 .eq(Registration::getStatus, RegistrationStatus.RESERVED.getCode())
+                // 仅未支付预约参与超时释放，已支付预约不得被作废
+                .eq(Registration::getPayStatus, PayStatus.UNPAID.getCode())
                 .lt(Registration::getExpireTime, now)
                 // 单轮最多处理 200 条，避免积压时一次拉全量；剩余由后续周期继续处理
                 .last("LIMIT 200"));

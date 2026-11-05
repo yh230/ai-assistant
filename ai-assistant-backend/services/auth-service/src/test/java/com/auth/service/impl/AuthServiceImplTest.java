@@ -111,10 +111,10 @@ class AuthServiceImplTest {
     @Test
     void refreshShouldRotateTokensWhenValid() {
         when(refreshTokenStore.consume("old-rt"))
-                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("staff", 1L, 1000L));
+                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("staff", 1L, 1000L, "fam-1"));
         when(tokenRevocationService.kickoutAt("staff", 1L)).thenReturn(0L);
         when(jwtTokenService.issue(1L, "staff")).thenReturn("new-access");
-        when(refreshTokenStore.issue("staff", 1L)).thenReturn("new-rt");
+        when(refreshTokenStore.rotate("staff", 1L, "fam-1")).thenReturn("new-rt");
 
         LoginVO vo = authService.refresh("old-rt");
 
@@ -134,7 +134,7 @@ class AuthServiceImplTest {
     @Test
     void refreshShouldRejectWhenKickedOut() {
         when(refreshTokenStore.consume("rt"))
-                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("patient", 9L, 1000L));
+                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("patient", 9L, 1000L, "fam-p"));
         when(tokenRevocationService.kickoutAt("patient", 9L)).thenReturn(2000L);
 
         BusinessException thrown = assertThrows(BusinessException.class, () -> authService.refresh("rt"));
@@ -145,7 +145,7 @@ class AuthServiceImplTest {
     @Test
     void refreshShouldRejectWhenKickedAtSameMillis() {
         when(refreshTokenStore.consume("rt"))
-                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("staff", 1L, 2000L));
+                .thenReturn(new RefreshTokenStore.RefreshTokenInfo("staff", 1L, 2000L, "fam-s"));
         when(tokenRevocationService.kickoutAt("staff", 1L)).thenReturn(2000L);
 
         BusinessException thrown = assertThrows(BusinessException.class, () -> authService.refresh("rt"));
@@ -163,7 +163,7 @@ class AuthServiceImplTest {
         authService.logout(request, "rt-1");
 
         InOrder inOrder = inOrder(refreshTokenStore, tokenRevocationService);
-        inOrder.verify(refreshTokenStore).revoke("rt-1");
         inOrder.verify(tokenRevocationService).revokeToken("jti-1", 9999999999999L);
+        inOrder.verify(refreshTokenStore).revoke("rt-1");
     }
 }

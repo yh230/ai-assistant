@@ -96,16 +96,20 @@ const fileInputRef = ref(null)
 const selectedFile = ref(null)
 const uploading = ref(false)
 
+let loadSeq = 0
+
 async function loadData() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const res = await knowledgeList({ pageNum: pageNum.value, pageSize: pageSize.value })
+    if (seq !== loadSeq) return
     list.value = res.list || []
     total.value = res.total || 0
   } catch (e) {
-    toast.error('加载失败：' + e.message)
+    if (seq === loadSeq) toast.error('加载失败：' + e.message)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

@@ -63,13 +63,14 @@ public class RegistrationController {
     @OperLog(module = "患者预约", action = "确认支付")
     @PostMapping("/appointments/{id}/confirm-pay")
     public Result<RegistrationVO> confirmPay(@PathVariable Long id, @Valid @RequestBody PayConfirmDTO dto) {
-        return Result.success(registrationService.confirmPay(id, dto.getPatientIdCard()));
+        return Result.success(registrationService.confirmPay(id, dto.getPatientPhone(), dto.getPatientIdCard()));
     }
 
     @OperLog(module = "患者预约", action = "取消预约")
     @PostMapping("/appointments/{id}/cancel")
     public Result<RegistrationVO> patientCancel(@PathVariable Long id, @Valid @RequestBody CancelDTO dto) {
-        return Result.success(registrationService.patientCancel(id, dto.getPatientIdCard(), dto.getReason()));
+        return Result.success(registrationService.patientCancel(id, dto.getPatientPhone(),
+                dto.getPatientIdCard(), dto.getReason()));
     }
 
     // ===================== 员工（鉴权 + 数据权限） =====================

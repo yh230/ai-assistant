@@ -104,9 +104,6 @@
         <el-form-item label="身份证号">
           <el-input v-model="wform.patientIdCard" />
         </el-form-item>
-        <el-form-item label="收费金额">
-          <el-input-number v-model="wform.payAmount" :step="0.01" :min="0" />
-        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="walkVisible = false">取消</el-button>
@@ -164,7 +161,7 @@ function statusClass(s) {
 
 const walkVisible = ref(false)
 const saving = ref(false)
-const wform = reactive({ doctorUserId: null, scheduleDate: '', period: 1, patientName: '', patientPhone: '', patientIdCard: '', payAmount: 10 })
+const wform = reactive({ doctorUserId: null, scheduleDate: '', period: 1, patientName: '', patientPhone: '', patientIdCard: '' })
 
 const ticketVisible = ref(false)
 const ticket = ref(null)
@@ -203,7 +200,7 @@ function resetFilters() {
 }
 
 function openWalkIn() {
-  Object.assign(wform, { doctorUserId: null, scheduleDate: '', period: 1, patientName: '', patientPhone: '', patientIdCard: '', payAmount: 10 })
+  Object.assign(wform, { doctorUserId: null, scheduleDate: '', period: 1, patientName: '', patientPhone: '', patientIdCard: '' })
   walkVisible.value = true
 }
 async function submitWalkIn() {

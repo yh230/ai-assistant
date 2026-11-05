@@ -85,7 +85,7 @@ npx @modelcontextprotocol/inspector
 端到端测试：
 
 ```bash
-cd ai-assistant-e2e
+cd ai-assistant-tests/api
 pytest -m mcp -v
 ```
 

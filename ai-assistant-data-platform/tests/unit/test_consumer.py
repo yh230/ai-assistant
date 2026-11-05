@@ -1,0 +1,748 @@
+# tests/unit/test_consumer.py
+import hashlib
+import json
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from etl.adapters.inmemory_event_bus import InMemoryEventBus
+from etl.adapters.inmemory_olap_store import InMemoryOlapStore
+from etl.consumer import (
+    BookkeepingWriteError,
+    ConsumeResult,
+    ConsumerPipeline,
+    batch_id_for,
+    now_shanghai,
+)
+from etl.envelope import Envelope
+from etl.ports.event_bus import ConsumedEvent
+from etl.realtime import REGISTRATION_EVENT_TOPIC
+
+
+def make_event(table: str, row: dict, event_id: str = "e-1") -> bytes:
+    return Envelope(
+        event_id=event_id,
+        event_type="ODS_ROW",
+        occurred_at=int(datetime(2026, 11, 4, 12, 0, 0).timestamp() * 1000),
+        payload={"source_db": "registration_db", "source_table": table, "row": row},
+    ).to_bytes()
+
+
+def valid_registration(**overrides) -> dict:
+    row = {
+        "id": 1,
+        "registration_no": "R001",
+        "hospital_id": 1,
+        "department_id": 2,
+        "doctor_user_id": 3,
+        "schedule_date": "2026-11-04",
+        "period": 1,
+        "patient_name": "张三",
+        "patient_phone": "13800138000",
+        "pay_amount": 10,
+        "status": 3,
+    }
+    row.update(overrides)
+    return row
+
+
+class FakePublisher:
+    def __init__(self):
+        self.messages = []
+        self.flushes = 0
+
+    def publish(self, topic, key, value):
+        self.messages.append((topic, key, value))
+
+    def flush(self):
+        self.flushes += 1
+
+
+class FlushFailPublisher(FakePublisher):
+    """Records the flush and then fails, like a full producer buffer."""
+
+    def flush(self):
+        super().flush()
+        raise RuntimeError("flush failed")
+
+
+class FlakyOlapStore(InMemoryOlapStore):
+    """Fails the first ``failures`` ODS writes, then behaves normally."""
+
+    def __init__(self, failures: int):
+        super().__init__()
+        self.remaining = failures
+
+    def insert_json(self, table, rows):
+        if self.remaining > 0 and table.startswith("ods_"):
+            self.remaining -= 1
+            raise RuntimeError("transient write failure")
+        super().insert_json(table, rows)
+
+
+class QuarantineFailStore(InMemoryOlapStore):
+    """Always fails quarantine writes and counts the attempts."""
+
+    def __init__(self):
+        super().__init__()
+        self.quarantine_attempts = 0
+
+    def insert_json(self, table, rows):
+        if table == "ops_quarantine":
+            self.quarantine_attempts += 1
+            raise RuntimeError("quarantine unavailable")
+        super().insert_json(table, rows)
+
+
+class AuditFailStore(InMemoryOlapStore):
+    """Always fails audit writes."""
+
+    def insert_json(self, table, rows):
+        if table == "ops_ingest_audit":
+            raise RuntimeError("audit unavailable")
+        super().insert_json(table, rows)
+
+
+class FlakyBookkeepingStore(InMemoryOlapStore):
+    """Fails bookkeeping writes ``failures`` times and counts ODS write calls."""
+
+    def __init__(self, failures: int = 1):
+        super().__init__()
+        self.remaining = failures
+        self.ods_writes = 0
+
+    def insert_json(self, table, rows):
+        if table.startswith("ods_"):
+            self.ods_writes += 1
+        if table in ("ops_ingest_audit", "ops_quarantine") and self.remaining > 0:
+            self.remaining -= 1
+            raise RuntimeError("bookkeeping unavailable")
+        super().insert_json(table, rows)
+
+
+class ConsumerTest(unittest.TestCase):
+    def test_inserts_valid_rows_and_masks_pii(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish("dp.ods.registration_db.registration", "1", make_event("registration", {
+            "id": 1, "hospital_id": 1, "status": 3, "schedule_date": "2026-11-04", "period": 1,
+            "patient_name": "张三", "patient_phone": "13800138000", "pay_amount": 10,
+        }))
+        result = ConsumerPipeline(bus, olap).run_once()
+        self.assertEqual(result.inserted, 1)
+        rows = olap.tables["ods_registration"]
+        self.assertEqual(rows[0]["patient_name_masked"], "张*")
+        self.assertTrue(bus.committed)
+
+    def test_duplicate_event_is_idempotent(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        payload = make_event(
+            "registration",
+            {
+                "id": 1,
+                "hospital_id": 1,
+                "status": 3,
+                "schedule_date": "2026-11-04",
+                "period": 1,
+            },
+        )
+        bus.publish("dp.ods", "1", payload)
+        bus.publish("dp.ods", "1", payload)
+        result = ConsumerPipeline(bus, olap).run_once()
+        self.assertEqual(result.inserted, 1)
+        self.assertEqual(olap.count("ods_registration"), 1)
+
+    def test_bad_row_quarantined(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event("registration", {"id": 1, "hospital_id": 1, "status": 99}),
+        )
+        result = ConsumerPipeline(bus, olap).run_once()
+        self.assertEqual(result.quarantined, 1)
+        self.assertEqual(olap.count("ops_quarantine"), 1)
+
+    def test_inserted_rows_carry_ingestion_metadata(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish("dp.ods", "1", make_event("registration", valid_registration()))
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        row = olap.tables["ods_registration"][0]
+        self.assertEqual(row["_event_id"], "e-1")
+        self.assertEqual(row["_source"], "registration_db")
+        self.assertIsInstance(row["_ingested_at"], datetime)
+        self.assertIsNone(row["_ingested_at"].tzinfo)
+
+    def test_quarantine_row_has_json_sample_and_reasons(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event("registration", {"id": 1, "hospital_id": 1, "status": 99}),
+        )
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        quarantine = olap.tables["ops_quarantine"][0]
+        self.assertIsInstance(quarantine["sample"], str)
+        self.assertEqual(json.loads(quarantine["sample"])["status"], 99)
+        self.assertIn("status", quarantine["errors"])
+        self.assertEqual(quarantine["source_table"], "registration")
+        self.assertEqual(quarantine["_event_id"], "e-1")
+        self.assertTrue(quarantine["batch_id"])
+        self.assertIsNone(quarantine["_ingested_at"].tzinfo)
+
+    def test_quarantine_sample_strips_pii(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        row = valid_registration(
+            status=99,
+            patient_name="张三",
+            patient_phone="13800138000",
+            patient_id_card="110101199001011234",
+        )
+        bus.publish("dp.ods", "1", make_event("registration", row))
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        sample = json.loads(olap.tables["ops_quarantine"][0]["sample"])
+        self.assertEqual(sample["status"], 99)
+        self.assertEqual(sample["id"], 1)
+        for key in ("patient_name", "patient_phone", "patient_id_card"):
+            self.assertNotIn(key, sample)
+        self.assertNotIn("张三", olap.tables["ops_quarantine"][0]["sample"])
+        self.assertNotIn("13800138000", olap.tables["ops_quarantine"][0]["sample"])
+
+    def test_quarantine_and_audit_share_batch_id(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event(
+                "registration",
+                {"id": 1, "hospital_id": 1, "status": 99},
+                event_id="e-1",
+            ),
+        )
+        bus.publish("dp.ods", "2", make_event("hospital", {"id": 5, "name": "H"}, event_id="e-2"))
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        quarantine_batch = olap.tables["ops_quarantine"][0]["batch_id"]
+        audit_batch = olap.tables["ops_ingest_audit"][0]["batch_id"]
+        self.assertEqual(quarantine_batch, audit_batch)
+
+    def test_audit_row_per_table_per_batch(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish("dp.ods", "1", make_event("registration", valid_registration(), event_id="e-1"))
+        bus.publish("dp.ods", "2", make_event("hospital", {"id": 5, "name": "H"}, event_id="e-2"))
+
+        ConsumerPipeline(bus, olap).run_once()
+
+        audit = olap.tables["ops_ingest_audit"]
+        self.assertEqual(len(audit), 2)
+        self.assertEqual(sorted(row["source_table"] for row in audit), ["hospital", "registration"])
+        self.assertEqual({row["batch_id"] for row in audit}, {audit[0]["batch_id"]})
+        self.assertTrue(all(row["rows_ingested"] == 1 for row in audit))
+        self.assertTrue(all(isinstance(row["_ingested_at"], datetime) for row in audit))
+
+    def test_duplicate_rows_are_not_counted_in_audit(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        payload = make_event("registration", valid_registration())
+        bus.publish("dp.ods", "1", payload)
+        bus.publish("dp.ods", "1", payload)
+
+        result = ConsumerPipeline(bus, olap).run_once()
+
+        self.assertEqual(result.consumed, 2)
+        self.assertEqual(olap.tables["ops_ingest_audit"][0]["rows_ingested"], 1)
+
+    def test_undecodable_event_goes_to_dlt(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        dlt = FakePublisher()
+        bus.publish("dp.ods", "k-1", b"{not-json")
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.inserted, 0)
+        self.assertEqual(len(dlt.messages), 1)
+        topic, key, raw = dlt.messages[0]
+        self.assertEqual(topic, "dp.ods.DLT")
+        self.assertEqual(key, "k-1")
+        envelope = Envelope.from_bytes(raw)
+        self.assertEqual(envelope.event_type, "ODS_DLT")
+        self.assertEqual(envelope.payload["sample"], {"type": "bytes"})
+        self.assertNotIn(b"{not-json", raw)
+        self.assertEqual(dlt.flushes, 1)
+        self.assertEqual(olap.count("ops_ingest_audit"), 0)
+        self.assertTrue(bus.committed)
+
+    def test_dlt_payload_is_redacted_for_a_parseable_event(self):
+        bus = InMemoryEventBus()
+        olap = FlakyOlapStore(failures=10)
+        dlt = FakePublisher()
+        row = valid_registration(
+            patient_name="张三",
+            patient_phone="13800138000",
+            patient_id_card="110101199001011234",
+        )
+        bus.publish("dp.ods", "1", make_event("registration", row))
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt, max_retries=1).run_once()
+
+        self.assertEqual(result.failed, 1)
+        topic, key, raw = dlt.messages[0]
+        self.assertEqual(topic, "dp.ods.DLT")
+        envelope = Envelope.from_bytes(raw)
+        payload = envelope.payload
+        self.assertEqual(payload["event_id"], "e-1")
+        self.assertEqual(payload["source_db"], "registration_db")
+        self.assertEqual(payload["source_table"], "registration")
+        self.assertIn("transient write failure", payload["error"])
+        self.assertEqual(payload["sample"]["id"], 1)
+        for key_name in ("patient_name", "patient_phone", "patient_id_card"):
+            self.assertNotIn(key_name, payload["sample"])
+        text = raw.decode("utf-8")
+        self.assertNotIn("张三", text)
+        self.assertNotIn("13800138000", text)
+        self.assertNotIn("110101199001011234", text)
+
+    def test_declared_target_table_mismatch_is_dead_lettered(self):
+        from etl.envelope import Envelope as EnvelopeClass
+
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        dlt = FakePublisher()
+        event = EnvelopeClass(
+            event_id="e-target",
+            event_type="ODS_ROW",
+            occurred_at=0,
+            payload={
+                "source_db": "hospital_db",
+                "source_table": "hospital",
+                "target_table": "ods_registration",
+                "row": {"id": 5, "name": "H"},
+            },
+        )
+        bus.publish("dp.ods", "1", event.to_bytes())
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.inserted, 0)
+        self.assertEqual(olap.tables, {})
+        payload = Envelope.from_bytes(dlt.messages[0][2]).payload
+        self.assertIn("does not match", payload["error"])
+        self.assertTrue(bus.committed)
+
+    def test_redacted_chat_row_keeps_precomputed_metadata(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event(
+                "chat_message",
+                {
+                    "id": 7,
+                    "session_id": "s-1",
+                    "role": "user",
+                    "content_length": 9,
+                    "has_reference": True,
+                },
+            ),
+        )
+
+        result = ConsumerPipeline(bus, olap).run_once()
+
+        self.assertEqual(result.inserted, 1)
+        row = olap.tables["ods_chat_message"][0]
+        self.assertEqual(row["content_length"], 9)
+        self.assertTrue(row["has_reference"])
+
+    def test_quarantine_sample_of_a_non_object_row_is_a_type_marker(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event("registration", ["raw-patient-name"]),
+        )
+
+        result = ConsumerPipeline(bus, olap).run_once()
+
+        self.assertEqual(result.quarantined, 1)
+        sample = olap.tables["ops_quarantine"][0]["sample"]
+        self.assertEqual(json.loads(sample), {"type": "list"})
+        self.assertNotIn("raw-patient-name", sample)
+
+    def test_transient_insert_failure_is_retried(self):
+        bus = InMemoryEventBus()
+        olap = FlakyOlapStore(failures=2)
+        bus.publish("dp.ods", "1", make_event("registration", valid_registration()))
+
+        result = ConsumerPipeline(bus, olap, max_retries=3).run_once()
+
+        self.assertEqual(result.inserted, 1)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(olap.count("ods_registration"), 1)
+
+    def test_exhausted_retries_count_as_failed(self):
+        bus = InMemoryEventBus()
+        olap = FlakyOlapStore(failures=10)
+        dlt = FakePublisher()
+        bus.publish("dp.ods", "1", make_event("registration", valid_registration()))
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt, max_retries=2).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.inserted, 0)
+        self.assertEqual(olap.count("ods_registration"), 0)
+        self.assertEqual(len(dlt.messages), 1)
+        self.assertTrue(bus.committed)
+
+    def test_quarantine_write_failure_is_retried_and_blocks_commit(self):
+        bus = InMemoryEventBus()
+        olap = QuarantineFailStore()
+        bus.publish(
+            "dp.ods",
+            "1",
+            make_event("registration", {"id": 1, "hospital_id": 1, "status": 99}),
+        )
+
+        with self.assertRaises(BookkeepingWriteError):
+            ConsumerPipeline(bus, olap, max_retries=2).run_once()
+
+        self.assertFalse(bus.committed)
+        self.assertEqual(olap.quarantine_attempts, 2)
+        self.assertEqual(olap.count("ops_quarantine"), 0)
+
+    def test_audit_write_failure_blocks_commit(self):
+        bus = InMemoryEventBus()
+        olap = AuditFailStore()
+        bus.publish("dp.ods", "1", make_event("registration", valid_registration()))
+
+        with self.assertRaises(BookkeepingWriteError):
+            ConsumerPipeline(bus, olap).run_once()
+
+        self.assertFalse(bus.committed)
+        self.assertEqual(olap.count("ods_registration"), 1)
+
+    def test_dlt_flush_failure_does_not_abort_the_batch(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        dlt = FlushFailPublisher()
+        bus.publish("dp.ods", "k-1", b"{not-json")
+
+        result = ConsumerPipeline(bus, olap, dlt_publisher=dlt).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(dlt.flushes, 1)
+        self.assertTrue(bus.committed)
+
+    def test_now_shanghai_is_naive_utc_plus_eight(self):
+        value = now_shanghai()
+        expected = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+        self.assertIsNone(value.tzinfo)
+        self.assertLess(abs((value - expected).total_seconds()), 5)
+
+    def test_poll_respects_max_records(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        for index in range(3):
+            bus.publish(
+                "dp.ods",
+                str(index),
+                make_event("registration", valid_registration(id=index + 1), event_id=f"e-{index}"),
+            )
+
+        first = ConsumerPipeline(bus, olap).run_once(max_records=2)
+
+        self.assertEqual(first.consumed, 2)
+        self.assertEqual(olap.count("ods_registration"), 2)
+        self.assertEqual(len(bus.pending), 1)
+
+
+class DeterministicBatchIdTest(unittest.TestCase):
+    def test_replaying_the_same_event_reuses_the_batch_id(self):
+        payload = make_event("registration", valid_registration(), event_id="e-stable")
+        batch_ids = []
+        for _ in range(2):
+            bus = InMemoryEventBus()
+            olap = InMemoryOlapStore()
+            bus.publish("dp.ods", "1", payload)
+            ConsumerPipeline(bus, olap).run_once()
+            batch_ids.append(olap.tables["ops_ingest_audit"][0]["batch_id"])
+
+        self.assertRegex(batch_ids[0], r"^[0-9a-f]{16}$")
+        self.assertEqual(batch_ids[0], batch_ids[1])
+
+    def test_batch_id_hashes_the_envelope_event_ids(self):
+        events = [
+            ConsumedEvent(
+                topic="dp.ods",
+                key="1",
+                value=make_event("registration", valid_registration(), event_id="e-1"),
+            ),
+            ConsumedEvent(
+                topic="dp.ods",
+                key="2",
+                value=make_event("registration", valid_registration(), event_id="e-2"),
+            ),
+        ]
+
+        self.assertEqual(
+            batch_id_for(events),
+            hashlib.sha256(b"e-1|e-2").hexdigest()[:16],
+        )
+
+    def test_batch_id_falls_back_to_the_event_position(self):
+        events = [
+            ConsumedEvent(
+                topic="dp.ods.dlt",
+                key="k-1",
+                value=b"{not-json",
+                partition=2,
+                offset=7,
+            )
+        ]
+
+        self.assertEqual(
+            batch_id_for(events),
+            hashlib.sha256(b"dp.ods.dlt:2:7").hexdigest()[:16],
+        )
+
+    def test_different_events_get_different_batch_ids(self):
+        first = ConsumedEvent(
+            topic="dp.ods",
+            key="1",
+            value=make_event("registration", valid_registration(id=1), event_id="e-1"),
+        )
+        second = ConsumedEvent(
+            topic="dp.ods",
+            key="2",
+            value=make_event("registration", valid_registration(id=2), event_id="e-2"),
+        )
+
+        self.assertNotEqual(batch_id_for([first]), batch_id_for([second]))
+
+    def test_batch_id_ignores_the_poll_order(self):
+        events = [
+            ConsumedEvent(
+                topic="dp.ods",
+                key=str(index),
+                value=make_event("registration", valid_registration(), event_id=f"e-{index}"),
+            )
+            for index in range(3)
+        ]
+
+        self.assertEqual(batch_id_for(events), batch_id_for(list(reversed(events))))
+
+
+class BookkeepingReplayTest(unittest.TestCase):
+    def test_rewind_replays_the_failed_batch_on_the_next_run(self):
+        bus = InMemoryEventBus()
+        olap = FlakyBookkeepingStore(failures=1)
+        bus.publish(
+            "dp.ods.registration_db.registration",
+            "1",
+            make_event("registration", valid_registration(), event_id="e-replay"),
+        )
+        pipeline = ConsumerPipeline(bus, olap, max_retries=1)
+
+        with self.assertRaises(BookkeepingWriteError):
+            pipeline.run_once()
+
+        # No commit, the ODS write happened, and the failed batch is known.
+        self.assertFalse(bus.committed)
+        self.assertEqual(olap.ods_writes, 1)
+        self.assertEqual(len(pipeline.last_events), 1)
+        self.assertEqual(bus.pending, [])
+
+        bus.rewind(pipeline.last_events)
+
+        self.assertEqual(len(bus.pending), 1)
+        second = pipeline.run_once()
+
+        self.assertEqual(second.consumed, 1)
+        self.assertEqual(second.inserted, 1)
+        self.assertEqual(olap.ods_writes, 2)
+        self.assertTrue(bus.committed)
+
+    def test_rewind_of_an_empty_batch_is_a_noop(self):
+        bus = InMemoryEventBus()
+
+        bus.rewind([])
+
+        self.assertEqual(bus.pending, [])
+
+
+class FakeRealtimeHandler:
+    """Stand-in for RegistrationEventHandler that records routed events."""
+
+    def __init__(self, failures: int = 0):
+        self.failures = failures
+        self.events = []
+
+    def handle(self, event):
+        self.events.append(event)
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("realtime sink unavailable")
+        return {"event_id": event.key or "realtime-1"}
+
+
+class RealtimeRoutingTest(unittest.TestCase):
+    def test_registration_topic_routes_to_the_handler(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-1", b"opaque-mq-envelope")
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(result.inserted, 0)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(len(handler.events), 1)
+        self.assertEqual(handler.events[0].topic, REGISTRATION_EVENT_TOPIC)
+        self.assertEqual(olap.tables, {})
+        self.assertEqual(olap.count("ops_ingest_audit"), 0)
+        self.assertTrue(bus.committed)
+
+    def test_non_ods_event_type_routes_to_the_handler(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        body = {
+            "eventId": "evt-2",
+            "eventType": "APPOINTMENT_CREATED",
+            "occurredAt": 1762336800000,
+            "payload": "{}",
+        }
+        bus.publish("dp.ods", "evt-2", json.dumps(body).encode("utf-8"))
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(len(handler.events), 1)
+        self.assertEqual(olap.tables, {})
+
+    def test_ods_rows_still_use_the_cleaner(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        payload = make_event("registration", valid_registration())
+        bus.publish("dp.ods.registration_db.registration", "1", payload)
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.inserted, 1)
+        self.assertEqual(result.realtime, 0)
+        self.assertEqual(handler.events, [])
+        self.assertEqual(olap.count("ods_registration"), 1)
+
+    def test_realtime_transient_failure_is_retried(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler(failures=1)
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-1", b"value")
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler, max_retries=3).run_once()
+
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(len(handler.events), 2)
+        self.assertTrue(bus.committed)
+
+    def test_realtime_failure_is_retried_then_dead_lettered(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler(failures=10)
+        dlt = FakePublisher()
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-9", b"bad-envelope")
+
+        result = ConsumerPipeline(
+            bus, olap, dlt_publisher=dlt, realtime_handler=handler, max_retries=2
+        ).run_once()
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.realtime, 0)
+        self.assertEqual(len(handler.events), 2)
+        self.assertEqual(len(dlt.messages), 1)
+        dlt_payload = Envelope.from_bytes(dlt.messages[0][2]).payload
+        self.assertEqual(dlt.messages[0][0], "dp.ods.DLT")
+        self.assertEqual(dlt_payload["sample"], {"type": "bytes"})
+        self.assertNotIn(b"bad-envelope", dlt.messages[0][2])
+        self.assertTrue(bus.committed)
+
+    def test_duplicate_realtime_event_id_is_skipped(self):
+        bus = InMemoryEventBus()
+        olap = InMemoryOlapStore()
+        handler = FakeRealtimeHandler()
+        body = {
+            "eventId": "evt-dup",
+            "eventType": "APPOINTMENT_CREATED",
+            "occurredAt": 1762336800000,
+            "payload": "{}",
+        }
+        value = json.dumps(body).encode("utf-8")
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-dup", value)
+        bus.publish(REGISTRATION_EVENT_TOPIC, "evt-dup", value)
+
+        result = ConsumerPipeline(bus, olap, realtime_handler=handler).run_once()
+
+        self.assertEqual(result.consumed, 2)
+        self.assertEqual(result.realtime, 1)
+        self.assertEqual(len(handler.events), 1)
+        self.assertTrue(bus.committed)
+
+    def test_consume_result_realtime_defaults_to_zero(self):
+        result = ConsumeResult(consumed=1, inserted=1, quarantined=0, failed=0)
+
+        self.assertEqual(result.realtime, 0)
+
+
+class InMemoryAdapterTest(unittest.TestCase):
+    def test_event_bus_implements_publisher_and_consumer_contract(self):
+        bus = InMemoryEventBus()
+        bus.subscribe(["dp.ods.registration_db.registration"])
+        bus.publish("dp.ods.registration_db.registration", "1", b"value")
+        bus.flush()
+        events = bus.poll(timeout_seconds=0, max_records=10)
+        bus.commit()
+        bus.close()
+
+        self.assertEqual(bus.subscribed_topics, ["dp.ods.registration_db.registration"])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].topic, "dp.ods.registration_db.registration")
+        self.assertEqual(events[0].key, "1")
+        self.assertEqual(events[0].value, b"value")
+        self.assertTrue(bus.committed)
+        self.assertTrue(bus.closed)
+
+    def test_olap_store_dedupes_by_event_id_and_records_sql(self):
+        store = InMemoryOlapStore()
+        store.insert_json("ods_registration", [{"_event_id": "e-1", "id": 1}])
+        store.insert_json("ods_registration", [{"_event_id": "e-1", "id": 2}])
+        store.insert_json("ods_registration", [{"_event_id": "e-2", "id": 3}])
+        store.execute("SELECT 1")
+
+        self.assertEqual(store.count("ods_registration"), 2)
+        self.assertEqual([row["id"] for row in store.tables["ods_registration"]], [1, 3])
+        self.assertEqual(store.executed, ["SELECT 1"])
+        self.assertEqual(store.query("SELECT 1"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

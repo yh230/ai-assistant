@@ -30,8 +30,8 @@ public class OutputSafetyFilter {
     private static final List<String> NEGATIONS = List.of(
             "没有", "没", "无", "未", "否认", "不伴", "未见", "无明显", "并无");
 
-    /** 取消否定的例外标记（存在这些词时仍按急症处理，如"不排除心梗""无诱因胸痛"） */
-    private static final List<String> NEGATION_EXCEPTIONS = List.of("排除", "除外", "诱因");
+    /** 取消否定的例外标记（存在这些词时仍按急症处理，如"不排除心梗""无诱因胸痛""无痛性心梗"） */
+    private static final List<String> NEGATION_EXCEPTIONS = List.of("排除", "除外", "诱因", "无痛性", "无症状性");
 
     /** 前置否定词扫描窗口（字符数，归一后） */
     private static final int NEGATION_WINDOW = 5;

@@ -16,6 +16,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 
 /**
@@ -45,58 +46,79 @@ class PendingActionServiceImplTest {
     }
 
     @Test
-    void confirmRejectsMissingAction() {
+    void beginRejectsMissingAction() {
         when(pendingActionRepository.findByActionId("act-1")).thenReturn(Optional.empty());
-        assertThrows(BusinessException.class, () -> service.confirm("act-1", 1L, "patient"));
+        assertThrows(BusinessException.class, () -> service.begin("act-1", 1L, "patient"));
     }
 
     @Test
-    void confirmRejectsWrongOwner() {
+    void beginRejectsWrongOwner() {
         when(pendingActionRepository.findByActionId("act-1"))
                 .thenReturn(Optional.of(pending("PENDING", LocalDateTime.now().plusMinutes(3))));
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.confirm("act-1", 2L, "patient"));
+                () -> service.begin("act-1", 2L, "patient"));
         assertEquals("无权操作该确认请求", ex.getMessage());
     }
 
     @Test
-    void confirmRejectsExpiredAndMarksExpired() {
+    void beginRejectsExpiredAndMarksExpired() {
         PendingAction action = pending("PENDING", LocalDateTime.now().minusSeconds(1));
         when(pendingActionRepository.findByActionId("act-1")).thenReturn(Optional.of(action));
-        when(pendingActionRepository.markStatus(eq("act-1"), eq("EXPIRED"), any())).thenReturn(1);
+        when(pendingActionRepository.markStatus(eq("act-1"), eq("PENDING"), eq("EXPIRED"), any())).thenReturn(1);
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.confirm("act-1", 1L, "patient"));
+                () -> service.begin("act-1", 1L, "patient"));
         assertEquals("确认已超时，请重新操作", ex.getMessage());
         assertEquals("EXPIRED", action.getStatus());
     }
 
     @Test
-    void confirmRejectsAlreadyHandled() {
+    void beginRejectsAlreadyHandled() {
         when(pendingActionRepository.findByActionId("act-1"))
                 .thenReturn(Optional.of(pending("CONFIRMED", LocalDateTime.now().plusMinutes(3))));
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.confirm("act-1", 1L, "patient"));
+                () -> service.begin("act-1", 1L, "patient"));
         assertEquals("该操作已处理", ex.getMessage());
     }
 
     @Test
-    void confirmMarksConfirmed() {
+    void beginMarksExecuting() {
         PendingAction action = pending("PENDING", LocalDateTime.now().plusMinutes(3));
         when(pendingActionRepository.findByActionId("act-1")).thenReturn(Optional.of(action));
-        when(pendingActionRepository.markStatus(eq("act-1"), eq("CONFIRMED"), any())).thenReturn(1);
-        PendingAction result = service.confirm("act-1", 1L, "patient");
-        assertEquals("CONFIRMED", result.getStatus());
-        assertNotNull(result.getConfirmTime());
+        when(pendingActionRepository.markStatus(eq("act-1"), eq("PENDING"), eq("EXECUTING"), any())).thenReturn(1);
+        PendingAction result = service.begin("act-1", 1L, "patient");
+        assertEquals("EXECUTING", result.getStatus());
     }
 
     @Test
-    void confirmRejectsConcurrentReplayWhenConditionalUpdateMisses() {
+    void beginRejectsConcurrentReplayWhenConditionalUpdateMisses() {
         when(pendingActionRepository.findByActionId("act-1"))
                 .thenReturn(Optional.of(pending("PENDING", LocalDateTime.now().plusMinutes(3))));
         // 条件更新影响行数为 0：记录已被并发请求流转，防重放拒绝
-        when(pendingActionRepository.markStatus(eq("act-1"), eq("CONFIRMED"), any())).thenReturn(0);
+        when(pendingActionRepository.markStatus(eq("act-1"), eq("PENDING"), eq("EXECUTING"), any())).thenReturn(0);
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.confirm("act-1", 1L, "patient"));
+                () -> service.begin("act-1", 1L, "patient"));
         assertEquals("该操作已处理", ex.getMessage());
+    }
+
+    @Test
+    void completeMarksConfirmedOnSuccess() {
+        when(pendingActionRepository.markStatus(eq("act-1"), eq("EXECUTING"), eq("CONFIRMED"), any()))
+                .thenReturn(1);
+
+        service.complete("act-1", true);
+
+        org.mockito.Mockito.verify(pendingActionRepository)
+                .markStatus(eq("act-1"), eq("EXECUTING"), eq("CONFIRMED"), any());
+    }
+
+    @Test
+    void completeMarksFailedOnBusinessFailure() {
+        when(pendingActionRepository.markStatus(eq("act-1"), eq("EXECUTING"), eq("FAILED"), isNull()))
+                .thenReturn(1);
+
+        service.complete("act-1", false);
+
+        org.mockito.Mockito.verify(pendingActionRepository)
+                .markStatus("act-1", "EXECUTING", "FAILED", null);
     }
 }

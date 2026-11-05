@@ -20,14 +20,14 @@ public interface RegistrationService {
     /** 患者线上预约：选号源→校验余量→锁定→生成已预约记录（待支付） */
     RegistrationVO createAppointment(AppointmentCreateDTO dto);
 
-    /** 患者确认支付（模拟支付成功），状态仍「已预约」，仅更新 pay_status */
-    RegistrationVO confirmPay(Long id, String idCard);
+    /** 患者确认支付（模拟支付成功），状态仍「已预约」，仅更新 pay_status 并解除超时释放 */
+    RegistrationVO confirmPay(Long id, String patientPhone, String idCard);
 
-    /** 患者查询本人预约（凭手机号/身份证/预约号） */
+    /** 患者查询本人预约（必须手机号+身份证，预约号仅作筛选） */
     List<RegistrationVO> patientQuery(String phone, String idCard, String registrationNo);
 
-    /** 患者取消本人未取号预约：释放号源 */
-    RegistrationVO patientCancel(Long id, String idCard, String reason);
+    /** 患者取消本人未取号预约：释放号源；已支付时同步退款 */
+    RegistrationVO patientCancel(Long id, String patientPhone, String idCard, String reason);
 
     /** 患者本人预约列表（AI「我的预约」工具，按患者账号 ID） */
     List<RegistrationVO> listByPatientId(Long patientId);

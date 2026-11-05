@@ -42,8 +42,9 @@ public class McpRateLimiter {
             }
             return current <= limitPerMinute;
         } catch (Exception e) {
-            log.warn("MCP 限流不可用，放行本次调用: consumer={}, {}", consumer, e.getMessage());
-            return true;
+            // 限流不可用时拒绝调用（fail-closed），避免 Redis 故障放大为无限配额
+            log.error("MCP 限流不可用，拒绝本次调用: consumer={}, {}", consumer, e.getMessage());
+            return false;
         }
     }
 }

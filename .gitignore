@@ -28,6 +28,8 @@ Thumbs.db
 # 个人工作记忆与过程文档（不入库）
 .workbuddy/
 docs/superpowers/
+/ai-assistant-data-platform/docs/archive/2026-11-04-data-platform-plan.md
+/ai-assistant-data-platform/docs/verification-2026-11-04.md
 
 # 本地架构文档（不入库；对外架构说明见 docs/architecture.md）
 /ARCHITECTURE.md
@@ -35,17 +37,21 @@ docs/superpowers/
 # 本机密钥配置（真实值，不入库）
 application-local.yml
 
-# E2E test project（ai-assistant-e2e）
-ai-assistant-e2e/.venv/
-ai-assistant-e2e/.env
-ai-assistant-e2e/reports/
-ai-assistant-e2e/.pytest_cache/
+# Node workspace
+/node_modules/
+
+# Python test suites (ai-assistant-tests)
+/.venv/
+ai-assistant-tests/.venv/
+ai-assistant-tests/.env
+ai-assistant-tests/api/.venv/
+ai-assistant-tests/api/.env
+ai-assistant-tests/api/reports/
+ai-assistant-tests/api/.pytest_cache/
+ai-assistant-tests/ui/.venv/
+ai-assistant-tests/ui/.env
+ai-assistant-tests/ui/reports/
+ai-assistant-tests/ui/artifacts/
+ai-assistant-tests/ui/.pytest_cache/
 __pycache__/
 *.pyc
-
-# UI E2E
-ai-assistant-ui-e2e/.venv/
-ai-assistant-ui-e2e/.env
-ai-assistant-ui-e2e/reports/
-ai-assistant-ui-e2e/artifacts/
-ai-assistant-ui-e2e/.pytest_cache/

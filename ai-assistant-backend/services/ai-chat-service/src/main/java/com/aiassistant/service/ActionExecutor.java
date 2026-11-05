@@ -38,11 +38,11 @@ public class ActionExecutor {
     /**
      * 执行已确认的写工具
      *
-     * @param action 待确认操作（状态已 CONFIRMED，含工具名称与参数 JSON）
+     * @param action 待确认操作（状态已 EXECUTING，含工具名称与参数 JSON）
      * @param user   当前患者快照（patientId/姓名/手机号来源）
-     * @return 供模型转述的结果文本
+     * @return 执行结果（是否成功 + 供模型转述的文本）
      */
-    public String execute(PendingAction action, UserSnapshot user) {
+    public ExecutionResult execute(PendingAction action, UserSnapshot user) {
         try {
             if (TOOL_BOOK_APPOINTMENT.equals(action.getToolName())) {
                 BookRequest req = objectMapper.readValue(action.getToolArgs(), BookRequest.class);
@@ -51,29 +51,33 @@ public class ActionExecutor {
                 req.setPatientPhone(user.getUsername());
                 Result<Long> result = registrationClient.book(req);
                 if (result == null) {
-                    return "挂号服务暂时不可用，请稍后重试";
+                    return new ExecutionResult(false, "挂号服务暂时不可用，请稍后重试");
                 }
                 if (result.getCode() != 200) {
-                    return result.getMsg();
+                    return new ExecutionResult(false, result.getMsg());
                 }
-                return "预约成功，挂号记录ID：" + result.getData();
+                return new ExecutionResult(true, "预约成功，挂号记录ID：" + result.getData());
             }
             if (TOOL_CANCEL_APPOINTMENT.equals(action.getToolName())) {
                 CancelRequest req = objectMapper.readValue(action.getToolArgs(), CancelRequest.class);
                 req.setPatientId(user.getUserId());
                 Result<Void> result = registrationClient.cancel(req);
                 if (result == null) {
-                    return "挂号服务暂时不可用，请稍后重试";
+                    return new ExecutionResult(false, "挂号服务暂时不可用，请稍后重试");
                 }
                 if (result.getCode() != 200) {
-                    return result.getMsg();
+                    return new ExecutionResult(false, result.getMsg());
                 }
-                return "退号成功，号源已释放";
+                return new ExecutionResult(true, "退号成功，号源已释放");
             }
-            return "不支持的操作类型";
+            return new ExecutionResult(false, "不支持的操作类型");
         } catch (Exception e) {
             log.warn("写工具执行失败: tool={}, {}", action.getToolName(), e.getMessage());
-            return "挂号服务暂时不可用，请稍后重试";
+            return new ExecutionResult(false, "挂号服务暂时不可用，请稍后重试");
         }
+    }
+
+    /** 写工具执行结果（success=是否成功，message=供模型转述的文本） */
+    public record ExecutionResult(boolean success, String message) {
     }
 }

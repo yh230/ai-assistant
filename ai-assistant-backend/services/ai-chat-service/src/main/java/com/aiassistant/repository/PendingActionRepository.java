@@ -39,16 +39,39 @@ public interface PendingActionRepository extends JpaRepository<PendingAction, Lo
             String sessionId, String status, LocalDateTime now);
 
     /**
-     * 条件更新状态：仅当记录仍为 PENDING 时流转（并发重复确认/取消的防重放闸门）
+     * 条件更新状态：仅当记录仍为指定来源状态时流转（并发重复确认/取消的防重放闸门）
      *
      * @param actionId    确认ID
-     * @param status      目标状态（CONFIRMED/CANCELLED/EXPIRED）
+     * @param fromStatus  期望的当前状态（PENDING/EXECUTING）
+     * @param status      目标状态（EXECUTING/CONFIRMED/FAILED/CANCELLED/EXPIRED）
      * @param confirmTime 确认时间（确认时填充；取消/过期传 null）
      * @return 受影响行数；0 表示已被其他请求先行流转
      */
     @Modifying
     @Query("UPDATE PendingAction p SET p.status = :status, p.confirmTime = :confirmTime "
-            + "WHERE p.actionId = :actionId AND p.status = 'PENDING'")
-    int markStatus(@Param("actionId") String actionId, @Param("status") String status,
-                   @Param("confirmTime") LocalDateTime confirmTime);
+            + "WHERE p.actionId = :actionId AND p.status = :fromStatus")
+    int markStatus(@Param("actionId") String actionId, @Param("fromStatus") String fromStatus,
+                   @Param("status") String status, @Param("confirmTime") LocalDateTime confirmTime);
+
+    /**
+     * 批量置过期：长时间停留在 PENDING 且已超过有效期的记录
+     *
+     * @param now 当前时间
+     * @return 受影响行数
+     */
+    @Modifying
+    @Query("UPDATE PendingAction p SET p.status = 'EXPIRED' "
+            + "WHERE p.status = 'PENDING' AND p.expireTime < :now")
+    int expirePendingBefore(@Param("now") LocalDateTime now);
+
+    /**
+     * 会话删除时取消该会话下所有待确认操作
+     *
+     * @param sessionId 会话标识
+     * @return 受影响行数
+     */
+    @Modifying
+    @Query("UPDATE PendingAction p SET p.status = 'CANCELLED' "
+            + "WHERE p.sessionId = :sessionId AND p.status = 'PENDING'")
+    int cancelPendingBySession(@Param("sessionId") String sessionId);
 }

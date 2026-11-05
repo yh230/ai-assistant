@@ -56,6 +56,9 @@ public class McpAuthFilter extends OncePerRequestFilter {
         if (raw == null || raw.isBlank()) {
             metrics.authFailure("missing_key");
             log.warn("MCP 认证失败: reason=missing_key, remote={}", request.getRemoteAddr());
+            if (!allowUnauthenticatedAttempt(request, response)) {
+                return;
+            }
             writeUnauthorized(response, "invalid_api_key");
             return;
         }
@@ -63,6 +66,9 @@ public class McpAuthFilter extends OncePerRequestFilter {
         if (matched == null) {
             metrics.authFailure("invalid_key");
             log.warn("MCP 认证失败: reason=invalid_key, remote={}", request.getRemoteAddr());
+            if (!allowUnauthenticatedAttempt(request, response)) {
+                return;
+            }
             writeUnauthorized(response, "invalid_api_key");
             return;
         }
@@ -78,6 +84,25 @@ public class McpAuthFilter extends OncePerRequestFilter {
         McpPrincipalContext.attach(request, new McpPrincipal(
                 matched.getConsumer(), List.copyOf(matched.getHospitalIds()), effectiveLimit));
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * 限制未认证尝试频率（同一 IP 每分钟最多 30 次），防止暴力探测 Key
+     *
+     * @param request HTTP 请求
+     * @param response HTTP 响应
+     * @return true=允许继续返回 401；false=已写出 429
+     */
+    private boolean allowUnauthenticatedAttempt(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        String consumer = "unauth:" + request.getRemoteAddr();
+        if (rateLimiter.tryAcquire(consumer, 30)) {
+            return true;
+        }
+        metrics.rateLimited(consumer);
+        response.setHeader("Retry-After", "60");
+        writeJson(response, SC_TOO_MANY_REQUESTS, "rate_limit_exceeded");
+        return false;
     }
 
     /**

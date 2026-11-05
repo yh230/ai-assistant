@@ -1,0 +1,14 @@
+{
+  "name": "ai-assistant",
+  "private": true,
+  "workspaces": [
+    "ai-assistant-frontend",
+    "ai-assistant-data-platform/web"
+  ],
+  "scripts": {
+    "dev:frontend": "npm run dev -w ai-assistant-frontend",
+    "dev:data-platform": "npm run dev -w ai-assistant-data-platform-web",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  }
+}

@@ -1,6 +1,5 @@
 package com.registration.dto;
 
-import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -8,7 +7,6 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /**
@@ -41,8 +39,4 @@ public class WalkInRegisterDTO {
     @NotBlank(message = "患者身份证号不能为空")
     @Pattern(regexp = "^\\d{17}[\\dXx]$", message = "患者身份证号格式不正确")
     private String patientIdCard;
-
-    /** 收费金额 */
-    @DecimalMin(value = "0", message = "收费金额不能为负数")
-    private BigDecimal payAmount;
 }

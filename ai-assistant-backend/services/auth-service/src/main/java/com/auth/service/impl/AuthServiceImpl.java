@@ -175,18 +175,22 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public void logout(HttpServletRequest request, String refreshToken) {
-        refreshTokenStore.revoke(refreshToken);
+        JwtTokenService.JwtPayload payload = null;
         String header = request.getHeader(SecurityConstants.AUTHORIZATION);
-        if (!StringUtils.hasText(header) || !header.startsWith(SecurityConstants.TOKEN_PREFIX)) {
-            return;
+        if (StringUtils.hasText(header) && header.startsWith(SecurityConstants.TOKEN_PREFIX)) {
+            try {
+                payload = jwtTokenService.parse(header.substring(SecurityConstants.TOKEN_PREFIX.length()));
+                tokenRevocationService.revokeToken(payload.jti(), payload.expiresAtMillis());
+            } catch (JwtException | IllegalArgumentException e) {
+                // 无效/过期/被篡改令牌：静默返回
+                log.debug("登出令牌解析失败: {}", e.getMessage());
+            }
         }
-        try {
-            String token = header.substring(SecurityConstants.TOKEN_PREFIX.length());
-            JwtTokenService.JwtPayload payload = jwtTokenService.parse(token);
-            tokenRevocationService.revokeToken(payload.jti(), payload.expiresAtMillis());
-        } catch (JwtException | IllegalArgumentException e) {
-            // 无效/过期/被篡改令牌：静默返回
-            log.debug("登出令牌解析失败: {}", e.getMessage());
+        if (StringUtils.hasText(refreshToken)) {
+            refreshTokenStore.revoke(refreshToken);
+        } else if (payload != null) {
+            // 客户端未回传刷新令牌时按用户撤销全部会话，避免 RT 继续换新
+            refreshTokenStore.revokeByUser(payload.identity(), payload.userId());
         }
     }
 
@@ -208,7 +212,14 @@ public class AuthServiceImpl implements AuthService {
         }
         LoginVO vo = new LoginVO();
         vo.setToken(jwtTokenService.issue(info.userId(), info.identity()));
-        vo.setRefreshToken(refreshTokenStore.issue(info.identity(), info.userId()));
+        // 同族轮换；旧格式令牌（无族）降级为新族，部署升级期不强制用户重登
+        String nextRefresh = info.familyId() == null
+                ? refreshTokenStore.issue(info.identity(), info.userId())
+                : refreshTokenStore.rotate(info.identity(), info.userId(), info.familyId());
+        if (!StringUtils.hasText(nextRefresh)) {
+            throw new BusinessException(401, "登录已过期，请重新登录");
+        }
+        vo.setRefreshToken(nextRefresh);
         return vo;
     }
 

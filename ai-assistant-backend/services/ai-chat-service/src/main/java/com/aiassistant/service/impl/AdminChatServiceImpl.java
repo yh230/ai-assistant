@@ -143,7 +143,7 @@ public class AdminChatServiceImpl implements AdminChatService {
             throw new BusinessException("无权查看该会话");
         }
         List<ChatResponse.ChatMessageDTO> messageDTOs =
-                messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+                messageRepository.findTop500BySessionIdOrderByCreatedAtAsc(sessionId).stream()
                         .map(m -> ChatResponse.ChatMessageDTO.builder()
                                 .role(m.getRole()).content(m.getContent()).createdAt(m.getCreatedAt())
                                 .referenceJson(m.getReferenceJson()).build())

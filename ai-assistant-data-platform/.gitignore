@@ -1,0 +1,18 @@
+# Runtime secrets and local configuration
+.env
+
+# Local SQLite metadata database
+*.db
+
+# Python / tooling caches
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# Front-end dependencies, build output and local env overrides
+web/node_modules/
+web/dist/
+web/.env.local
+web/.env.*.local

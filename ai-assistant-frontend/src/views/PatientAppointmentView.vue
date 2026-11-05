@@ -128,12 +128,12 @@ async function submitBook() {
 }
 
 async function doQuery() {
-  if (!q.registrationNo && !(q.phone && q.idCard)) {
-    msg('请输入预约号，或手机号+身份证')
+  if (!q.phone || !q.idCard) {
+    msg('请输入手机号+身份证查询')
     return
   }
   try {
-    const res = await queryAppointments({ phone: q.phone || undefined, idCard: q.idCard || undefined, registrationNo: q.registrationNo || undefined })
+    const res = await queryAppointments({ phone: q.phone, idCard: q.idCard, registrationNo: q.registrationNo || undefined })
     myList.value = res || []
     queried.value = true
   } catch (e) {
@@ -141,14 +141,20 @@ async function doQuery() {
   }
 }
 async function pay(r) {
-  try { await confirmPay(r.id, { patientIdCard: r.patientIdCard }); msg('支付成功'); doQuery() }
-  catch (e) { msg('支付失败：' + e.message) }
+  try {
+    await confirmPay(r.id, { patientPhone: q.phone, patientIdCard: q.idCard })
+    msg('支付成功')
+    doQuery()
+  } catch (e) { msg('支付失败：' + e.message) }
 }
 async function cancel(r) {
   const ok = await confirm('确认取消该预约？号源将释放。')
   if (!ok) return
-  try { await cancelAppointment(r.id, { patientIdCard: r.patientIdCard, reason: '患者主动取消' }); msg('已取消'); doQuery() }
-  catch (e) { msg('取消失败：' + e.message) }
+  try {
+    await cancelAppointment(r.id, { patientPhone: q.phone, patientIdCard: q.idCard, reason: '患者主动取消' })
+    msg('已取消')
+    doQuery()
+  } catch (e) { msg('取消失败：' + e.message) }
 }
 
 function statusClass(s) {

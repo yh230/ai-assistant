@@ -323,6 +323,8 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
                             .filter(f -> f.term(t -> t.field("hospitalId").value(hospitalId.longValue())))
                             .must(m -> m.multiMatch(mm -> mm
                                     .query(query)
+                                    // 至少覆盖 60% 查询词项，避免 2-3gram 分词下任意问句都弱命中
+                                    .minimumShouldMatch("60%")
                                     .fields("content^2", "section"))))),
                     Map.class);
             return toChunks(response.hits().hits());
@@ -332,7 +334,6 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             return List.of();
         }
     }
-
     /**
      * kNN 向量检索：在 embedding 上取近邻，带医院过滤与可选相似度阈值
      *
@@ -360,8 +361,12 @@ public class ElasticsearchKnowledgeStore implements KnowledgeStore {
             if (threshold <= 0) {
                 return chunks;
             }
-            // ES 对 cosine 返回 (1 + cosine) / 2 形式的得分，阈值语义与 simple 实现略有差异，故默认 0.5 仅作粗过滤
-            return chunks.stream().filter(chunk -> chunk.score() >= threshold).toList();
+            // ES 对 cosine 返回 (1 + cosine) / 2，先还原为余弦相似度再与阈值比较
+            return chunks.stream()
+                    .map(chunk -> new ScoredChunk(chunk.source(), chunk.documentId(), chunk.chunkIndex(),
+                            chunk.section(), chunk.content(), 2 * chunk.score() - 1))
+                    .filter(chunk -> chunk.score() >= threshold)
+                    .toList();
         } catch (Exception e) {
             log.warn("kNN 检索失败，按空结果处理: hospitalId={}, index={}",
                     hospitalId, config.getIndexName(), e);

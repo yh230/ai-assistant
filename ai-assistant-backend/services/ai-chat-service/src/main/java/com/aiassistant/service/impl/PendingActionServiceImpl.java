@@ -5,6 +5,7 @@ import com.aiassistant.repository.PendingActionRepository;
 import com.aiassistant.service.PendingActionService;
 import com.common.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,14 +16,15 @@ import java.util.UUID;
 /**
  * 待确认操作服务实现（写操作防伪确认核心状态机）
  * <p>
- * 状态流转：PENDING → CONFIRMED（确认）/ CANCELLED（取消）/ EXPIRED（过期）。
+ * 状态流转：PENDING → EXECUTING → CONFIRMED/FAILED，PENDING → CANCELLED/EXPIRED。
  * 归属（用户 + 身份）、有效期（{@link PendingActionService#EXPIRY_MINUTES} 分钟）与状态三重校验防重放，
- * 状态置位统一走「仅 PENDING 可流转」的条件更新，并发重复确认/取消时后到者被拒；
- * 过期拒绝时置位的 EXPIRED 需随异常一并落库，故业务异常不触发事务回滚。
+ * 状态置位统一走「仅指定来源状态可流转」的条件更新，并发重复确认/取消时后到者被拒；
+ * 执行失败保留 FAILED 终态供审计，不再把未完成的写操作伪装成已确认。
  *
  * @author yh
  * @date 2026-10-13
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PendingActionServiceImpl implements PendingActionService {
@@ -58,26 +60,41 @@ public class PendingActionServiceImpl implements PendingActionService {
     }
 
     /**
-     * 确认操作（校验归属/有效期/状态，通过后条件置 CONFIRMED 防并发重放）
+     * 开始执行（校验归属/有效期/状态，通过后条件置 EXECUTING 防并发重放）
      *
      * @param actionId 确认ID
      * @param userId   操作者用户 ID
      * @param identity 操作者身份
-     * @return 已确认的操作（状态 CONFIRMED，含确认时间）
+     * @return 已锁定执行的操作（状态 EXECUTING）
      * @throws BusinessException 请求不存在/无权操作/已超时/已处理（含并发重复确认）
      */
     @Override
     @Transactional(noRollbackFor = BusinessException.class)
-    public PendingAction confirm(String actionId, Long userId, String identity) {
+    public PendingAction begin(String actionId, Long userId, String identity) {
         PendingAction action = loadOwnedPending(actionId, userId, identity);
-        LocalDateTime confirmTime = LocalDateTime.now();
-        if (pendingActionRepository.markStatus(actionId, STATUS_CONFIRMED, confirmTime) == 0) {
+        if (pendingActionRepository.markStatus(actionId, STATUS_PENDING, STATUS_EXECUTING, null) == 0) {
             // 条件更新未命中：记录已被并发请求流转，按已处理拒绝
             throw new BusinessException("该操作已处理");
         }
-        action.setStatus(STATUS_CONFIRMED);
-        action.setConfirmTime(confirmTime);
+        action.setStatus(STATUS_EXECUTING);
         return action;
+    }
+
+    /**
+     * 完成执行：EXECUTING → CONFIRMED（成功，写确认时间）或 FAILED（失败可审计）
+     *
+     * @param actionId 确认ID
+     * @param success  是否执行成功
+     */
+    @Override
+    @Transactional
+    public void complete(String actionId, boolean success) {
+        int updated = pendingActionRepository.markStatus(actionId, STATUS_EXECUTING,
+                success ? STATUS_CONFIRMED : STATUS_FAILED, success ? LocalDateTime.now() : null);
+        if (updated == 0) {
+            // 会话删除/并发取消已先行流转：执行结果仍保留在日志中，避免静默丢写
+            log.warn("待确认操作完成状态未更新（可能已被取消）: actionId={}, success={}", actionId, success);
+        }
     }
 
     /**
@@ -93,10 +110,33 @@ public class PendingActionServiceImpl implements PendingActionService {
     public void cancel(String actionId, Long userId, String identity) {
         PendingAction action = loadOwnedPending(actionId, userId, identity);
         // 取消不写确认时间：PENDING 记录 confirm_time 必为空，条件更新置 null 保持原语义
-        if (pendingActionRepository.markStatus(actionId, STATUS_CANCELLED, null) == 0) {
+        if (pendingActionRepository.markStatus(actionId, STATUS_PENDING, STATUS_CANCELLED, null) == 0) {
             throw new BusinessException("该操作已处理");
         }
         action.setStatus(STATUS_CANCELLED);
+    }
+
+    /**
+     * 取消会话下所有待确认操作（删除会话时调用）
+     *
+     * @param sessionId 会话标识
+     * @return 受影响行数
+     */
+    @Override
+    @Transactional
+    public int cancelBySession(String sessionId) {
+        return pendingActionRepository.cancelPendingBySession(sessionId);
+    }
+
+    /**
+     * 批量清理超时未确认操作（定时任务调用）
+     *
+     * @return 受影响行数
+     */
+    @Override
+    @Transactional
+    public int expireOverdue() {
+        return pendingActionRepository.expirePendingBefore(LocalDateTime.now());
     }
 
     /**
@@ -133,12 +173,10 @@ public class PendingActionServiceImpl implements PendingActionService {
             throw new BusinessException("无权操作该确认请求");
         }
         if (!STATUS_PENDING.equals(action.getStatus())) {
-            // 已 CONFIRMED/CANCELLED/EXPIRED 的记录（含已过期的终态）直接按已处理拒绝，不覆写终态
             throw new BusinessException("该操作已处理");
         }
         if (LocalDateTime.now().isAfter(action.getExpireTime())) {
-            // 仅 PENDING 条件置 EXPIRED；未命中说明已被并发流转，按已处理拒绝
-            if (pendingActionRepository.markStatus(actionId, STATUS_EXPIRED, null) == 0) {
+            if (pendingActionRepository.markStatus(actionId, STATUS_PENDING, STATUS_EXPIRED, null) == 0) {
                 throw new BusinessException("该操作已处理");
             }
             action.setStatus(STATUS_EXPIRED);
