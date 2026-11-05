@@ -35,11 +35,11 @@ class McpRateLimiterTest {
     }
 
     @Test
-    void failsOpenWhenRedisUnavailable() {
+    void failsClosedWhenRedisUnavailable() {
         RedissonClient redisson = mock(RedissonClient.class);
         when(redisson.getAtomicLong(anyString())).thenThrow(new RuntimeException("redis down"));
         McpRateLimiter limiter = new McpRateLimiter(redisson);
 
-        assertTrue(limiter.tryAcquire("demo", 1));
+        assertFalse(limiter.tryAcquire("demo", 1));
     }
 }

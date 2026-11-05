@@ -69,7 +69,7 @@ public class WeatherServiceImpl implements WeatherService {
                     .build()
                     .toUri();
 
-            log.info("调用高德地理编码API: {}", geoUri);
+            log.info("调用高德地理编码API: city={}", trimmedCity);
 
             String geoResponse = restTemplate.getForObject(geoUri, String.class);
             JsonNode geoRoot = objectMapper.readTree(geoResponse);
@@ -110,7 +110,7 @@ public class WeatherServiceImpl implements WeatherService {
                     .build()
                     .toUri();
 
-            log.info("调用高德天气实况API: {}", nowUri);
+            log.info("调用高德天气实况API: city={}", trimmedCity);
             String nowResponse = restTemplate.getForObject(nowUri, String.class);
             JsonNode nowRoot = objectMapper.readTree(nowResponse);
 
@@ -154,7 +154,7 @@ public class WeatherServiceImpl implements WeatherService {
                     .build()
                     .toUri();
 
-            log.info("调用高德天气预报API: {}", forecastUri);
+            log.info("调用高德天气预报API: city={}", trimmedCity);
             String forecastResponse = restTemplate.getForObject(forecastUri, String.class);
             JsonNode forecastRoot = objectMapper.readTree(forecastResponse);
 
@@ -196,7 +196,7 @@ public class WeatherServiceImpl implements WeatherService {
             return WeatherResponse.builder()
                     .success(false)
                     .city(trimmedCity)
-                    .error("查询天气失败: " + e.getMessage())
+                    .error("天气服务暂时不可用，请稍后重试")
                     .build();
         }
     }

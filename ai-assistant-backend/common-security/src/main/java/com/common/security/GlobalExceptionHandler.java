@@ -2,6 +2,7 @@ package com.common.security;
 
 import com.common.exception.BusinessException;
 import com.common.result.Result;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -35,9 +36,12 @@ import java.time.format.DateTimeParseException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    /** 业务异常 */
+    /** 业务异常（HTTP 状态与业务码一致，便于网关/监控识别失败） */
     @ExceptionHandler(BusinessException.class)
-    public Result<Void> handleBusinessException(BusinessException e) {
+    public Result<Void> handleBusinessException(BusinessException e, HttpServletResponse response) {
+        if (e.getCode() >= 400 && e.getCode() <= 599) {
+            response.setStatus(e.getCode());
+        }
         return Result.fail(e.getCode(), e.getMessage());
     }
 
@@ -67,13 +71,15 @@ public class GlobalExceptionHandler {
 
     /** 非法参数 */
     @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("参数异常: {}", e.getMessage());
-        return Result.fail(400, e.getMessage());
+        return Result.fail(400, "参数不合法");
     }
 
     /** 参数校验失败（@Valid 标注的 @RequestBody） */
     @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleMethodArgumentNotValid(MethodArgumentNotValidException e) {
         String message = resolveFieldError(e.getBindingResult().getFieldError());
         return Result.fail(400, message);
@@ -86,6 +92,7 @@ public class GlobalExceptionHandler {
      * @return 400 返回体
      */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
         return Result.fail(400, "参数类型错误：" + e.getName());
     }
@@ -97,12 +104,14 @@ public class GlobalExceptionHandler {
      * @return 400 返回体
      */
     @ExceptionHandler(DateTimeParseException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleDateTimeParse(DateTimeParseException e) {
         return Result.fail(400, "日期格式错误，应为 yyyy-MM-dd");
     }
 
     /** 参数校验失败（@ModelAttribute / 表单） */
     @ExceptionHandler(BindException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleBindException(BindException e) {
         String message = resolveFieldError(e.getBindingResult().getFieldError());
         return Result.fail(400, message);
@@ -110,12 +119,14 @@ public class GlobalExceptionHandler {
 
     /** 缺少必填请求参数 */
     @ExceptionHandler(MissingServletRequestParameterException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleMissingParam(MissingServletRequestParameterException e) {
         return Result.fail(400, "缺少必填参数：" + e.getParameterName());
     }
 
     /** 请求体无法解析（如 JSON 格式错误） */
     @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleNotReadable(HttpMessageNotReadableException e) {
         return Result.fail(400, "请求体格式错误");
     }
@@ -127,6 +138,7 @@ public class GlobalExceptionHandler {
      * @return 400 返回体
      */
     @ExceptionHandler(ConstraintViolationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleConstraintViolation(ConstraintViolationException e) {
         String message = e.getConstraintViolations() == null || e.getConstraintViolations().isEmpty()
                 ? "参数校验失败"
@@ -136,6 +148,7 @@ public class GlobalExceptionHandler {
 
     /** 请求方法不支持 */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
     public Result<Void> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
         return Result.fail(405, "不支持的请求方法：" + e.getMethod());
     }
@@ -147,6 +160,7 @@ public class GlobalExceptionHandler {
      * @return 统一失败结果
      */
     @ExceptionHandler(RuntimeException.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Result<Void> handleRuntimeException(RuntimeException e) {
         log.error("运行时异常: {}", e.getMessage(), e);
         return Result.fail(500, "系统繁忙，请稍后重试");
@@ -159,6 +173,7 @@ public class GlobalExceptionHandler {
      * @return 统一失败结果
      */
     @ExceptionHandler(Exception.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Result<Void> handleException(Exception e) {
         log.error("系统异常", e);
         return Result.fail(500, "系统繁忙，请稍后重试");

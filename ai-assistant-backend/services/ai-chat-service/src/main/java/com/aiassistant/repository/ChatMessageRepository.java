@@ -17,6 +17,14 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
 
     List<ChatMessage> findBySessionIdOrderByCreatedAtAsc(String sessionId);
 
+    /**
+     * 查询会话最近 500 条消息（历史接口硬上限，避免超长会话拖垮响应）
+     *
+     * @param sessionId 会话标识
+     * @return 消息列表（按创建时间升序）
+     */
+    List<ChatMessage> findTop500BySessionIdOrderByCreatedAtAsc(String sessionId);
+
     void deleteBySessionId(String sessionId);
 
     /**

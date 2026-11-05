@@ -13,11 +13,13 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.common.exception.BusinessException;
 import com.common.result.Result;
+import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.registration.dto.AppointmentCreateDTO;
 import com.registration.entity.DoctorSchedule;
 import com.registration.entity.NumberSource;
 import com.registration.entity.Registration;
+import com.registration.enums.PayStatus;
 import com.registration.enums.RegistrationStatus;
 import com.registration.mapper.DoctorScheduleMapper;
 import com.registration.mapper.NumberSourceMapper;
@@ -44,6 +46,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -339,7 +342,7 @@ class RegistrationIdempotencyTest {
         when(registrationMapper.update(isNull(), any())).thenReturn(1);
         when(numberSourceMapper.update(isNull(), any())).thenReturn(1);
 
-        registrationService.patientCancel(7L, ID_CARD, "行程有变");
+        registrationService.patientCancel(7L, PHONE, ID_CARD, "行程有变");
 
         assertTrue(updateSqlSet().toLowerCase().contains("idempotency"));
         verify(bucket).delete();
@@ -354,6 +357,7 @@ class RegistrationIdempotencyTest {
         reg.setStatus(RegistrationStatus.CALLED.getCode());
         reg.setNumberSourceId(5L);
         when(registrationMapper.selectById(7L)).thenReturn(reg);
+        when(dataScopeResolver.resolve()).thenReturn(DataScope.all());
         RBucket<String> bucket = stubIdemBucket();
         stubLockAcquired();
         stubTx();
@@ -405,6 +409,109 @@ class RegistrationIdempotencyTest {
         assertTrue(qw.getSqlSegment().trim().endsWith("LIMIT 50"));
     }
 
+    /**
+     * 已支付取消：写入退款金额/时间并发布退款事件，而不是普通取消事件
+     */
+    @Test
+    void patientCancelPaidWritesRefundAndPublishesRefunded() throws InterruptedException {
+        Registration reg = existingRegistration(7L);
+        reg.setNumberSourceId(5L);
+        reg.setPayStatus(PayStatus.PAID.getCode());
+        reg.setPayAmount(new BigDecimal("10.00"));
+        when(registrationMapper.selectById(7L)).thenReturn(reg);
+        stubIdemBucket();
+        stubLockAcquired();
+        stubTx();
+        when(registrationMapper.update(isNull(), any())).thenReturn(1);
+        when(numberSourceMapper.update(isNull(), any())).thenReturn(1);
+
+        registrationService.patientCancel(7L, PHONE, ID_CARD, "不去了");
+
+        String set = updateSqlSet().toLowerCase();
+        assertTrue(set.contains("refund_amount"));
+        assertTrue(set.contains("refund_time"));
+        verify(eventPublisher).publishRefunded(any(), any());
+        verify(eventPublisher, never()).publishCancelled(any(), any());
+    }
+
+    /**
+     * 未支付取消：不写退款字段，仍发布普通取消事件
+     */
+    @Test
+    void patientCancelUnpaidSkipsRefund() throws InterruptedException {
+        Registration reg = existingRegistration(7L);
+        reg.setNumberSourceId(5L);
+        when(registrationMapper.selectById(7L)).thenReturn(reg);
+        stubIdemBucket();
+        stubLockAcquired();
+        stubTx();
+        when(registrationMapper.update(isNull(), any())).thenReturn(1);
+        when(numberSourceMapper.update(isNull(), any())).thenReturn(1);
+
+        registrationService.patientCancel(7L, PHONE, ID_CARD, "不去了");
+
+        assertTrue(!updateSqlSet().toLowerCase().contains("refund_amount"));
+        verify(eventPublisher).publishCancelled(any(), any());
+        verify(eventPublisher, never()).publishRefunded(any(), any());
+    }
+
+    /**
+     * 已支付预约即便超过 expire_time 也不得被过期任务作废、不得释放号源
+     */
+    @Test
+    void paidReservationIsNotExpired() throws InterruptedException {
+        Registration reg = existingRegistration(7L);
+        reg.setPayStatus(PayStatus.PAID.getCode());
+        reg.setExpireTime(LocalDateTime.now().minusMinutes(1));
+        when(registrationMapper.selectById(7L)).thenReturn(reg);
+        stubLockAcquired();
+        stubTx();
+
+        boolean expired = registrationService.expireOverdueOne(7L);
+
+        assertTrue(!expired);
+        verify(registrationMapper, never()).update(isNull(), any());
+        verify(eventPublisher, never()).publishExpired(any());
+    }
+
+    /**
+     * 患者查询必须同时提供手机号与身份证，预约号不能单独作为凭证
+     */
+    @Test
+    void patientQueryRequiresPhoneAndIdCard() {
+        assertThrows(BusinessException.class,
+                () -> registrationService.patientQuery(null, null, "R20261020001"));
+    }
+
+    /**
+     * 公开查询结果对手机号与姓名脱敏
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void patientQueryMasksContact() {
+        Registration reg = existingRegistration(7L);
+        reg.setPatientName("张三");
+        when(registrationMapper.selectList(any())).thenReturn(List.of(reg));
+
+        List<RegistrationVO> list = registrationService.patientQuery(PHONE, ID_CARD, null);
+
+        assertEquals("138****0000", list.get(0).getPatientPhone());
+        assertEquals("张*", list.get(0).getPatientName());
+    }
+
+    /**
+     * 取号按数据范围校验，跨院记录直接拒绝
+     */
+    @Test
+    void takeRejectsOutOfScopeRegistration() {
+        Registration reg = existingRegistration(7L);
+        reg.setHospitalId(100L);
+        when(registrationMapper.selectById(7L)).thenReturn(reg);
+        when(dataScopeResolver.resolve()).thenReturn(DataScope.hospital(200L));
+
+        assertThrows(BusinessException.class, () -> registrationService.take(7L));
+    }
+
     // ===================== 测试辅助 =====================
 
     private AppointmentCreateDTO anonymousDto() {
@@ -440,6 +547,7 @@ class RegistrationIdempotencyTest {
         reg.setPatientPhone(PHONE);
         reg.setPatientIdCard(ID_CARD);
         reg.setStatus(RegistrationStatus.RESERVED.getCode());
+        reg.setPayStatus(PayStatus.UNPAID.getCode());
         reg.setIdempotencyKey("existing-key");
         return reg;
     }

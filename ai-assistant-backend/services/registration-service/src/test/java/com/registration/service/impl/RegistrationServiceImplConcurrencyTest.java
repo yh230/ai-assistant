@@ -5,6 +5,7 @@ import com.api.client.UserClient;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.common.exception.BusinessException;
+import com.common.security.DataScope;
 import com.common.security.DataScopeResolver;
 import com.registration.dto.AppointmentCreateDTO;
 import com.registration.dto.WalkInRegisterDTO;
@@ -104,17 +105,24 @@ class RegistrationServiceImplConcurrencyTest {
         schedule.setStatus(1);
         when(scheduleMapper.selectOne(any())).thenReturn(schedule);
 
+        AppointmentCreateDTO dto = new AppointmentCreateDTO();
+        dto.setDoctorUserId(10L);
+        dto.setScheduleDate(LocalDate.of(2026, 10, 15));
+        dto.setPeriod(1);
+        dto.setPatientName("张三");
+        dto.setPatientPhone("13800000000");
+        dto.setPatientIdCard("110101199001011234");
+
+        RLock anonLock = lockByKey.computeIfAbsent(
+                "lock:booking:anon:13800000000:110101199001011234:2026-10-15", k -> mock(RLock.class));
+        when(anonLock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(anonLock.isHeldByCurrentThread()).thenReturn(true);
         RLock scheduleLock = lockByKey.computeIfAbsent("lock:schedule:1", k -> mock(RLock.class));
         when(scheduleLock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(false);
         // 匿名路径新增幂等键占位：键写入成功后才进入加锁分支
         RBucket<String> bucket = mock(RBucket.class);
         doReturn(bucket).when(redissonClient).getBucket(anyString());
         when(bucket.trySet(anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
-
-        AppointmentCreateDTO dto = new AppointmentCreateDTO();
-        dto.setDoctorUserId(10L);
-        dto.setScheduleDate(LocalDate.of(2026, 10, 15));
-        dto.setPeriod(1);
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> registrationService.createAppointment(dto));
@@ -132,6 +140,7 @@ class RegistrationServiceImplConcurrencyTest {
         reg.setStatus(RegistrationStatus.RESERVED.getCode());
         reg.setPayStatus(PayStatus.UNPAID.getCode());
         when(registrationMapper.selectById(7L)).thenReturn(reg);
+        when(dataScopeResolver.resolve()).thenReturn(DataScope.all());
 
         RLock registrationLock = lockByKey.computeIfAbsent("lock:registration:7", k -> mock(RLock.class));
         when(registrationLock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
@@ -160,6 +169,7 @@ class RegistrationServiceImplConcurrencyTest {
         schedule.setScheduleDate(LocalDate.of(2026, 10, 15));
         schedule.setPeriod(1);
         when(scheduleMapper.selectOne(any())).thenReturn(schedule);
+        when(dataScopeResolver.resolveRequired()).thenReturn(DataScope.all());
 
         NumberSource source = new NumberSource();
         source.setId(5L);

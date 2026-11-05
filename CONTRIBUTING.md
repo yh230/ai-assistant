@@ -35,14 +35,13 @@
 cd ai-assistant-backend
 ./mvnw test                 # Windows: mvnw.cmd test
 
-# 前端单测与构建
-cd ai-assistant-frontend
+# 前端单测与构建（仓库根目录，npm workspace）
 npm ci
 npm test
 npm run build
 
 # E2E 确定性用例（需服务已启动）
-cd ai-assistant-e2e
+cd ai-assistant-tests/api
 pytest -m "not ai and not slow"
 ```
 

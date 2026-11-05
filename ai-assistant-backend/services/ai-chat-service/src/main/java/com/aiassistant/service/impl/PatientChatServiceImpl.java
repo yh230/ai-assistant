@@ -752,10 +752,19 @@ public class PatientChatServiceImpl implements PatientChatService {
      * @return 患者聊天上下文
      */
     private PatientChatContext prepareConfirm(String actionId, UserSnapshot user) {
-        PendingAction action = pendingActionService.confirm(actionId, user.getUserId(),
+        PendingAction action = pendingActionService.begin(actionId, user.getUserId(),
                 SecurityConstants.IDENTITY_PATIENT);
-        String resultText = actionExecutor.execute(action, user);
-        ChatSession session = requireOwnedSession(action.getSessionId(), user);
+        ChatSession session;
+        try {
+            // 先校验会话归属再执行写操作，避免已删除会话仍能触发真实挂号
+            session = requireOwnedSession(action.getSessionId(), user);
+        } catch (RuntimeException e) {
+            pendingActionService.complete(actionId, false);
+            throw e;
+        }
+        ActionExecutor.ExecutionResult result = actionExecutor.execute(action, user);
+        pendingActionService.complete(actionId, result.success());
+        String resultText = result.message();
 
         String confirmMessage = "已确认执行：" + action.getSummaryText();
         saveMessage(session.getSessionId(), "user", confirmMessage);
@@ -824,7 +833,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     @Transactional(readOnly = true)
     public List<SessionDTO> listSessions() {
         UserSnapshot user = currentPatient();
-        return sessionRepository.findAllByUserIdAndIdentityOrderByUpdatedAtDesc(
+        return sessionRepository.findTop100ByUserIdAndIdentityOrderByUpdatedAtDesc(
                         user.getUserId(), SecurityConstants.IDENTITY_PATIENT).stream()
                 .map(s -> SessionDTO.builder()
                         .sessionId(s.getSessionId())
@@ -841,7 +850,7 @@ public class PatientChatServiceImpl implements PatientChatService {
         UserSnapshot user = currentPatient();
         requireOwnedSession(sessionId, user);
         List<ChatResponse.ChatMessageDTO> messages = messageRepository
-                .findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+                .findTop500BySessionIdOrderByCreatedAtAsc(sessionId).stream()
                 .map(m -> ChatResponse.ChatMessageDTO.builder()
                         .role(m.getRole())
                         .content(m.getContent())
@@ -872,6 +881,7 @@ public class PatientChatServiceImpl implements PatientChatService {
     public void deleteSession(String sessionId) {
         UserSnapshot user = currentPatient();
         ChatSession session = requireOwnedSession(sessionId, user);
+        pendingActionService.cancelBySession(sessionId);
         messageRepository.deleteBySessionId(sessionId);
         sessionRepository.delete(session);
     }

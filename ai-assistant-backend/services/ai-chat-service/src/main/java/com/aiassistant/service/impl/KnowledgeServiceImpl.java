@@ -155,10 +155,11 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         if (!user.getHospitalId().equals(doc.getHospitalId())) {
             throw new BusinessException("无权操作该文档");
         }
-        documentRepository.delete(doc);
-        // 按该文档已写入的切片数清理切片，避免整库重建
+        // 先删向量再删元数据：向量删除失败时保留文档记录可重试；
+        // 反向顺序在 ES 部分失败回滚后会留下「文档存在但切片已删」的不一致状态
         knowledgeStore.deleteDocument(user.getHospitalId(), doc.getId(),
                 doc.getChunkCount() == null ? 0 : doc.getChunkCount());
+        documentRepository.delete(doc);
     }
 
     /**

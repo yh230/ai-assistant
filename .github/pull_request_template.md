@@ -11,8 +11,10 @@
 <!-- 列出实际执行过的命令或手工验证步骤。 -->
 
 - [ ] 后端单测：`cd ai-assistant-backend && ./mvnw test`
-- [ ] 前端构建：`cd ai-assistant-frontend && npm run build`
-- [ ] E2E 确定性用例：`pytest -m "not ai and not slow"`（如适用）
+- [ ] 前端单测与构建（仓库根目录）：`npm ci && npm test && npm run build`
+- [ ] data-platform 单测：`cd ai-assistant-data-platform && python -m unittest discover -s tests/unit`
+- [ ] API E2E 确定性用例：`cd ai-assistant-tests/api && pytest -m "not ai and not slow"`（如适用）
+- [ ] UI E2E：`cd ai-assistant-tests/ui && pytest`（如适用）
 - [ ] 手工验证：
 
 ## 截图 / 录屏

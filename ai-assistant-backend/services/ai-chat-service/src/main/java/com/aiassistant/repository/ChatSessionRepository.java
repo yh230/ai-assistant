@@ -40,6 +40,15 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long>,
     List<ChatSession> findAllByUserIdAndIdentityOrderByUpdatedAtDesc(Long userId, String identity);
 
     /**
+     * 查询归属某用户某身份的最近 100 个会话（列表接口硬上限）
+     *
+     * @param userId   归属用户 ID
+     * @param identity 归属身份（staff/patient）
+     * @return 会话列表；无数据返回空列表
+     */
+    List<ChatSession> findTop100ByUserIdAndIdentityOrderByUpdatedAtDesc(Long userId, String identity);
+
+    /**
      * 统计某用户某身份的会话数
      *
      * @param userId   归属用户 ID

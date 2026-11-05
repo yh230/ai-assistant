@@ -4,36 +4,12 @@ server:
 spring:
   application:
     name: ai-chat-service
-  cloud:
-    nacos:
-      discovery:
-        server-addr: 127.0.0.1:8848
-    openfeign:
-      client:
-        config:
-          default:
-            connect-timeout: 2000
-            read-timeout: 5000
   config:
     import:
+      - classpath:application-common.yml
       - optional:nacos:common-shared.yaml?group=DEFAULT_GROUP
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP:127.0.0.1:9092}
-    producer:
-      acks: all
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      properties:
-        enable.idempotence: true
-        max.block.ms: 2000
-    consumer:
-      group-id: ${spring.application.name}
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:
-      ack-mode: manual
       missing-topics-fatal: false
   datasource:
     url: jdbc:mysql://localhost:3306/chat_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
@@ -51,12 +27,6 @@ spring:
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
-  data:
-    redis:
-      host: localhost
-      port: 6379
-      database: 0
-      timeout: 5000ms
   elasticsearch:
     uris: ${ES_URI:http://localhost:9200}
   ai:
@@ -92,29 +62,7 @@ weather:
   geocoding-url: https://restapi.amap.com/v3/geocode/geo
   weather-url: https://restapi.amap.com/v3/weather/weatherInfo
 
-security:
-  jwt:
-    secret: ${JWT_SECRET:aidaima-dev-jwt-secret-please-override-0123456789}
-    expiration-seconds: 3600
-  internal:
-    token: ${INTERNAL_TOKEN:aidaima-internal-token-please-override}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-  tracing:
-    sampling:
-      probability: ${TRACING_SAMPLING:1.0}
-  zipkin:
-    tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
-
 logging:
   level:
     com.aiassistant: info
     org.springframework.ai: info
-    com.common: info
-  pattern:
-    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"

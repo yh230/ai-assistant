@@ -11,6 +11,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.openfeign.EnableFeignClients;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * AI 聊天服务启动类
@@ -22,6 +23,7 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
  */
 @EnableConfigurationProperties(AiProperties.class)
 @EnableFeignClients("com.api.client")
+@EnableScheduling
 @SpringBootApplication(scanBasePackages = {"com.aiassistant", "com.common", "com.api"},
         exclude = {
                 OpenAiChatAutoConfiguration.class,

@@ -124,6 +124,16 @@ class OutputSafetyFilterTest {
     }
 
     @Test
+    void emergencyHitsPainlessMyocardialInfarction() {
+        // "无痛性/无症状性" 是疾病修饰词，不是否定，不能漏报无痛性心梗
+        AiProperties props = new AiProperties();
+        props.getSafety().setEmergencyKeywords(List.of("心梗"));
+        OutputSafetyFilter filter = new OutputSafetyFilter(props);
+        assertTrue(filter.emergencyHit("无痛性心梗"));
+        assertTrue(filter.emergencyHit("警惕无症状性心梗"));
+    }
+
+    @Test
     void emergencyHitsWithoutObviousTrigger() {
         // "无诱因" 中"诱因"为例外标记，取消"无"的否定作用
         AiProperties props = new AiProperties();

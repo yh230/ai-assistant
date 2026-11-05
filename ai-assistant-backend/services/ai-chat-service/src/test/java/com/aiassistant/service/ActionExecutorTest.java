@@ -48,20 +48,25 @@ class ActionExecutorTest {
     void bookBusinessErrorMsgPassedThrough() {
         when(registrationClient.book(any(BookRequest.class)))
                 .thenReturn(Result.fail(500, "该时段号源已满"));
-        assertEquals("该时段号源已满", executor.execute(bookAction(), user));
+        ActionExecutor.ExecutionResult result = executor.execute(bookAction(), user);
+        assertEquals("该时段号源已满", result.message());
+        assertEquals(false, result.success());
     }
 
     @Test
     void bookFeignExceptionReturnsFixedText() {
         when(registrationClient.book(any(BookRequest.class)))
                 .thenThrow(new RuntimeException("connect timed out"));
-        assertEquals("挂号服务暂时不可用，请稍后重试", executor.execute(bookAction(), user));
+        ActionExecutor.ExecutionResult result = executor.execute(bookAction(), user);
+        assertEquals("挂号服务暂时不可用，请稍后重试", result.message());
+        assertEquals(false, result.success());
     }
 
     @Test
     void bookSuccessReturnsConfirmText() {
         when(registrationClient.book(any(BookRequest.class))).thenReturn(Result.success(88L));
-        String text = executor.execute(bookAction(), user);
-        assertEquals("预约成功，挂号记录ID：88", text);
+        ActionExecutor.ExecutionResult result = executor.execute(bookAction(), user);
+        assertEquals("预约成功，挂号记录ID：88", result.message());
+        assertEquals(true, result.success());
     }
 }

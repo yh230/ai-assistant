@@ -61,7 +61,7 @@ scripts/start-nacos.sh
 scripts/start-services.sh
 ```
 
-前端：`cd ai-assistant-frontend && npm ci && npm run dev`，访问 `http://localhost:5173`（员工端）或 `http://localhost:5173/patient/login`（患者端）。
+前端（仓库根目录执行，npm workspace）：`npm ci && npm run dev:frontend`，访问 `http://localhost:5173`（员工端）或 `http://localhost:5173/patient/login`（患者端）。
 
 > 完整环境要求、Nacos 配置与密钥设置见下方 [快速开始](#快速开始)。
 
@@ -96,9 +96,11 @@ flowchart LR
 
 - [架构说明与阅读路线](docs/architecture.md)
 - [排班查询 MCP](docs/mcp.md)
-- [API E2E 套件](ai-assistant-e2e/README.md)
-- [AI 评测](ai-assistant-e2e/eval/README.md)
-- [UI 自动化测试](ai-assistant-ui-e2e/README.md)
+- [测试套件总览](ai-assistant-tests/README.md)
+- [API E2E 套件](ai-assistant-tests/api/README.md)
+- [AI 评测](ai-assistant-tests/api/eval/README.md)
+- [UI 自动化测试](ai-assistant-tests/ui/README.md)
+- [数据治理与运营大屏](ai-assistant-data-platform/README.md)
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
 - [更新日志](CHANGELOG.md)
@@ -143,12 +145,13 @@ flowchart LR
 aidaima/
 ├── ai-assistant-backend/     # 后端：父工程 + 10 模块
 │   ├── gateway/              # 网关：统一入口、鉴权、路由、限流
-│   ├── common/               # 公共：Result/PageResult、异常、数据权限
+│   ├── common/               # 公共：Result/PageResult、异常、数据权限、application-common.yml
 │   ├── common-security/      # 安全公共组件：JWT、内部调用校验、Security 配置
 │   ├── api/                  # 服务间 Feign 接口与 DTO
 │   └── services/             # auth / system / hospital / registration / ai-chat / mcp
 ├── ai-assistant-frontend/    # 前端：Vue 3 + Vite + Element Plus（员工端 + 患者端）
-├── ai-assistant-e2e/         # API 级 E2E 自动化测试（Python + pytest + httpx）
+├── ai-assistant-tests/       # 黑盒测试：api/（pytest + httpx）、ui/（Playwright）
+├── ai-assistant-data-platform/ # 数据治理 / ETL / 运营大屏（Python + Vue）
 ├── scripts/                  # 一键脚本：Nacos / 服务 / E2E（含共享配置样例）
 ```
 
@@ -164,7 +167,7 @@ aidaima/
 | Nacos | 3.x | 服务端口 8848，控制台 8849；需设置 `NACOS_HOME`（见快速开始第 2 步） |
 | Kafka | 3.x | 站内信、审计落库、知识库异步向量化；未启动时相关异步链路不可用 |
 | Elasticsearch | 8.x（可选） | 仅当 `AI_RAG_STORE=elasticsearch` 时启用混合检索；默认 `simple` 本地向量 |
-| Python | 3.10+（可选） | 仅运行 `ai-assistant-e2e/` 测试套件时需要 |
+| Python | 3.10+（E2E）；3.11+（data-platform） | 仅运行 `ai-assistant-tests/` 测试套件或 `ai-assistant-data-platform/` 时需要 |
 | Zipkin | 可选 | 链路追踪 UI；不启动不影响业务 |
 
 ## 快速开始
@@ -232,9 +235,8 @@ Windows 运行 `scripts/start-services.bat`（七个窗口：六业务服务 + �
 ### 6. 启动前端
 
 ```bash
-cd ai-assistant-frontend
 npm ci
-npm run dev
+npm run dev:frontend
 ```
 
 访问 `http://localhost:5173`（员工端，代理已指向网关 8080）；患者端入口 `http://localhost:5173/patient/login`。
@@ -277,21 +279,23 @@ npm run dev
 
 ## 自动化测试
 
-`ai-assistant-e2e/` 提供 API 级 E2E 回归套件（Python + pytest + httpx，**全黑盒**只经网关调用），覆盖身份越权、AI 导诊、挂号二次确认、RAG 跨院隔离、限流/风控、会话隔离等 20+ 验收项：
+`ai-assistant-tests/api/` 提供 API 级 E2E 回归套件（Python + pytest + httpx，**全黑盒**只经网关调用），覆盖身份越权、AI 导诊、挂号二次确认、RAG 跨院隔离、限流/风控、会话隔离等 20+ 验收项：
 
 ```bat
 scripts\run-e2e.bat                            :: 全量（前置自检 + 执行 + JUnit 报告）
 scripts\run-e2e.bat -m "not ai and not slow"   :: 离线子集（不依赖大模型）
 ```
 
+macOS / Linux 使用 `scripts/run-e2e.sh`，参数相同。
+
 MCP SSE 端到端（需完整栈、Nacos Key 与 `MCP_E2E_API_KEY`）：
 
 ```bash
-cd ai-assistant-e2e
+cd ai-assistant-tests/api
 pytest -m mcp -v
 ```
 
-结果支持推送到**企业微信 / 飞书 / 邮箱**（`.env` 配置通道，跑完自动推送）。详见 [ai-assistant-e2e/README.md](ai-assistant-e2e/README.md)。
+结果支持推送到**企业微信 / 飞书 / 邮箱**（`.env` 配置通道，跑完自动推送）。两套用例共用一个虚拟环境与 `ai-assistant-tests/.env`，详见 [ai-assistant-tests/README.md](ai-assistant-tests/README.md)。
 
 ## 构建
 

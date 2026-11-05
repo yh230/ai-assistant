@@ -16,8 +16,14 @@ public interface PendingActionService {
     /** 状态常量：待确认 */
     String STATUS_PENDING = "PENDING";
 
-    /** 状态常量：已确认 */
+    /** 状态常量：执行中（已锁定，禁止并发重放） */
+    String STATUS_EXECUTING = "EXECUTING";
+
+    /** 状态常量：已确认且执行成功 */
     String STATUS_CONFIRMED = "CONFIRMED";
+
+    /** 状态常量：执行失败（业务失败/服务异常，不再自动重试） */
+    String STATUS_FAILED = "FAILED";
 
     /** 状态常量：已取消 */
     String STATUS_CANCELLED = "CANCELLED";
@@ -43,15 +49,23 @@ public interface PendingActionService {
                          String toolName, String toolArgsJson, String summaryText);
 
     /**
-     * 确认操作（校验归属/有效期/状态，通过后置 CONFIRMED）
+     * 开始执行（校验归属/有效期/状态，通过后条件置 EXECUTING 防并发重放）
      *
      * @param actionId 确认ID
      * @param userId   操作者用户 ID
      * @param identity 操作者身份
-     * @return 已确认的操作（状态 CONFIRMED，含确认时间）
+     * @return 已锁定执行的操作（状态 EXECUTING）
      * @throws BusinessException 请求不存在/无权操作/已超时/已处理
      */
-    PendingAction confirm(String actionId, Long userId, String identity);
+    PendingAction begin(String actionId, Long userId, String identity);
+
+    /**
+     * 完成执行：EXECUTING → CONFIRMED（成功，写确认时间）或 FAILED（失败可审计）
+     *
+     * @param actionId 确认ID
+     * @param success  是否执行成功
+     */
+    void complete(String actionId, boolean success);
 
     /**
      * 取消操作（校验归属/有效期/状态，通过后置 CANCELLED）
@@ -62,6 +76,21 @@ public interface PendingActionService {
      * @throws BusinessException 请求不存在/无权操作/已超时/已处理
      */
     void cancel(String actionId, Long userId, String identity);
+
+    /**
+     * 取消会话下所有待确认操作（删除会话时调用）
+     *
+     * @param sessionId 会话标识
+     * @return 受影响行数
+     */
+    int cancelBySession(String sessionId);
+
+    /**
+     * 批量清理超时未确认操作（定时任务调用）
+     *
+     * @return 受影响行数
+     */
+    int expireOverdue();
 
     /**
      * 查询会话下最新的未过期待确认操作（状态 PENDING 且 expireTime 未过期）

@@ -62,7 +62,7 @@ import java.util.stream.Collectors;
  * 挂号核心服务实现（状态机驱动 + Redisson 分布式锁并发加固）
  * <pre>
  * 状态机：已预约(1) → 已取号(2) → 已就诊(3) / 已取消(4) / 已退号(5) / 过期失效(6)
- *   - 线上预约：RESERVED，待支付；确认支付仅改 pay_status，状态不变。
+ *   - 线上预约：RESERVED，待支付；确认支付仅改 pay_status 并清空超时时间，状态不变。
  *   - 现场挂号：直接 CALLED（无 RESERVED 中间态）。
  *   - 取号：RESERVED → CALLED。
  *   - 退号：CALLED → REFUNDED（须未就诊）。
@@ -94,6 +94,8 @@ public class RegistrationServiceImpl implements RegistrationService {
 
     /** 患者-日期锁前缀（+患者ID+日期；防同患者同日重复预约） */
     private static final String PATIENT_DAY_LOCK_PREFIX = "lock:booking:patient:";
+    /** 匿名-日期锁前缀（+手机号+身份证+日期；防跨排班并发重复预约） */
+    private static final String ANON_DAY_LOCK_PREFIX = "lock:booking:anon:";
     /** 挂号单锁前缀（+挂号单ID；防状态跃迁双写） */
     private static final String REGISTRATION_LOCK_PREFIX = "lock:registration:";
     /** 匿名预约幂等键前缀（+SHA-256 幂等键；5 分钟内重复提交直接返回原单） */
@@ -130,44 +132,56 @@ public class RegistrationServiceImpl implements RegistrationService {
     public RegistrationVO createAppointment(AppointmentCreateDTO dto) {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
         assertPatientInScheduleHospital(dto.getPatientId(), schedule.getHospitalId());
-        Registration reg;
+        RegistrationResult result;
         if (dto.getPatientId() != null) {
             String patientKey = PATIENT_DAY_LOCK_PREFIX + dto.getPatientId() + ":" + dto.getScheduleDate();
-            reg = withLock(patientKey, false,
+            result = withLock(patientKey, false,
                     () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
-                            () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, null))));
+                            () -> new RegistrationResult(
+                                    txTemplate.execute(status -> doCreateAppointment(dto, schedule, null)), true)));
         } else {
+            // 幂等键先行占位，已存在的重复提交无需加锁；仅首次提交进入「匿名日锁 → 排班锁」防跨排班重复
             String idempotencyKey = buildIdempotencyKey(dto, schedule);
             RBucket<String> bucket = redissonClient.getBucket(IDEMPOTENCY_KEY_PREFIX + idempotencyKey);
-            // 键已存在：仅当原单仍进行中（RESERVED/CALLED）才返回；终态单不得作为成功幂等结果复用
             if (!bucket.trySet("1", IDEMPOTENCY_TTL_MINUTES, TimeUnit.MINUTES)) {
                 Registration existing = findActiveByIdempotencyKey(idempotencyKey);
                 if (existing == null) {
                     // 键可能属于尚未落库的在途首次请求：不得删除，等待 5 分钟窗口自然过期
                     throw new BusinessException("请勿重复提交");
                 }
-                return enrichSafe(List.of(existing)).get(0);
-            }
-            try {
-                reg = withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
-                        () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, idempotencyKey)));
-            } catch (DuplicateKeyException e) {
-                // 并发穿透：唯一索引 uk_registration_idem 兜底，仅回查进行中记录（键保留在窗口内）
-                Registration existing = findActiveByIdempotencyKey(idempotencyKey);
-                if (existing == null) {
+                result = new RegistrationResult(existing, false);
+            } else {
+                String anonDayKey = ANON_DAY_LOCK_PREFIX + dto.getPatientPhone() + ":" + dto.getPatientIdCard()
+                        + ":" + dto.getScheduleDate();
+                try {
+                    Registration created = withLock(anonDayKey, false,
+                            () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
+                                    () -> txTemplate.execute(status -> doCreateAppointment(dto, schedule, idempotencyKey))));
+                    result = new RegistrationResult(created, true);
+                } catch (DuplicateKeyException e) {
+                    // 并发穿透：唯一索引 uk_registration_idem 兜底，仅回查进行中记录（键保留在窗口内）
+                    Registration existing = findActiveByIdempotencyKey(idempotencyKey);
+                    if (existing == null) {
+                        releaseIdempotencyKey(idempotencyKey);
+                        throw new BusinessException("请勿重复提交");
+                    }
+                    result = new RegistrationResult(existing, false);
+                } catch (RuntimeException e) {
+                    // 校验/锁失败/DB 异常：释放幂等键，患者可立即重试
                     releaseIdempotencyKey(idempotencyKey);
-                    throw new BusinessException("请勿重复提交");
+                    throw e;
                 }
-                return enrichSafe(List.of(existing)).get(0);
-            } catch (RuntimeException e) {
-                // 校验/锁失败/DB 异常：释放幂等键，患者可立即重试
-                releaseIdempotencyKey(idempotencyKey);
-                throw e;
             }
         }
-        RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
-        eventPublisher.publishCreated(reg, vo);
+        RegistrationVO vo = enrichSafe(List.of(result.reg())).get(0);
+        if (result.created()) {
+            eventPublisher.publishCreated(result.reg(), vo);
+        }
         return vo;
+    }
+
+    /** 预约创建结果：挂号单 + 是否本次新建（幂等命中不重复发事件） */
+    private record RegistrationResult(Registration reg, boolean created) {
     }
 
     /**
@@ -314,15 +328,17 @@ public class RegistrationServiceImpl implements RegistrationService {
 
     /**
      * 患者确认支付（仅改本记录：registration 锁 + 条件更新；状态仍「已预约」仅改 pay_status）
+     * <p>支付成功即解除 15 分钟超时释放，避免已付款预约被过期任务作废。</p>
      *
      * @param id 挂号单 ID
+     * @param phone 患者手机号（身份校验）
      * @param idCard 患者身份证（身份校验）
      * @return 挂号视图
      */
     @Override
-    public RegistrationVO confirmPay(Long id, String idCard) {
+    public RegistrationVO confirmPay(Long id, String phone, String idCard) {
         Registration reg = loadRegistration(id);
-        verifyPatient(reg, idCard);
+        verifyPatient(reg, phone, idCard);
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         if (cur != RegistrationStatus.RESERVED) {
             throw new BusinessException("当前状态不可支付（仅已预约可支付）");
@@ -333,9 +349,12 @@ public class RegistrationServiceImpl implements RegistrationService {
             transit(id, cur, uw -> uw
                     .eq(Registration::getPayStatus, PayStatus.UNPAID.getCode())
                     .set(Registration::getPayStatus, PayStatus.PAID.getCode())
-                    .set(Registration::getPayTime, now));
+                    .set(Registration::getPayTime, now)
+                    // 已支付不再参与超时释放，清空过期时间
+                    .set(Registration::getExpireTime, null));
             reg.setPayStatus(PayStatus.PAID.getCode());
             reg.setPayTime(now);
+            reg.setExpireTime(null);
             reg.setUpdateTime(now);
             return reg;
         }));
@@ -344,39 +363,46 @@ public class RegistrationServiceImpl implements RegistrationService {
 
     @Override
     public List<RegistrationVO> patientQuery(String phone, String idCard, String registrationNo) {
-        if (!StringUtils.hasText(registrationNo)
-                && !(StringUtils.hasText(phone) && StringUtils.hasText(idCard))) {
-            throw new BusinessException("请提供预约号，或手机号+身份证查询");
+        if (!StringUtils.hasText(phone) || !StringUtils.hasText(idCard)) {
+            throw new BusinessException("请提供手机号+身份证查询");
         }
         LambdaQueryWrapper<Registration> qw = new LambdaQueryWrapper<>();
+        qw.eq(Registration::getPatientPhone, phone);
+        qw.eq(Registration::getPatientIdCard, idCard);
         if (StringUtils.hasText(registrationNo)) {
             qw.eq(Registration::getRegistrationNo, registrationNo);
-        } else {
-            qw.eq(Registration::getPatientPhone, phone);
-            qw.eq(Registration::getPatientIdCard, idCard);
         }
         // 患者自助查询按创建时间倒序，硬上限 50 条，避免无界 selectList 拖垮接口
         qw.orderByDesc(Registration::getCreateTime).last("LIMIT 50");
-        return enrich(registrationMapper.selectList(qw));
+        List<RegistrationVO> list = enrich(registrationMapper.selectList(qw));
+        // 公开查询只回传脱敏后的联系人信息，完整手机号/姓名仅员工接口可见
+        list.forEach(RegistrationServiceImpl::maskPatientContact);
+        return list;
     }
 
     /**
-     * 患者取消本人未取号预约（registration → schedule 锁；条件跃迁成功才释放号源/回退占用）
+     * 患者取消本人未取号预约（registration → schedule 锁；条件跃迁成功才释放号源/回退占用；已支付同步退款）
      *
      * @param id 挂号单 ID
+     * @param phone 患者手机号（身份校验）
      * @param idCard 患者身份证（身份校验）
      * @param reason 取消原因（可空）
      * @return 挂号视图
      */
     @Override
-    public RegistrationVO patientCancel(Long id, String idCard, String reason) {
+    public RegistrationVO patientCancel(Long id, String phone, String idCard, String reason) {
         Registration reg = loadRegistration(id);
-        verifyPatient(reg, idCard);
+        verifyPatient(reg, phone, idCard);
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
         doPatientCancel(reg, cur, reason);
         RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
-        eventPublisher.publishCancelled(reg, vo);
+        // 以锁内重读后的实际退款结果决定通知类型，避免并发支付后被按未支付取消
+        if (reg.getRefundAmount() != null) {
+            eventPublisher.publishRefunded(reg, vo);
+        } else {
+            eventPublisher.publishCancelled(reg, vo);
+        }
         return vo;
     }
 
@@ -414,7 +440,12 @@ public class RegistrationServiceImpl implements RegistrationService {
         cur.assertTransit(RegistrationStatus.CANCELLED, "患者取消预约");
         doPatientCancel(reg, cur, reason);
         RegistrationVO vo = enrichSafe(List.of(reg)).get(0);
-        eventPublisher.publishCancelled(reg, vo);
+        // 以锁内重读后的实际退款结果决定通知类型，避免并发支付后被按未支付取消
+        if (reg.getRefundAmount() != null) {
+            eventPublisher.publishRefunded(reg, vo);
+        } else {
+            eventPublisher.publishCancelled(reg, vo);
+        }
         return vo;
     }
 
@@ -429,6 +460,9 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     public RegistrationVO walkIn(WalkInRegisterDTO dto) {
         DoctorSchedule schedule = resolveSchedule(dto.getDoctorUserId(), dto.getScheduleDate(), dto.getPeriod());
+        // 员工入口须校验排班归属，防止跨院按医生 ID 现场挂号
+        dataScopeResolver.resolveRequired().assertCanAccess(schedule.getHospitalId(),
+                schedule.getDepartmentId(), schedule.getDoctorUserId(), "无权操作该排班");
         Registration reg = withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + schedule.getId(), false,
                 () -> txTemplate.execute(status -> doWalkIn(dto, schedule)));
         return enrichSafe(List.of(reg)).get(0);
@@ -448,9 +482,8 @@ public class RegistrationServiceImpl implements RegistrationService {
         reg.setPatientIdCard(dto.getPatientIdCard());
         reg.setSourceType(SourceType.WINDOW.getCode());
         reg.setPayStatus(PayStatus.PAID.getCode());
-        if (dto.getPayAmount() != null) {
-            reg.setPayAmount(dto.getPayAmount());
-        }
+        // 收费金额由服务端价目决定，不接受客户端传入，避免 0 元或异常金额挂号
+        reg.setPayAmount(DEFAULT_FEE);
         reg.setPayTime(LocalDateTime.now());
         // 现场挂号：直接已取号（无预约中间态）
         reg.setStatus(RegistrationStatus.CALLED.getCode());
@@ -468,11 +501,15 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     public RegistrationVO take(Long id) {
         Registration reg = loadRegistration(id);
+        assertReadable(reg);
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.CALLED, "取号");
         withLock(REGISTRATION_LOCK_PREFIX + id, false, () -> txTemplate.execute(status -> {
             LocalDateTime now = LocalDateTime.now();
-            boolean unpaid = PayStatus.UNPAID.getCode() == reg.getPayStatus();
+            // 锁内重读支付状态，避免锁外快照在并发支付后仍按未支付覆盖支付时间
+            Registration latest = registrationMapper.selectById(id);
+            boolean unpaid = latest != null
+                    && Objects.equals(latest.getPayStatus(), PayStatus.UNPAID.getCode());
             transit(id, cur, uw -> {
                 uw.set(Registration::getStatus, RegistrationStatus.CALLED.getCode())
                         .set(Registration::getExpireTime, null);
@@ -504,6 +541,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     public RegistrationVO refund(Long id, String reason) {
         Registration reg = loadRegistration(id);
+        assertReadable(reg);
         RegistrationStatus cur = RegistrationStatus.of(reg.getStatus());
         cur.assertTransit(RegistrationStatus.REFUNDED, "退号");
         withLock(REGISTRATION_LOCK_PREFIX + id, false,
@@ -601,11 +639,13 @@ public class RegistrationServiceImpl implements RegistrationService {
         LocalDateTime now = LocalDateTime.now();
         if (reg == null || reg.getStatus() == null
                 || reg.getStatus() != RegistrationStatus.RESERVED.getCode()
+                || !Objects.equals(reg.getPayStatus(), PayStatus.UNPAID.getCode())
                 || reg.getExpireTime() == null || !reg.getExpireTime().isBefore(now)) {
             return false;
         }
         transit(id, RegistrationStatus.RESERVED, uw -> uw
                 .set(Registration::getStatus, RegistrationStatus.EXPIRED.getCode())
+                .set(Registration::getPayStatus, PayStatus.EXPIRED.getCode())
                 .set(Registration::getIdempotencyKey, null));
         releaseSource(reg.getNumberSourceId(), id);
         incrRegisteredCount(reg.getScheduleId(), -1);
@@ -786,7 +826,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     }
 
     /**
-     * 患者取消预约（锁内条件跃迁成功后再副作用：释放号源 + 占用回退；全程无行锁）
+     * 患者取消预约（锁内条件跃迁成功后再副作用：释放号源 + 占用回退 + 已支付退款；全程无行锁）
      *
      * @param reg 挂号记录（调用方已完成身份/归属校验与前置状态校验）
      * @param from 前置校验时的当前状态（用于条件跃迁兜底）
@@ -796,12 +836,23 @@ public class RegistrationServiceImpl implements RegistrationService {
         withLock(REGISTRATION_LOCK_PREFIX + reg.getId(), false,
                 () -> withLock(ScheduleLock.SCHEDULE_LOCK_PREFIX + reg.getScheduleId(), false,
                         () -> txTemplate.execute(status -> {
+                            LocalDateTime now = LocalDateTime.now();
+                            // 锁内重读支付状态：支付与取消共用 registration 锁，重读后不会漏写退款
+                            Registration latest = registrationMapper.selectById(reg.getId());
+                            Registration current = latest == null ? reg : latest;
+                            boolean paid = isPaid(current);
+                            BigDecimal payAmount = current.getPayAmount();
                             String remark = appendReason(reg.getRemark(), "患者取消：" + (reason == null ? "" : reason));
-                            transit(reg.getId(), from, uw -> uw
-                                    .set(Registration::getStatus, RegistrationStatus.CANCELLED.getCode())
-                                    .set(Registration::getRemark, remark)
-                                    // 取消后清空幂等键，允许同一患者重新预约同一排班
-                                    .set(Registration::getIdempotencyKey, null));
+                            transit(reg.getId(), from, uw -> {
+                                uw.set(Registration::getStatus, RegistrationStatus.CANCELLED.getCode())
+                                        .set(Registration::getRemark, remark)
+                                        // 取消后清空幂等键，允许同一患者重新预约同一排班
+                                        .set(Registration::getIdempotencyKey, null);
+                                if (paid) {
+                                    uw.set(Registration::getRefundAmount, payAmount)
+                                            .set(Registration::getRefundTime, now);
+                                }
+                            });
                             // 条件跃迁成功后：释放号源 + 占用数回退
                             releaseSource(reg.getNumberSourceId(), reg.getId());
                             incrRegisteredCount(reg.getScheduleId(), -1);
@@ -810,7 +861,12 @@ public class RegistrationServiceImpl implements RegistrationService {
                             reg.setStatus(RegistrationStatus.CANCELLED.getCode());
                             reg.setRemark(remark);
                             reg.setIdempotencyKey(null);
-                            reg.setUpdateTime(LocalDateTime.now());
+                            reg.setUpdateTime(now);
+                            if (paid) {
+                                reg.setPayStatus(PayStatus.PAID.getCode());
+                                reg.setRefundAmount(payAmount);
+                                reg.setRefundTime(now);
+                            }
                             return reg;
                         })));
     }
@@ -924,9 +980,30 @@ public class RegistrationServiceImpl implements RegistrationService {
         dataScopeResolver.resolve().assertCanAccess(reg.getHospitalId(), reg.getDepartmentId(), reg.getDoctorUserId(), "无权查看该挂号记录");
     }
 
-    private void verifyPatient(Registration reg, String idCard) {
-        if (!StringUtils.hasText(idCard) || !idCard.equals(reg.getPatientIdCard())) {
+    private void verifyPatient(Registration reg, String phone, String idCard) {
+        if (!StringUtils.hasText(phone) || !phone.equals(reg.getPatientPhone())
+                || !StringUtils.hasText(idCard) || !idCard.equals(reg.getPatientIdCard())) {
             throw new BusinessException("患者身份校验失败");
+        }
+    }
+
+    private static boolean isPaid(Registration reg) {
+        return Objects.equals(reg.getPayStatus(), PayStatus.PAID.getCode());
+    }
+
+    /**
+     * 公开查询结果脱敏：手机号保留前 3 后 4，姓名仅保留首字
+     *
+     * @param vo 挂号视图
+     */
+    private static void maskPatientContact(RegistrationVO vo) {
+        String phone = vo.getPatientPhone();
+        if (StringUtils.hasText(phone) && phone.length() >= 8) {
+            vo.setPatientPhone(phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4));
+        }
+        String name = vo.getPatientName();
+        if (StringUtils.hasText(name) && name.length() > 1) {
+            vo.setPatientName(name.charAt(0) + "*".repeat(name.length() - 1));
         }
     }
 
@@ -964,7 +1041,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             // 名称回填（跨中心 Feign 批量查询结果；缺省为 null）
             vo.setHospitalName(r.getHospitalId() == null ? null : hNames.get(r.getHospitalId()));
             vo.setDepartmentName(r.getDepartmentId() == null ? null : dNames.get(r.getDepartmentId()));
-            vo.setDoctorName(uNames.get(r.getDoctorUserId()));
+            vo.setDoctorName(r.getDoctorUserId() == null ? null : uNames.get(r.getDoctorUserId()));
             return vo;
         }).collect(Collectors.toList());
     }

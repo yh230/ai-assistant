@@ -90,8 +90,12 @@ function params() {
   return p
 }
 
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   const data = await operLogPage(params())
+  if (seq !== loadSeq) return
   list.value = data.list || []
   total.value = data.total || 0
 }

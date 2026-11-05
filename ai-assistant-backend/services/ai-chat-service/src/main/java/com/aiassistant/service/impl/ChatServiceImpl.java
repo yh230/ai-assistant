@@ -336,7 +336,7 @@ public class ChatServiceImpl implements ChatService {
         log.error("流式聊天处理失败", ex);
         ServerSentEvent<String> errorEvent = ServerSentEvent.builder(
                         ChatTextSupport.toJson(objectMapper,
-                                Map.of("message", ex.getMessage() != null ? ex.getMessage() : "未知错误")))
+                                Map.of("message", "服务暂时不可用，请稍后重试")))
                 .event(ChatConstants.EVENT_ERROR)
                 .build();
         return Flux.just(errorEvent);
@@ -409,7 +409,7 @@ public class ChatServiceImpl implements ChatService {
     public ChatResponse getHistory(String sessionId) {
         requireOwnedSession(sessionId);
         List<ChatResponse.ChatMessageDTO> messageDTOs =
-                messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+                messageRepository.findTop500BySessionIdOrderByCreatedAtAsc(sessionId).stream()
                         .map(m -> ChatResponse.ChatMessageDTO.builder()
                                 .role(m.getRole()).content(m.getContent()).createdAt(m.getCreatedAt()).build())
                         .collect(Collectors.toList());
@@ -422,7 +422,7 @@ public class ChatServiceImpl implements ChatService {
     @Transactional(readOnly = true)
     public List<SessionDTO> getSessionList() {
         UserSnapshot snapshot = currentStaffSnapshot();
-        return sessionRepository.findAllByUserIdAndIdentityOrderByUpdatedAtDesc(
+        return sessionRepository.findTop100ByUserIdAndIdentityOrderByUpdatedAtDesc(
                         snapshot.getUserId(), SecurityConstants.IDENTITY_STAFF).stream()
                 .map(s -> SessionDTO.builder()
                         .sessionId(s.getSessionId()).title(s.getTitle())
