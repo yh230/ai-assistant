@@ -44,7 +44,7 @@ sequenceDiagram
 
 关键约束：
 
-- 网关白名单只用于登录、注册、公开排班/医院、健康检查等匿名路径。
+- 网关白名单只用于登录、注册、公开排班/医院、匿名预约查询/支付/取消、健康检查等匿名路径。
 - `/inner/**` 只允许服务间携带内部令牌访问，外部请求在网关直接 403。
 - 患者令牌不能访问员工接口，员工令牌也不能访问患者专属接口（`/api/qr/confirm` 为身份中立路径）。
 - 服务侧仍会做二次校验：功能权限用 `@PreAuthorize`，数据权限用 `DataScopeResolver`，AI 写工具另有患者医院归属校验。
@@ -168,7 +168,11 @@ sequenceDiagram
 
 余量口径为 `number_source.status=1` 的数量；日期窗口最多 14 天，扫描上限 500 条、返回上限 100 条。
 
-## 9. 如何阅读这个仓库
+## 9. 数据平台（下游）
+
+`ai-assistant-data-platform` 是独立部署的下游数据平台：只读接入 `hospital_db`、`registration_db`、`chat_db` 的 7 张源表，按水位做全量与增量抽取，经 Kafka `dp.ods.*` 进入 ClickHouse ODS → DWD → ADS，提供数据源/元数据管理、质量规则、告警 Webhook 与 1920×1080 运营大屏。支持 `DEMO_MODE=true` 使用 SQLite 种子零基础设施运行；真实 Kafka、ClickHouse、Flink 链路尚未验证。详见 [ai-assistant-data-platform/README.md](../ai-assistant-data-platform/README.md)。
+
+## 10. 如何阅读这个仓库
 
 建议按“先全局、再主链路、最后按兴趣深入”的顺序。
 
@@ -210,7 +214,7 @@ sequenceDiagram
 ### 调试入口
 
 - 先看网关日志中的 `traceId`，再用同一个 `traceId` 搜各服务日志。
-- Redis 常用键：`auth:user:*`、`auth:patient:*`、`jwt:blacklist:*`、`jwt:invalid-after:*`。
+- Redis 常用键：`auth:user:*`、`auth:patient:*`、`auth:refresh:*`（含 `used` / `family` / `family:abs` / `user` 索引）、`jwt:blacklist:*`、`jwt:invalid-after:*`。
 - 预约问题先看 `registration` 的状态与 `pay_status`，再看 `number_source` 与排班锁。
 - AI 问题先确认模型可用，再检查工具调用日志与 `pending_action`；知识库看文档状态与消费者日志。
 

@@ -1,7 +1,7 @@
 # 医院数据治理与运营大屏平台（ai-assistant-data-platform）
 
 > 状态：**代码级交付 + DEMO_MODE 本机验收**。`DEMO_MODE=true` 已用 SQLite 种子数据跑通后端 API、Vue 大屏与治理页面；Kafka、ClickHouse、Flink 仍未下载、未部署、未启动，真实链路、集成测试与 E2E 未执行。
-> 本仓库任何内容都不代表端到端已通过，详见 [验证报告](docs/verification-2026-11-04.md)。
+> 本仓库任何内容都不代表端到端已通过；验证结论以本机执行记录为准，过程文档不入库。
 
 ## 1. 项目定位
 
@@ -14,7 +14,7 @@
 - 提供 1920×1080 运营大屏与治理后台；可用 `DEMO_MODE=true` 零基础设施运行，也可用 `VITE_USE_MOCK=true` 做无后端预览。
 - 交付 PyFlink 实时聚合作业代码与 Flink SQL：**代码已实现，未部署、未运行验证**。
 
-设计文档：[docs/2026-11-04-design.md](docs/2026-11-04-design.md)；实施计划（已归档）：[docs/archive/2026-11-04-data-platform-plan.md](docs/archive/2026-11-04-data-platform-plan.md)。
+设计文档：[docs/2026-11-04-design.md](docs/2026-11-04-design.md)。
 
 ## 2. 架构
 
@@ -85,14 +85,12 @@ ai-assistant-data-platform/
 │   ├── src/mock/             # 无后端预览夹具（非数据正确性证据）
 │   ├── src/utils/
 │   ├── tests/                # node --test 图表配置测试
-│   └── package-lock.json     # 前端依赖锁文件
+│   └── package.json          # 依赖由仓库根 npm workspace 统一管理
 ├── tests/
-│   ├── unit/                 # 标准库 unittest；当前 491 个测试通过
+│   ├── unit/                 # 标准库 unittest；当前 492 个测试通过
 │   └── integration/          # 仅说明文档，真实集成测试未执行
 ├── docs/
-│   ├── 2026-11-04-design.md
-│   ├── archive/2026-11-04-data-platform-plan.md
-│   └── verification-2026-11-04.md
+│   └── 2026-11-04-design.md
 ├── pyproject.toml
 ├── .env.example
 └── README.md
@@ -104,7 +102,7 @@ ai-assistant-data-platform/
 
 口径：**已实现** = 代码存在；**已验证** = 通过编译、Python 单测/API 测试、前端单测/构建或 DEMO_MODE 本机运行验收；**未验证** = 真实外部系统或未执行的验收项。
 
-当前基线（2026-11-04）：491 个 Python 单测通过（0 skipped）、7 个 Node 测试通过、`npm run build` 通过；DEMO_MODE 已完成 API 与页面人工验收。真实 MySQL、Kafka、ClickHouse、Flink 仍未验证。
+当前基线（2026-11-05）：492 个 Python 单测通过（0 skipped）、7 个 Node 测试通过、`npm run build` 通过；DEMO_MODE 已完成 API 与页面人工验收。真实 MySQL、Kafka、ClickHouse、Flink 仍未验证。
 
 | 模块 | 已实现 | 已验证 | 未验证 |
 | --- | --- | --- | --- |
@@ -122,7 +120,7 @@ ai-assistant-data-platform/
 | Flink 实时聚合 | 是（代码展示） | `py_compile` 退出码 0 | 镜像构建、作业提交、结果查询 |
 | APScheduler 调度 | 是 | 构建 / cron 测试执行 | 真实定时触发 |
 
-**明确声明：Kafka、ClickHouse、Flink 未下载、未部署、未启动；没有真实集成测试结果，也没有真实端到端结果。** 具体命令与输出见 [验证报告](docs/verification-2026-11-04.md)。
+**明确声明：Kafka、ClickHouse、Flink 未下载、未部署、未启动；没有真实集成测试结果，也没有真实端到端结果。** 单测命令与输出见本机执行记录（过程文档不入库）。
 
 ## 5. 环境变量
 

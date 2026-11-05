@@ -137,7 +137,7 @@ flowchart LR
 | 服务间调用 | OpenFeign（`api` 模块，统一内部令牌） |
 | 数据 | MySQL 8（四库分治）· Redis（≥ 6.2，刷新令牌消费用 GETDEL） |
 | 前端 | Vue 3 + Vite 5 + Element Plus 2.14（按需自动引入）+ 青绿主题（#0D9488）+ vue-router 4 + axios |
-| 测试 | JUnit（后端单测）· Python + pytest + httpx（API 级 E2E）|
+| 测试 | JUnit（后端）· unittest（数据平台）· pytest + httpx（API E2E）· Playwright（UI）· node --test（前端/大屏） |
 
 ## 项目结构
 

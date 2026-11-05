@@ -68,7 +68,7 @@ python -c "import secrets,hashlib; k='mcp_'+secrets.token_hex(32); print('KEY ='
 
 - 工具业务错误通过 MCP `CallToolResult.isError=true` 返回，错误文本在 `content[0].text`。
 - 缺失/无效 Key → 401；频率超限 → 429。
-- 网关按 IP 限流，mcp-server 再按 Key 限流。
+- 网关按 IP 限流，mcp-server 再按 Key 限流；未认证尝试按 IP 限制 30 次/分钟，限流存储不可用时拒绝请求（fail-closed）。
 - 对外必须使用 HTTPS；`9205` 仅内网，不直接暴露公网。
 
 ## 验证

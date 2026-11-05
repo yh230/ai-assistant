@@ -7,15 +7,34 @@
 ### Added
 
 - 开源门面与可复现基础：MIT License、Maven Wrapper、跨平台启动脚本、GitHub Actions CI（后端单测 + 前端构建/测试）。
+- 数据治理与运营大屏（ai-assistant-data-platform）：7 张源表全量/增量抽取、Kafka ODS、ClickHouse ODS/DWD/ADS、质量规则、告警 Webhook 与 Vue 大屏，支持 `DEMO_MODE` 零基础设施运行。
+- 黑盒测试统一为 `ai-assistant-tests`（api/ + ui/），提供共用 `.env` 模板与跨平台 E2E 脚本。
+- 根目录 npm workspace：统一安装、测试与构建前端和数据平台 Web。
 
 ### Changed
 
 - Spring AI 升级至 1.1.8（Spring Boot 3.5 线最新稳定版），适配 MCP SSE 配置类与 Embedding Options API。
+- 仓库结构重组：`data-platform/` → `ai-assistant-data-platform/`，`ai-assistant-e2e/`、`ai-assistant-ui-e2e/` → `ai-assistant-tests/`；CI 与文档路径同步。
+- 共享配置收敛到 `application-common.yml`（Nacos / Feign / Kafka / Redis / JWT），各服务 yml 仅保留端口与业务参数。
+- 业务异常返回真实 HTTP 状态码，前端仍读取响应体 `msg` 展示提示。
+
+### Security
+
+- 挂号支付/取消/取号改为锁内条件更新并重读支付状态，修复并发付款漏退款、越权访问与租户校验缺口；患者查询需手机号 + 身份证并脱敏展示。
+- Refresh Token 改为家族轮换，支持重放撤销与 30 天绝对过期；短信验证码原子校验；登录锁定按 `X-Forwarded-For` 末段识别来源。
+- 网关预约白名单收窄并拦截路径穿越；MCP 限流改为 fail-closed，未认证请求独立限速。
+- AI 急症红线支持否定词豁免；`pending_action` 状态机防重放并自动过期清理；知识库删除先清向量再删记录。
+- 数据平台生产禁用内存存储与不安全质量 SQL，调度任务增删改实时同步，同步锁支持僵尸接管。
+
+### Fixed
+
+- 修复患者预约支付/取消因脱敏身份证回传导致的失败，以及列表分页竞态、Markdown 协议白名单等前端问题。
 
 ### Docs
 
 - 公开文档收敛为架构说明（含阅读路线）与 MCP 接入手册，测试说明内聚到各套件目录。
 - README 首屏重写：核心能力、快速体验、Mermaid 架构与文档入口。
+- 架构说明补充数据平台链路与 Refresh Token 调试键；数据平台 README 同步 npm workspace 与新测试目录，过程性计划/验收记录移出仓库。
 
 ## [1.0.0] - 2026-10-19
 
